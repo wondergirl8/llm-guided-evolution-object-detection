@@ -1,0 +1,84 @@
+schema_version: phase0-verification-register-v1
+updated_at: "2026-09-22"
+implementation_evidence:
+  phase0_simplification:
+    task: P0-S09
+    status: legacy_runtime_removed_real_data_acceptance_pending
+    active_cache_model: coordinated_prepared_window
+    sole_runtime_interface: open_prepared_sequence
+    removed_interfaces:
+      - materialize_sequence
+      - open_sequence
+      - per_reader_cache_lease
+    stale_legacy_cache_policy: ignored_by_versioned_identity_and_evicted_as_inactive
+    evidence_artifact: simplification/P0_S09_REMOVAL.md
+    limitation: P0-S08 real sequence 67 comparison remains incomplete
+entries:
+  P0-V01:
+    status: verified
+    evidence:
+      fred_repository_commit: 2bf89c5376eda528431b62d6c60f2c13d8f95ab4
+      fred_dataset_commit: 980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd
+      fred_dataset_identity: GabrieleMagrini/FRED
+      dataset_provider: huggingface
+      remote_file_count: 233
+      sequence_archive_count: 231
+      canonical_storage_train_archives: 184
+      canonical_storage_test_archives: 47
+    notes: Exact identities were resolved from the official GitHub ref and Hugging Face dataset API.
+  P0-V02:
+    status: sampled_sequence_verified_complete_dataset_pending
+    evidence:
+      sequence_id: "21"
+      rgb_frame_count: 3481
+      event_frame_count: 3481
+    notes: Released Event/Frames content was materialized from the pinned archive for sequence 21.
+  P0-V03:
+    status: sampled_sequence_verified_complete_dataset_pending
+    evidence:
+      sequence_id: "21"
+      paired_frame_count: 3481
+      first_event_member: Event/Frames/Video_21_frame_33333.png
+      first_rgb_member: RGB/Video_21_20_33_30.459137.jpg
+      event_counter_start: 33333
+      event_counter_step: 33333
+      event_counter_sequence_complete: true
+  P0-V04:
+    status: sampled_sequence_verified_complete_dataset_pending
+    evidence:
+      sequence_id: "21"
+      parsed_annotation_rows: 1301
+    notes: 'The pinned repository and sampled archive both use "timestamp: x1, y1, x2, y2, id, class" in coordinates.txt.'
+  P0-V05:
+    status: finding_recorded_visual_and_complete_dataset_verification_pending
+    evidence:
+      sequence_id: "21"
+      rgb_dimensions: [1280, 720]
+      event_dimensions: [1280, 720]
+      finding: Released extended coordinates include negative x1 values.
+  P0-V06:
+    status: verified
+    evidence:
+      challenging_train_sha256: 6d8f705c1b2ec5c3521b7d85697a0e5ae5d4f2b11772c99ddd0cce95e52e2ab7
+      challenging_test_sha256: a1f408317eaabbf034ea4c53e40f1cc5fbbc507e58881131ada85768c6afcc56
+  P0-V07:
+    status: sampled_sequence_verified_complete_dataset_pending
+    evidence:
+      sequence_id: "21"
+      annotation_rows: 1301
+      annotation_timestamps: 1301
+      matched_annotation_timestamps: 1301
+      unmatched_annotation_timestamps: 0
+    notes: Pinned upstream code derives timestamps with (frame_index + 1) * 0.033333; this matched every annotation timestamp in sequence 21.
+  P0-V08:
+    status: pending_issue_and_data_audit
+  P0-V09:
+    status: sampled_sequence_verified_complete_dataset_pending
+    evidence:
+      sequence_id: "21"
+      raw_event_object: Event/events.hdf5
+      raw_event_size_bytes: 26436347
+      runtime_extraction_selected: false
+    notes: Raw HDF5 presence and size are read from the pinned ZIP directory; routine runtime extraction excludes the member.
+  P0-V10:
+    status: pending_complete_inventory_and_content_verification

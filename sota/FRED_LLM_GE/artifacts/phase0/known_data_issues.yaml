@@ -1,0 +1,20 @@
+schema_version: phase0-known-data-issues-v1
+policy_status: pending_DG-P0-04
+exclusions: []
+issues:
+  - id: P0-ISSUE-001
+    status: open_pending_DG-P0-04
+    provisional_severity: blocking_for_freeze
+    affected_scope:
+      official_split: challenging_test
+      public_sequence_details: redacted
+      complete_dataset_scope: unknown
+    category: annotation_coordinate_bounds
+    evidence:
+      access_class: evaluator_protected
+      public_summary: A trusted integrity check found a released annotation extending beyond the image boundary.
+      protected_evidence_fingerprint_sha256: 8c01ec121279dfc00c86f220d93dcc696c9c7336365b02b2d259c75b653c5309
+      label_level_evidence_committed: false
+    handling: No clipping, repair, filtering, or exclusion has been applied.
+    next_step: Determine intended extended-coordinate semantics and prevalence during the complete coordinate audit, then resolve under DG-P0-04.
+guardrail: No sequence or sample may be silently repaired or excluded before an approved policy decision.

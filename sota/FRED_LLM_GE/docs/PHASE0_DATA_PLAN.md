@@ -1,10 +1,10 @@
 # Phase 0 — FRED Data Infrastructure and Input Pipeline Plan
 ## FRED + LLM-GE Research Project
 
-**Status:** Version 1.0 — Implementation-Ready Phase Specification  
+**Status:** Version 1.1 — Implementation-Ready Remote-Access Phase Specification  
 **Document path:** `docs/PHASE0_DATA_PLAN.md`  
 **Phase:** Phase 0 — Data Infrastructure and Input Pipeline  
-**Primary purpose:** Acquire, reproduce, validate, standardize, and efficiently expose FRED data for all later phases without making event-data representation or preprocessing itself an optimization target.
+**Primary purpose:** Access, reproduce, validate, standardize, and efficiently expose FRED data for all later phases through the official remote source without making event-data representation or preprocessing itself an optimization target.
 
 ---
 
@@ -38,7 +38,7 @@ This plan uses four decision statuses.
 
 ### FIXED
 
-A Phase 0 project decision that is binding for Version 1.0.
+A Phase 0 project decision that is binding for Version 1.1.
 
 ### REQUIRED VERIFICATION
 
@@ -50,7 +50,7 @@ A decision intentionally deferred until specified implementation evidence exists
 
 ### FUTURE RESEARCH
 
-A possible later extension outside the Version 1.0 implementation scope.
+A possible later extension outside the Version 1.1 implementation scope.
 
 No other decision-status labels are normative in this plan.
 
@@ -71,7 +71,7 @@ The coding agent should read only the sections relevant to the current work pack
 
 | Current work | Primary Phase 0 sections |
 |---|---|
-| Source acquisition/storage | §§3–6 |
+| Remote source access/cache | §§3–6 |
 | Dataset inventory | §§4–6, 10 |
 | Challenging split | §§3, 7, 10 |
 | Train/validation split | §§3, 7, 10 |
@@ -109,13 +109,13 @@ Phase 0 is infrastructure for trustworthy experiments. It is **not** itself the 
 
 ## 2.2 Core principle — FIXED
 
-Version 1.0 follows:
+Version 1.1 follows:
 
 > **Reproduce and validate before innovating.**
 
 Phase 0 SHALL reproduce and use the released/established FRED representation and handling as faithfully as practical before any separate research effort investigates alternative event representations.
 
-Version 1.0 SHALL NOT invent a new:
+Version 1.1 SHALL NOT invent a new:
 
 - event accumulation method;
 - event voxel representation;
@@ -132,7 +132,7 @@ Engineering additions such as strict validation, manifests, caching, explicit sc
 
 Phase 0 includes:
 
-- official dataset acquisition and source verification;
+- official remote dataset/API access and source verification;
 - immutable source-data organization;
 - sequence/file inventory;
 - challenging-split reproduction and verification;
@@ -154,7 +154,7 @@ Phase 0 includes:
 
 ## 2.4 Out of scope
 
-Version 1.0 does **not** include:
+Version 1.1 does **not** include:
 
 - new raw-event representations;
 - evolution of data preprocessing;
@@ -197,14 +197,14 @@ A gate may be owned by either:
 
 ## 3.1 Fixed decision register
 
-The following decisions are fixed for Phase 0 Version 1.0.
+The following decisions are fixed for Phase 0 Version 1.1.
 
 | ID | Fixed decision |
 |---|---|
 | `P0-D01` | Phase 0 is reproduction/validation infrastructure, not event-representation research. |
-| `P0-D02` | Use official released FRED synchronized data products. |
-| `P0-D03` | Use released event frames for routine Version 1.0 experiments. |
-| `P0-D04` | Preserve raw event HDF5 files for verification/future research but do not regenerate event frames routinely. |
+| `P0-D02` | Use official released FRED synchronized data products through the verified official remote-access mechanism/API. |
+| `P0-D03` | Use released event frames for routine Version 1.1 experiments. |
+| `P0-D04` | Keep raw event HDF5 content addressable in the pinned official remote source for verification/future research; do not routinely materialize or retain it locally, and do not regenerate event frames routinely. |
 | `P0-D05` | Use `coordinates.txt` as the initial canonical annotation source, subject to verification. |
 | `P0-D06` | Preserve timestamp, bounding box, track ID, original class/type, sequence ID, and frame identity. |
 | `P0-D07` | Use one model-neutral canonical FRED layer. |
@@ -214,35 +214,48 @@ The following decisions are fixed for Phase 0 Version 1.0.
 | `P0-D11` | Keep the official challenging test outside search/tuning feedback. |
 | `P0-D12` | Split development data at a leakage-safe sequence/group level, never by random frame assignment. |
 | `P0-D13` | Protect split, canonical labels, held-out labels, and benchmark definitions from LLM-GE candidate modification. |
-| `P0-D14` | Perform expensive deterministic discovery/parsing/validation once and reuse validated artifacts. |
-| `P0-D15` | Treat source FRED data as immutable. |
+| `P0-D14` | Perform expensive deterministic remote discovery/parsing/validation once where possible and reuse validated metadata/manifests/cache artifacts. |
+| `P0-D15` | Treat the pinned official remote FRED release as immutable source truth; local materializations are disposable cache, never source truth. |
 | `P0-D16` | Surface malformed/questionable data; never silently discard or repair it. |
 | `P0-D17` | Preserve metadata needed by tracking and forecasting. |
 | `P0-D18` | Phase 0 defines a generic adapter contract; model-family-specific adapter completion belongs to Phase 1. |
+| `P0-D19` | Phase 0 MUST NOT require or create a complete local mirror of the FRED dataset; only metadata, manifests, validation artifacts, and workload-required content may be materialized locally. |
 
-## 3.2 `DG-P0-01` — Source acquisition and storage
+## 3.2 `DG-P0-01` — Remote source access and bounded cache strategy
 
 **Owner:** IMPLEMENTATION  
-**Trigger:** Project server/storage environment is available for inspection.
+**Trigger:** The intended execution environment can access the official FRED remote release/API.
 
 **Evidence required:**
 
-- available capacity;
-- permissions;
-- expected dataset/archive size and behavior;
-- official download mechanisms available;
-- local/high-throughput storage options;
-- source/derived/cache separation feasibility.
+- exact official dataset identity and pin-able revision/version;
+- verified API/client or official remote-access mechanism and its supported access granularity;
+- authentication requirements, if any, without storing secrets in project configuration;
+- remote file/listing/metadata behavior needed to build deterministic logical references;
+- network availability, throughput, retry/error behavior, and expected provider limits;
+- smallest practical materialization unit supported by the source (for example file, archive, sequence, or shard);
+- available local cache capacity and permissions;
+- source-reference/manifest/cache separation feasibility.
 
 **Decision produced:**
 
-- physical raw-data root;
-- derived/manifests/cache roots;
-- official acquisition mechanism used on the server.
+- pinned remote dataset identity/revision;
+- approved remote access mechanism/client;
+- logical source-reference scheme used by manifests;
+- local metadata/manifest roots;
+- bounded local cache root, size policy, and eviction/reuse behavior;
+- retry/failure policy for remote reads;
+- any optional prefetch/materialization policy needed for efficient training.
 
-**Constraint:** paths remain configurable; reusable code MUST NOT embed user-specific absolute paths.
+**Constraints:**
 
-**Blocks:** acquisition automation and source freeze.
+- reusable code MUST NOT embed user-specific absolute paths;
+- Phase 0 MUST NOT require or create a complete local mirror of FRED;
+- locally materialized dataset content MUST be treated as disposable/rebuildable cache;
+- canonical identity MUST come from the pinned remote source and stable logical references, not from a cache pathname;
+- implementation MUST fail visibly when required remote content cannot be obtained or verified; it MUST NOT silently substitute another source/version.
+
+**Blocks:** remote-source adapter implementation, source inventory, and source freeze.
 
 ## 3.3 `DG-P0-02` — Leakage-safe development split
 
@@ -331,26 +344,28 @@ Official held-out test labels are not included in ordinary visual overlays; see 
 ## 3.7 `DG-P0-06` — Cache/runtime strategy and performance acceptance
 
 **Owner:** IMPLEMENTATION  
-**Trigger:** canonical manifest/loader exists on the intended server.
+**Trigger:** canonical manifest/loader and verified remote-source adapter exist on the intended environment.
 
 **Evidence required:**
 
-- loader throughput;
-- storage throughput;
-- CPU utilization;
-- memory behavior;
+- remote fetch throughput and latency for representative access patterns;
+- cold-cache and warm-cache loader throughput;
+- cache hit/miss behavior and local cache growth;
+- CPU utilization and memory behavior;
 - worker/prefetch experiments;
 - repeated-run startup cost;
-- representative batch-delivery timing.
+- representative batch-delivery timing;
+- provider/API limits or reliability constraints that materially affect execution.
 
 **Decision produced:**
 
-- cache backend, if one is needed;
+- bounded cache backend and capacity;
+- cache key/versioning and eviction/reuse policy;
+- prefetch/materialization unit and policy, if needed;
 - worker/prefetch/persistent-worker settings for the environment;
-- cache location;
 - Phase 0 throughput acceptance statement supported by measurements.
 
-Phase 0 does not need to guess a universal fixed throughput percentage before hardware is measured. Phase 1 baseline integration SHOULD additionally confirm that the chosen loader does not materially starve the selected detector during actual training/inference.
+Phase 0 does not need to guess a universal fixed throughput percentage before the environment is measured. It MUST avoid a design that performs a remote network request for every training sample when a bounded reusable cache/prefetch strategy can amortize those reads. Phase 1 baseline integration SHOULD additionally confirm that the chosen remote+cache loader does not materially starve the selected detector during actual training/inference.
 
 ---
 
@@ -362,6 +377,7 @@ Planning-time upstream observations are useful evidence but are not immutable fa
 
 - Official FRED repository: `https://github.com/miccunifi/FRED`
 - Official FRED dataset release used during planning: `https://huggingface.co/datasets/GabrieleMagrini/FRED`
+- Phase 0 Version 1.1 access policy: use the verified official remote API/client/source interface; do not require a full local dataset mirror.
 
 Planning-time observations include:
 
@@ -382,16 +398,16 @@ These observations do not prove a problem exists in the exact pinned project dat
 
 | ID | Planning-time observation | Verify against | Required before |
 |---|---|---|---|
-| `P0-V01` | Official dataset/repository identities are correct | pinned repository + actual downloaded release | source freeze |
-| `P0-V02` | Released event frames are available for routine use | actual dataset | canonical representation implementation |
-| `P0-V03` | RGB/Event frame naming and one-to-one pairing convention | pinned repository + multiple actual sequences | pairing implementation |
-| `P0-V04` | `coordinates.txt` format and semantic meaning | pinned docs/repository + actual files | strict parser |
-| `P0-V05` | `coordinates.txt` uses the intended shared coordinate space | actual dimensions + overlays on development data | canonical box contract |
+| `P0-V01` | Official dataset/repository identities and remote revision are correct | pinned repository + pinned official remote dataset source/API | source freeze |
+| `P0-V02` | Released event frames are remotely addressable/materializable for routine use | pinned remote source + on-demand content verification | canonical representation implementation |
+| `P0-V03` | RGB/Event frame naming and one-to-one pairing convention | pinned repository + multiple sequences materialized/read through the remote source adapter | pairing implementation |
+| `P0-V04` | `coordinates.txt` format and semantic meaning | pinned docs/repository + remotely read/materialized annotation files | strict parser |
+| `P0-V05` | `coordinates.txt` uses the intended shared coordinate space | remotely obtained actual dimensions + overlays on development data | canonical box contract |
 | `P0-V06` | Challenging split membership and helper behavior | pinned split lists/script | split freeze |
-| `P0-V07` | Timestamp/index derivation and annotation-to-frame mapping | actual sequences/annotations | canonical sample freeze |
+| `P0-V07` | Timestamp/index derivation and annotation-to-frame mapping | remotely read/materialized sequences/annotations | canonical sample freeze |
 | `P0-V08` | Known upstream issue reports affect or do not affect pinned data | pinned repo/issues + project audit | Phase 0 freeze |
-| `P0-V09` | Raw HDF5 inventory is present where expected | actual dataset | source inventory |
-| `P0-V10` | All sequences follow the same or explicitly classified pairing conventions | full inventory/validation | manifest freeze |
+| `P0-V09` | Raw HDF5 objects are addressable in the pinned remote source where expected | remote listing/metadata plus targeted on-demand verification | source inventory |
+| `P0-V10` | All sequences follow the same or explicitly classified pairing conventions | complete remote inventory plus evidence-backed validation/materialization as required | manifest freeze |
 
 The verification result MUST be recorded as evidence, not only printed to console.
 
@@ -402,63 +418,75 @@ The verification result MUST be recorded as evidence, not only printed to consol
 ## 5.1 Fixed architecture
 
 ```text
-                     OFFICIAL FRED SOURCE
-                             │
-                             ▼
-                 immutable source-data layer
-                             │
-                             ▼
-              official challenging split mapping
-                             │
-                             ▼
-              project train/validation membership
-                             │
-                             ▼
-         parsing + pairing + validation + indexing
-                             │
-                             ▼
-              versioned canonical FRED manifest
-                             │
-                             ▼
-               canonical FRED sample interface
-                             │
-           ┌─────────────────┼─────────────────┐
-           │                 │                 │
-           ▼                 ▼                 ▼
-        RGB view         Event view       RGB/Event view
-           │                 │                 │
-           └─────────────────┼─────────────────┘
-                             │
+                 PINNED OFFICIAL FRED REMOTE SOURCE
+                   (verified API/client/revision)
+                              │
+                              ▼
+                    remote source adapter
+                 logical refs + metadata access
+                              │
+                ┌─────────────┴─────────────┐
+                │                           │
+                ▼                           ▼
+       metadata / source inventory    on-demand content fetch
+                │                           │
+                │                    bounded local cache
+                │                    (disposable/rebuildable)
+                └─────────────┬─────────────┘
+                              ▼
+                 official challenging split mapping
+                              │
+                              ▼
+                 project train/validation membership
+                              │
+                              ▼
+            parsing + pairing + validation + indexing
+                              │
+                              ▼
+                 versioned canonical FRED manifest
+                              │
+                              ▼
+                  canonical FRED sample interface
+                              │
+            ┌─────────────────┼─────────────────┐
+            │                 │                 │
+            ▼                 ▼                 ▼
+         RGB view         Event view       RGB/Event view
+            │                 │                 │
+            └─────────────────┼─────────────────┘
+                              │
                      generic adapter contract
-                             │
-                             ▼
-                 downstream phase/model adapters
+                              │
+                              ▼
+                  downstream phase/model adapters
 ```
 
-The canonical data layer is the Phase 0 source of truth.
+The **pinned official remote FRED release** is the immutable source truth. The canonical Phase 0 manifest/interface is the project-facing source of truth for sample identity, split membership, annotation interpretation, and logical data references.
 
-Models/adapters translate from this canonical representation. They do not redefine the dataset, split, annotations, or canonical identity.
+Local materialized images, event frames, archives, HDF5 files, or sequence bundles are cache artifacts only. Their presence or absolute location MUST NOT define scientific identity.
+
+Models/adapters translate from the canonical representation. They do not redefine the dataset, split, annotations, canonical identity, remote revision, or cache policy.
 
 ## 5.2 Runtime principle — FIXED
 
 Phase 0 is designed as:
 
-> **Expensive/strict once; cheap repeatedly.**
+> **Verify/index remotely once where possible; materialize only what is needed; reuse locally when useful.**
 
 One-time or infrequent work includes:
 
 ```text
-download / source verification
+pin + verify official remote source/API
         ↓
-inventory
+remote inventory / metadata discovery
         ↓
 split verification
         ↓
-annotation parsing
+annotation parsing / metadata indexing
         ↓
-modality/timestamp pairing
+targeted content verification
         ↓
-validation
+modality/timestamp pairing validation
         ↓
 manifest/index build
         ↓
@@ -470,7 +498,15 @@ Repeated model/LLM-GE runs should primarily do:
 ```text
 load versioned manifest/index
         ↓
-read required frame(s)
+resolve stable remote logical reference
+        ↓
+cache hit? ── yes ──► read cached content
+        │
+        no
+        ↓
+fetch smallest practical required unit
+        ↓
+verify + place in bounded cache
         ↓
 thin adapter transformation
         ↓
@@ -479,85 +515,117 @@ model training/inference/evaluation
 
 The following MUST NOT normally be repeated for every candidate:
 
-- dataset download/extraction after a valid source exists;
-- whole-dataset directory discovery;
+- full-dataset download or extraction;
+- whole-source remote discovery/listing when a validated reusable inventory exists;
 - challenging-split construction;
 - complete annotation reparsing when a validated reusable representation exists;
 - full integrity scans;
 - event-frame regeneration;
 - synchronization reconstruction;
-- train/validation membership generation.
+- train/validation membership generation;
+- re-fetching content that is already valid in the compatible local cache.
 
----
+The system MAY prefetch or materialize a workload-specific subset, sequence, archive, or shard when that is the smallest practical provider-supported unit and improves throughput. Such materialization remains cache, not a second source of truth.
 
-# 6. Source Acquisition, Storage, and Immutability
+# 6. Remote Source Access, Minimal Local State, and Immutability
 
-## 6.1 Official source — FIXED
+## 6.1 Official remote source — FIXED
 
-The project SHALL use the official FRED release or an explicitly verified official mirror.
+The project SHALL use the official FRED release through a verified official remote access mechanism/API/client, pinned to an exact dataset identity and revision/version wherever the provider supports revision pinning.
 
-The FRED GitHub repository is a benchmark/code reference and does not replace the full released dataset.
+The FRED GitHub repository remains the benchmark/code reference. The official dataset host/release remains the data source.
 
-`DG-P0-01` selects the server-specific acquisition mechanism and physical storage locations.
+Phase 0 MUST NOT require a complete local download or permanent local mirror of the approximately 205 GB FRED release.
 
-## 6.2 Raw/source data immutability — FIXED
+`DG-P0-01` selects the verified remote access mechanism, logical reference scheme, and bounded cache behavior for the intended environment.
 
-Original FRED source data is read-only project truth.
+## 6.2 Remote source immutability — FIXED
 
-Normal project code MUST NOT:
+The pinned official remote FRED release is read-only project truth.
 
-- rewrite RGB images;
+Normal project code MUST NOT attempt to mutate or replace official source objects. In particular, project logic MUST NOT:
+
+- rewrite source RGB images;
 - rewrite released event frames;
-- rewrite raw HDF5 streams;
+- rewrite raw HDF5 content;
 - edit source annotations;
-- rename source sequences in place;
+- alter official sequence identities;
 - alter official split-list contents;
-- silently delete suspect files/samples.
+- silently substitute another remote source/revision when an object is unavailable;
+- silently delete/ignore suspect source objects from the canonical view.
 
-Derived products MUST live separately.
+Any project-created data product MUST be separate and reproducible from pinned remote source identity plus versioned project configuration/policy.
+
+## 6.3 Minimal local state — FIXED
+
+Local persistent state SHOULD contain only what is needed for reproducibility, validation, indexing, and efficient repeated access.
 
 A conceptual layout is:
 
 ```text
 data/
-├── raw/          # immutable official source
-├── derived/      # project-created derived artifacts
-├── manifests/    # versioned indexes/split manifests
-└── cache/        # disposable/rebuildable runtime cache
+├── metadata/      # small remote inventories/source descriptors/verification records
+├── derived/       # project-created small derived artifacts where needed
+├── manifests/     # versioned indexes/split manifests/logical references
+├── cache/         # bounded disposable materialized FRED content
+└── validation/    # reports/overlays/diagnostics
 ```
 
-This layout is **non-normative**. Exact roots are configuration-driven through `DG-P0-01`.
+There is intentionally no required `data/raw/` full-dataset mirror.
 
-## 6.3 Source inventory — FIXED
+The exact layout is **non-normative**. Roots are configuration-driven through `DG-P0-01`.
 
-Before downstream use, Phase 0 MUST produce an auditable sequence inventory.
+Local cache contents MAY include provider-supported files, sequence archives, shards, extracted frames, or other materialized units needed by the current workload. Cache contents MUST remain disposable and MUST NOT be relied upon as the only copy of research-relevant source data.
 
-For every sequence, record at least:
+## 6.4 Remote source inventory — FIXED
+
+Before downstream use, Phase 0 MUST produce an auditable sequence/source inventory from the pinned remote source and supporting repository metadata.
+
+For every sequence, record at least, when the remote source exposes or permits verification of the field:
 
 - sequence ID;
-- source location/archive identity;
+- stable remote source/archive/object identity;
+- pinned dataset revision/version;
 - official split/source membership where available;
-- RGB directory/presence status;
-- event-frame directory/presence status;
-- raw HDF5 presence/status;
-- annotation-file presence;
-- RGB frame count;
-- event-frame count;
+- RGB object/directory presence status;
+- event-frame object/directory presence status;
+- raw HDF5 object presence/status;
+- annotation-object presence;
+- RGB frame count or evidence-backed count;
+- event-frame count or evidence-backed count;
 - annotation entry count;
 - first/last frame identity;
 - first/last annotation timestamp where parseable;
-- basic file/readability status;
+- source readability/materialization status where tested;
 - Phase 0 validation status.
 
 The inventory MUST be a machine-readable durable artifact, not only terminal output.
 
-## 6.4 Configurable paths — FIXED
+If a field cannot be established from remote metadata alone, Phase 0 MAY materialize the smallest practical source unit required to verify it. Verification MUST NOT trigger an unconditional full-dataset mirror.
+
+## 6.5 Remote-access and cache correctness — FIXED
+
+Remote data access MUST be deterministic with respect to the pinned source revision and logical object reference.
+
+The implementation MUST:
+
+- identify the remote dataset/revision in every formal manifest;
+- detect missing/unavailable remote objects and fail visibly;
+- use bounded retry behavior for transient failures rather than infinite retry loops;
+- verify materialized content using provider metadata, size/hash information, archive identity, or another reliable mechanism where available;
+- key/invalidate cached content using enough source identity to prevent cross-version reuse;
+- prevent partial downloads/materializations from being treated as valid cache entries;
+- keep authentication secrets outside committed project files.
+
+The implementation MUST NOT silently fall back to an unpinned mirror, different dataset revision, stale incompatible cache, or fabricated placeholder data.
+
+## 6.6 Configurable remote/cache settings — FIXED
 
 Reusable code MUST NOT contain hardcoded user/server paths such as `/home/<user>/...` or `/scratch/<username>/...`.
 
-Environment-specific roots MUST come from configuration or documented environment variables.
+Environment-specific remote-access options, cache roots, and other local roots MUST come from configuration or documented environment variables.
 
----
+Credentials/tokens MUST be supplied through an appropriate secret mechanism/environment and MUST NOT be committed to the repository.
 
 # 7. Split Integrity, Leakage Prevention, and Evaluation Isolation
 
@@ -567,11 +635,11 @@ The official FRED challenging split is the default project evaluation framework.
 
 Phase 0 MUST reproduce/verify the official challenging membership from the pinned FRED repository.
 
-The implementation MAY use symlinks, manifests, or another derived view if:
+The implementation MAY use manifests, logical remote references, cached derived views, or another non-destructive representation if:
 
 - membership is exact;
-- source data is not modified;
-- unnecessary data duplication is avoided;
+- official remote source data is not modified;
+- unnecessary local materialization/data duplication is avoided;
 - split identity is versioned and auditable.
 
 Official challenging train/test membership is protected project state.
@@ -662,7 +730,7 @@ A protected evaluator/harness owns validation/test labels and scoring outside ca
 
 Candidate/evolved code MUST NOT receive write authority over:
 
-- raw FRED source;
+- official remote FRED source or its pinned identity;
 - canonical/split manifests;
 - validation/test membership;
 - canonical annotation values;
@@ -717,16 +785,19 @@ Model architecture, checkpoint, prompts, and final model evaluation freeze polic
 
 ## 8.1 Released event representation — FIXED
 
-Version 1.0 uses the **already extracted event frames released by FRED**.
+Version 1.1 uses the **already extracted event frames released by FRED**.
 
 Routine training/evaluation MUST NOT regenerate the standard event-frame representation from raw HDF5 streams.
 
-Raw HDF5 files SHALL be:
+Raw HDF5 content SHALL:
 
-- preserved;
-- inventoried;
-- available for verification/future research;
-- excluded from ordinary Version 1.0 preprocessing unless a verification task requires them.
+- remain addressable through the pinned official remote source;
+- be represented in the source inventory by stable logical references/availability metadata;
+- be materialized locally only when a specific verification/future-research task requires it;
+- remain excluded from ordinary Version 1.1 preprocessing and routine detector training;
+- never be retained locally merely to create a complete source mirror.
+
+A cached HDF5 object is disposable materialization, not source truth.
 
 ## 8.2 Annotation source — FIXED, subject to verification
 
@@ -738,7 +809,7 @@ coordinates.txt
 
 subject to `P0-V04` and `P0-V05`.
 
-`coordinates_rgb.txt` remains available for verification/future RGB-specific analysis, but it is not a parallel source of canonical truth in Version 1.0.
+`coordinates_rgb.txt` remains available for verification/future RGB-specific analysis, but it is not a parallel source of canonical truth in Version 1.1.
 
 ## 8.3 Annotation preservation — FIXED
 
@@ -816,10 +887,12 @@ FREDSample
 ├── frame_index
 ├── timestamp
 ├── rgb
-│   ├── path/reference
+│   ├── remote_logical_reference
+│   ├── optional_cache_reference
 │   └── verified metadata
 ├── event
-│   ├── frame_path/reference
+│   ├── remote_logical_reference
+│   ├── optional_cache_reference
 │   └── verified metadata
 ├── annotations
 │   ├── boxes_xyxy
@@ -829,7 +902,8 @@ FREDSample
 │   ├── official_split
 │   └── project_split
 └── provenance
-    ├── fred_dataset_version
+    ├── fred_dataset_identity
+    ├── fred_dataset_revision
     ├── fred_repository_revision
     ├── phase0_schema_version
     └── manifest_version
@@ -852,7 +926,7 @@ or an equivalent documented scheme.
 Sample identity MUST NOT depend on:
 
 - runtime enumeration order;
-- mutable absolute paths;
+- mutable absolute/cache paths;
 - regenerated random UUIDs.
 
 ## 8.9 Data views — FIXED
@@ -880,8 +954,8 @@ At minimum it encodes or references:
 - sample ID;
 - sequence ID;
 - frame index;
-- RGB reference;
-- event-frame reference;
+- stable RGB remote logical reference;
+- stable event-frame remote logical reference;
 - annotation association;
 - timestamp;
 - official split;
@@ -896,7 +970,7 @@ The physical backend is selected through `DG-P0-03`.
 A manifest MUST identify:
 
 - manifest/schema version;
-- source dataset identity/version;
+- source dataset identity and pinned remote revision/version;
 - FRED repository revision;
 - official challenging split file revision/hash;
 - project split version;
@@ -905,7 +979,7 @@ A manifest MUST identify:
 - creation timestamp;
 - validation status.
 
-Formal experiments reference the manifest version rather than implicitly relying on "whatever is currently on disk."
+Formal experiments reference the manifest version and pinned remote source identity rather than implicitly relying on "whatever is currently cached/on disk."
 
 ## 9.3 Safe rebuilds — FIXED
 
@@ -922,22 +996,28 @@ Important writes SHOULD use a temporary artifact, validation, then atomic promot
 
 ## 9.4 Cache policy — FIXED
 
-Caches exist only to reduce repeated deterministic work.
+Caches exist only to reduce repeated remote transfer and repeated deterministic work.
 
-Caches are **not source truth**.
+Caches are **not source truth** and MUST NOT be required to contain the full FRED release.
 
-A cache MUST be disposable and rebuildable from:
+A cache MUST be bounded, disposable, and rebuildable from:
 
-- immutable source data;
+- the pinned official remote dataset identity/revision;
+- stable logical source references;
 - frozen split membership;
 - Phase 0 configuration;
 - versioned schema/annotation policy.
 
 Appropriate cached material MAY include:
 
+- workload-required RGB/event files;
+- provider-supported sequence archives or shards;
+- selectively materialized raw HDF5 objects for verification;
 - parsed annotations;
 - validated image metadata;
 - deterministic indexes.
+
+The cache SHOULD reuse compatible material across repeated baseline/LLM-GE runs and SHOULD avoid per-sample network traffic during hot training loops when practical.
 
 Cache backend/runtime settings are selected through `DG-P0-06`.
 
@@ -947,11 +1027,12 @@ Cached artifacts MUST contain enough identity to reject incompatible reuse.
 
 Incompatibility includes, where applicable:
 
-- different FRED source version;
+- different FRED dataset identity/revision or remote object identity;
 - changed annotation policy;
 - changed split version;
 - changed manifest/schema version;
-- changed canonical coordinate interpretation.
+- changed canonical coordinate interpretation;
+- partial/corrupt materialization or failed source verification.
 
 Stale-cache detection is correctness behavior, not only performance optimization.
 
@@ -979,19 +1060,25 @@ Phase 0 MUST provide a configuration source for the implemented environment.
 
 It SHALL define, as applicable:
 
-- raw dataset root;
-- derived-data root;
+- official remote dataset/provider identity;
+- pinned dataset revision/version;
+- approved remote access mechanism/backend;
+- remote logical-reference rules;
+- non-secret remote-access options;
+- local metadata/derived-data root;
 - manifest location;
-- cache root;
+- bounded cache root and capacity/eviction policy;
 - challenging-split source;
 - project split manifest;
 - annotation source;
 - schema version;
 - supported modality selection;
 - legitimate validation strictness/configuration;
-- runtime settings chosen through `DG-P0-06`.
+- runtime/prefetch/materialization settings chosen through `DG-P0-06`.
 
 Exact configuration technology/file layout is an implementation choice.
+
+Authentication credentials/tokens MUST NOT be committed to configuration files. They must be supplied through an appropriate environment/secret mechanism.
 
 Research-critical defaults MUST be explicit.
 
@@ -1017,7 +1104,8 @@ A conceptual, non-normative API is:
 dataset = FREDData(
     split="train",
     modality="rgb_event",
-    manifest_version="..."
+    manifest_version="...",
+    source_revision="..."
 )
 ```
 
@@ -1026,10 +1114,13 @@ Exact Python APIs are implementation-specific, but the interface must explicitly
 - project split;
 - modality;
 - manifest/schema version;
+- pinned remote source identity/revision;
 - training/evaluation access mode;
 - downstream adapter selection where relevant.
 
-Behavior MUST NOT be inferred from incidental path structure or tensor count.
+The loader resolves canonical logical references through the approved remote-source adapter and bounded local cache. Callers MUST NOT need to know whether a sample was served from a cache hit or fetched/materialized remotely.
+
+Behavior MUST NOT be inferred from incidental cache path structure or tensor count.
 
 ---
 
@@ -1063,14 +1154,16 @@ runtime throughput
 
 Validate, as applicable:
 
-- required source directories/sequences;
-- readable/non-zero files;
-- expected modality directories;
-- annotation-file presence;
-- HDF5 inventory presence where expected;
-- no destructive modification.
+- required remote sequence/object identities;
+- remote listing/metadata consistency;
+- expected modality objects/directories/archives;
+- annotation-object presence;
+- HDF5 object inventory presence where expected;
+- readable/non-zero content on targeted materialization checks;
+- no destructive source modification;
+- no silent source-version substitution.
 
-Hashes/checksums SHOULD be recorded for frozen critical artifacts where practical.
+Hashes/checksums or provider object identities SHOULD be recorded for frozen critical metadata/artifacts and materialized verification samples where practical.
 
 ## 10.3 Strict annotation parsing
 
@@ -1092,7 +1185,7 @@ Diagnostics for malformed data SHOULD retain:
 
 ## 10.4 RGB/event pairing checks
 
-For every usable sequence, validate:
+For every usable sequence, validate using remote metadata and/or on-demand materialization as required:
 
 - RGB count;
 - event-frame count;
@@ -1259,48 +1352,54 @@ Any toy/debug subset MUST have explicit membership and MUST NOT be used for repo
 
 ## 11.1 Performance objective — FIXED
 
-Phase 0 is optimized for **amortized reuse**, not novel preprocessing.
+Phase 0 is optimized for **amortized remote access and reuse**, not novel preprocessing and not a permanent full-dataset mirror.
 
-Repeated experiments SHOULD consume already prepared/indexed data.
+Repeated experiments SHOULD consume already prepared/indexed metadata and reuse compatible cached data. The loader SHOULD fetch/materialize data at a granularity that avoids pathological per-frame network latency during training while still respecting the no-full-mirror requirement.
 
 Appropriate techniques MAY include:
 
 - precomputed manifests;
 - cached parsed metadata;
 - deterministic indexes;
+- bounded sequence/archive/shard caching;
+- workload-aware prefetching;
 - dataloader workers;
-- prefetching;
 - pinned host memory where appropriate;
 - persistent workers where appropriate;
-- high-throughput local storage where available;
-- avoiding repeated re-encoding/decompression/directory scans.
+- avoiding repeated remote listings, transfers, re-encoding, decompression, and reparsing;
+- cache warming for the specific planned workload when justified.
 
-All optimizations MUST preserve official data semantics.
+All optimizations MUST preserve official data semantics and pinned source identity.
 
 ## 11.2 Performance acceptance
 
-Before Phase 0 freezes, run a representative throughput benchmark on the intended server.
+Before Phase 0 freezes, run representative throughput benchmarks on the intended environment for at least:
+
+- cold-cache access representative of first use;
+- warm-cache access representative of repeated model/evolution runs.
 
 The Phase 0 acceptance statement is:
 
-> The validated reusable data path must not contain an avoidable recurring I/O or deterministic preprocessing bottleneck relative to the measured capabilities of the intended environment.
+> The validated reusable remote+cache data path must not contain an avoidable recurring network, I/O, or deterministic preprocessing bottleneck relative to the measured capabilities of the intended environment, while not requiring a complete local FRED mirror.
 
 The benchmark MUST record enough context to reproduce the conclusion, including as applicable:
 
-- server/storage identity;
+- server/environment identity;
+- remote source/provider and pinned revision;
+- cache location/capacity and current warm/cold state;
 - manifest/cache version;
 - batch/sample configuration;
+- materialization/prefetch unit;
 - worker/prefetch settings;
 - warm-up handling;
-- measured sample/batch delivery rate;
+- measured remote transfer and sample/batch delivery rate;
+- cache hit/miss behavior;
 - startup/repeated-run cost;
 - CPU/memory behavior.
 
 `DG-P0-06` selects environment-specific settings and documents whether the pipeline satisfies the criterion.
 
-Because exact detector implementations belong to Phase 1, Phase 1 baseline integration SHOULD confirm end-to-end that data delivery does not materially starve the selected detector during representative execution.
-
----
+Because exact detector implementations belong to Phase 1, Phase 1 baseline integration SHOULD confirm end-to-end that the remote+cache data path does not materially starve the selected detector during representative execution.
 
 # 12. Generic Adapter and Downstream Consumer Contract
 
@@ -1334,7 +1433,7 @@ A downstream adapter MUST NOT:
 - alter split membership;
 - silently change canonical annotations;
 - modify sample identity;
-- regenerate the Version 1.0 event representation;
+- regenerate the Version 1.1 event representation;
 - hide invalid canonical data;
 - expose held-out ground truth to candidate inference.
 
@@ -1392,7 +1491,7 @@ This removes the circular dependency between Phase 0 completion and Phase 1 mode
 
 Phase 0 produces or defines:
 
-1. **Source inventory** — complete auditable source/sequence inventory.
+1. **Remote source inventory** — complete auditable pinned-source/sequence/object inventory and access metadata.
 2. **Official split manifest** — verified challenging-split membership.
 3. **Project split manifest** — frozen development train/validation membership and reference to held-out test membership.
 4. **Canonical dataset manifest/index** — sample-level model-neutral index.
@@ -1400,10 +1499,10 @@ Phase 0 produces or defines:
 6. **Validation report** — machine-readable results plus human-readable summary.
 7. **Visual validation outputs** — development-data overlays selected under `DG-P0-05`.
 8. **Schema/interface documentation** — canonical sample and generic adapter contracts.
-9. **Performance report** — representative server/storage throughput measurements.
+9. **Performance report** — representative remote-access, cold/warm-cache, and loader throughput measurements.
 10. **Verification register results** — `P0-V01`–`P0-V10` evidence/status.
 
-Large datasets/heavy caches generally remain outside Git. Git SHOULD contain code, configuration, small manifests where practical, schema definitions, validation summaries, and durable references to external artifact locations.
+Dataset content and heavy caches remain outside Git. Git SHOULD contain code, non-secret configuration, small manifests where practical, schema definitions, validation summaries, and durable references to the pinned official remote source. A complete local FRED mirror is not a Phase 0 artifact.
 
 ## 13.2 Data-use auditability
 
@@ -1415,7 +1514,7 @@ A formal downstream run must be able to identify by reference:
 - modality;
 - downstream adapter/config;
 - Phase 0 schema version;
-- source FRED identity/revision;
+- pinned remote FRED identity/revision;
 - approved exclusions, if any.
 
 This information need not be duplicated into every run directory if a stable referenced artifact provides it.
@@ -1433,7 +1532,7 @@ Phase 1 receives:
 - validation report;
 - known-data-issue registry;
 - reproducibility/provenance metadata;
-- runtime-loading guidance.
+- remote-access/cache runtime guidance.
 
 Phase 1 SHALL NOT need to reconstruct FRED synchronization, annotation semantics, or benchmark membership itself.
 
@@ -1482,49 +1581,66 @@ This is the **single authoritative Phase 0 execution roadmap**. Other scope/summ
 
 Work-package IDs are used in coding tasks and pre-task contracts.
 
-## Stage A — Evidence, environment, and acquisition
+## Stage A — Evidence, remote access, and source abstraction
 
 ### `P0-A1` Pin and verify upstream references
 
 **Work:**
 
 - pin FRED repository revision;
-- identify exact dataset release/source;
+- identify and pin the exact official remote dataset release/source revision;
 - begin `P0-V01`–`P0-V10` verification record.
 
 **Exit:** upstream revisions are recorded and planning-time assumptions are explicitly marked verified/pending.
 
-### `P0-A2` Resolve source storage/acquisition
+### `P0-A2` Resolve remote access and bounded cache strategy
 
 **Gate:** `DG-P0-01`
 
 **Work:**
 
-- configure raw/derived/manifest/cache roots;
-- implement/execute approved acquisition workflow;
-- enforce source immutability expectations.
+- verify the official API/client/remote-access mechanism in the intended environment;
+- record authentication/network/provider constraints;
+- define logical source references;
+- configure metadata/derived/manifest/cache roots;
+- define bounded cache capacity and invalidation/eviction behavior;
+- explicitly verify that no full local dataset mirror is required.
 
-**Exit:** verified source exists and can be inventoried without modifying it.
+**Exit:** the pinned official remote source can be queried and a representative object can be materialized/read without creating a full dataset copy.
 
-## Stage B — Inventory and initial audit
-
-### `P0-B1` Build source inventory
+### `P0-A3` Implement remote source adapter and cache boundary
 
 **Work:**
 
-- discover sequences/files;
-- collect counts/presence/readability metadata;
-- record HDF5 and annotation status.
+- implement source listing/metadata access required by Phase 0;
+- implement deterministic resolution from logical reference to remote object;
+- implement safe on-demand materialization through the bounded cache;
+- implement partial-download protection, source-version checks, and visible failure behavior.
 
-**Tests:** deterministic rerun; duplicate sequence detection; no source modification.
+**Tests:** deterministic logical-reference resolution; cache hit/miss behavior; stale-version rejection; interrupted materialization handling; no source mutation.
 
-**Exit:** versioned source inventory artifact exists.
+**Exit:** downstream Phase 0 code can request remote FRED objects without depending directly on provider-specific paths or assuming a complete local dataset.
+
+## Stage B — Remote inventory and initial audit
+
+### `P0-B1` Build remote source inventory
+
+**Work:**
+
+- discover sequences/objects through the remote source adapter and pinned repository metadata;
+- collect counts/presence/source-identity metadata without unconditional full materialization;
+- record HDF5/event-frame/annotation availability;
+- selectively materialize only the smallest practical units needed to verify fields unavailable from metadata.
+
+**Tests:** deterministic rerun; duplicate sequence/object detection; pinned-revision identity; no full-mirror side effect; no source modification.
+
+**Exit:** versioned remote source inventory artifact exists.
 
 ### `P0-B2` Review upstream/data-quality risk
 
 **Work:**
 
-- compare inventory/findings with relevant pinned upstream issues;
+- compare remote inventory/findings with relevant pinned upstream issues;
 - seed known-data-issue registry.
 
 **Exit:** affected/unaffected/unknown status recorded for relevant issue classes.
@@ -1591,7 +1707,7 @@ Work-package IDs are used in coding tasks and pre-task contracts.
 - establish verified ordering/index/timestamp association;
 - classify sequence-specific deviations.
 
-**Tests:** full-sequence count/order checks, boundary frames, missing/duplicate/gap cases.
+**Tests:** full-sequence logical count/order checks plus on-demand materialized boundary/content checks, missing/duplicate/gap cases.
 
 **Exit:** pairing contract is evidence-backed.
 
@@ -1631,7 +1747,7 @@ Work-package IDs are used in coding tasks and pre-task contracts.
 
 **Work:**
 
-- run source/pairing/annotation/identity/coordinate/leakage checks;
+- run remote-source/pairing/annotation/identity/coordinate/leakage checks;
 - update known-data-issue registry.
 
 **Gate if needed:** `DG-P0-04`
@@ -1677,8 +1793,10 @@ Work-package IDs are used in coding tasks and pre-task contracts.
 
 **Work:**
 
-- load by explicit split/modality/manifest version;
-- avoid full rescans/reparsing during repeated use.
+- load by explicit split/modality/manifest version/pinned source revision;
+- resolve remote logical references through the source adapter/cache;
+- avoid full remote rescans/reparsing during repeated use;
+- keep cache behavior transparent to model-facing callers.
 
 **Tests:** RGB/event/paired views, deterministic access, invalid configuration behavior.
 
@@ -1702,8 +1820,9 @@ Work-package IDs are used in coding tasks and pre-task contracts.
 
 **Work:**
 
-- add only justified deterministic caches;
-- benchmark loader/runtime path on intended environment;
+- add only justified bounded deterministic caches/prefetching;
+- benchmark cold-cache and warm-cache loader/runtime paths on intended environment;
+- verify the hot path does not depend on one remote request per training sample when avoidable;
 - record settings/results.
 
 **Exit:** reusable Phase 0 path satisfies the measured performance acceptance criterion.
@@ -1732,16 +1851,20 @@ Every mandatory gate/check in Section 15 must pass.
 
 ## 15.1 Core completion gate
 
-Phase 0 Version 1.0 is complete only when all applicable mandatory items below are satisfied.
+Phase 0 Version 1.1 is complete only when all applicable mandatory items below are satisfied.
 
 ```text
 [ ] Exact FRED repository/data identities are pinned and recorded.
 
-[ ] Official FRED data has been acquired from a verified source.
+[ ] The official remote FRED dataset identity/revision and approved API/access mechanism are verified.
 
-[ ] Source data is protected from normal project writes.
+[ ] Phase 0 does not require or create a complete local FRED mirror.
 
-[ ] A deterministic source inventory exists.
+[ ] Official remote source truth is protected from project writes/substitution.
+
+[ ] A deterministic remote source inventory exists.
+
+[ ] A bounded disposable cache/materialization strategy is implemented and version-aware.
 
 [ ] Official challenging split membership is reproduced and verified.
 
@@ -1771,7 +1894,7 @@ Phase 0 Version 1.0 is complete only when all applicable mandatory items below a
 
 [ ] Manifest generation is deterministic, idempotent, and safe against partial overwrite.
 
-[ ] Cache artifacts, if used, are rebuildable and reject incompatible versions.
+[ ] Cache/materialized artifacts are bounded, rebuildable from the pinned remote source, protected against partial writes, and reject incompatible source/schema versions.
 
 [ ] Duplicate/leakage checks pass.
 
@@ -1787,9 +1910,9 @@ Phase 0 Version 1.0 is complete only when all applicable mandatory items below a
 
 [ ] Generic adapter contract and smoke harness exist.
 
-[ ] Loader/runtime path has been benchmarked on the intended environment.
+[ ] Cold-cache and warm-cache remote+loader paths have been benchmarked on the intended environment.
 
-[ ] DG-P0-06 documents that no avoidable recurring Phase 0 preprocessing/I/O bottleneck remains.
+[ ] DG-P0-06 documents that no avoidable recurring remote-transfer, preprocessing, or I/O bottleneck remains and that the design does not depend on a full local dataset mirror.
 
 [ ] A machine-readable and human-readable validation report exists.
 
@@ -1806,7 +1929,7 @@ Model-family-specific YOLO11, RT-DETR, and Faster R-CNN adapter-forward tests do
 
 Phase 0 succeeds when the project can state with evidence:
 
-> The official FRED challenging benchmark has been acquired and reproduced without modifying source truth; project train/validation and held-out test boundaries are leakage-safe and versioned; synchronized RGB/event inputs and preserved annotations can be loaded deterministically through one validated canonical interface; malformed or questionable data is surfaced rather than hidden; later phases receive stable data and adapter contracts without reconstructing benchmark semantics; baseline and LLM-GE candidates are forced to use the same protected source of truth; held-out labels cannot enter evolutionary/model-selection feedback; and repeated model experiments reuse prevalidated/indexed data with low recurring overhead.
+> The official FRED challenging benchmark is accessed from a pinned verified remote source without requiring a complete local dataset mirror; project train/validation and held-out test boundaries are leakage-safe and versioned; synchronized RGB/event inputs and preserved annotations can be resolved deterministically through one validated canonical interface; only workload-required content is materialized through a bounded disposable cache; malformed or questionable data is surfaced rather than hidden; later phases receive stable data and adapter contracts without reconstructing benchmark semantics; baseline and LLM-GE candidates are forced to use the same protected source of truth; held-out labels cannot enter evolutionary/model-selection feedback; and repeated model experiments reuse prevalidated metadata/manifests and compatible cached content with low recurring overhead.
 
 At that point, Phase 1 may implement its selected detector-family adapters, validate each non-evolutionary seed baseline, and only then proceed toward LLM-GE detection experiments under the Master Plan.
 
@@ -1814,7 +1937,7 @@ At that point, Phase 1 may implement its selected detector-family adapters, vali
 
 # Appendix A — Future Research (Non-Implementation Scope)
 
-The following are explicitly outside Phase 0 Version 1.0:
+The following are explicitly outside Phase 0 Version 1.1:
 
 - alternative event accumulation windows;
 - voxel grids;
@@ -1826,7 +1949,7 @@ The following are explicitly outside Phase 0 Version 1.0:
 - experimental storage/decoding approaches that alter data semantics;
 - alternative multimodal representations.
 
-Any such work is a separate controlled study and must compare against the frozen Version 1.0 representation rather than silently replacing it.
+Any such work is a separate controlled study and must compare against the frozen Version 1.1 representation rather than silently replacing it.
 
 ---
 
@@ -1837,7 +1960,7 @@ The repository should converge toward a small number of canonical workflows rath
 Conceptually:
 
 ```text
-phase0 acquire
+phase0 verify-source
 phase0 inventory
 phase0 build-splits
 phase0 build-manifest
