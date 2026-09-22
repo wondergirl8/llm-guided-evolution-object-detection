@@ -1,0 +1,19 @@
+repositories:
+  fred:
+    url: https://github.com/miccunifi/FRED
+    branch: main
+    commit: 2bf89c5376eda528431b62d6c60f2c13d8f95ab4
+    role: benchmark_reference
+    license: Apache-2.0
+  fred_dataset:
+    provider: huggingface
+    id: GabrieleMagrini/FRED
+    commit: 980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd
+    role: immutable_remote_data_source
+    license: Apache-2.0
+  llm_guided_evolution:
+    url: https://github.com/jasonzutty/llm-guided-evolution-fork
+    branch: MosesTheRedSea-main
+    commit: null
+    role: evolutionary_framework
+    verification_status: pending

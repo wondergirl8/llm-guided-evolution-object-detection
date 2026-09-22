@@ -33,6 +33,9 @@ dependencies = [
     "tensorflow>=2.20.0",
     "streamlit>=1.58.0",
     "jsonschema",
+    "huggingface-hub==0.35.1",
+    "pillow>=10.0",
+    "certifi>=2024.2.2",
 ]
 
 [tool.pytest.ini_options]

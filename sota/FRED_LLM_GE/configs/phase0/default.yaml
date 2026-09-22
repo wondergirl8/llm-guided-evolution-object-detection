@@ -1,0 +1,38 @@
+schema_version: P0-CONTRACT-FRED-SAMPLE-v1
+manifest_version: fred-canonical-v1-development
+
+# Relative paths are resolved from the workspace root supplied to the CLI.
+# FRED_PHASE0_ROOT may override this value without changing committed config.
+runtime_root: data/fred_phase0
+
+source:
+  provider: huggingface_hub
+  dataset_id: GabrieleMagrini/FRED
+  repo_type: dataset
+  revision: 980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd
+  token_environment_variable: FRED_HF_TOKEN
+  max_retries: 3
+  retry_backoff_seconds: 1.0
+
+fred_repository:
+  url: https://github.com/miccunifi/FRED
+  revision: 2bf89c5376eda528431b62d6c60f2c13d8f95ab4
+  challenging_train_url: https://raw.githubusercontent.com/miccunifi/FRED/2bf89c5376eda528431b62d6c60f2c13d8f95ab4/dataset_splits/challenging/challenging_train_split.txt
+  challenging_train_sha256: 6d8f705c1b2ec5c3521b7d85697a0e5ae5d4f2b11772c99ddd0cce95e52e2ab7
+  challenging_test_url: https://raw.githubusercontent.com/miccunifi/FRED/2bf89c5376eda528431b62d6c60f2c13d8f95ab4/dataset_splits/challenging/challenging_test_split.txt
+  challenging_test_sha256: a1f408317eaabbf034ea4c53e40f1cc5fbbc507e58881131ada85768c6afcc56
+
+cache:
+  relative_root: cache
+  # 50 GiB default: bounded and far below the 205 GB source release.
+  max_bytes: 53687091200
+  lock_timeout_seconds: 60
+  # HF verifies pinned object identity/size. Enable full SHA-256 reads when required.
+  verify_content_sha256: false
+
+timestamp:
+  policy: fred_upstream_30hz_v1
+  frame_period_seconds: "0.033333"
+  frame_index_offset: 1
+  tolerance_seconds: "0.000001"
+  verification_status: sampled_sequence_verified_complete_dataset_pending
