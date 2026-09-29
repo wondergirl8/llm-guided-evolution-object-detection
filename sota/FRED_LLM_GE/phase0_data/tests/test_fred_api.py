@@ -62,6 +62,30 @@ def test_pinned_hugging_face_client_symbols_are_importable():
     assert download.__name__ == "hf_hub_download"
 
 
+def test_verify_revision_accepts_hub_dataset_storage_field():
+    source = object.__new__(HFFredSource)
+    source.config = _source_config()
+    source._api = SimpleNamespace(
+        dataset_info=lambda *args, **kwargs: SimpleNamespace(
+            id=DATASET_ID,
+            sha=REVISION,
+            private=False,
+            gated=False,
+            usedStorage=123,
+            siblings=[object()],
+        )
+    )
+
+    assert source.verify_revision() == {
+        "dataset_id": DATASET_ID,
+        "revision": REVISION,
+        "private": False,
+        "gated": False,
+        "used_storage": 123,
+        "file_count": 1,
+    }
+
+
 def test_archive_path_traversal_is_rejected():
     with pytest.raises(UnsafeArchiveError, match="unsafe"):
         _validate_zip_members([zipfile.ZipInfo("../escape.txt")])

@@ -152,7 +152,7 @@ class HFFredSource:
             "revision": info.sha,
             "private": info.private,
             "gated": info.gated,
-            "used_storage": info.used_storage,
+            "used_storage": getattr(info, "usedStorage", None),
             "file_count": len(info.siblings or []),
         }
 
