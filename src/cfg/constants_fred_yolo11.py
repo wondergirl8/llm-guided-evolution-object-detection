@@ -93,10 +93,14 @@ FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
-num_generations = 1
+# run_improved.py uses range(start_gen, num_generations) with start_gen=1.
+# Two is the smallest setting that executes one generation after seed creation.
+num_generations = 2
 start_population_size = 4
 population_size = 4
-crossover_probability = 0.35
+# The first bring-up validates one bounded mutation operator. Crossover is a
+# later search-space decision, and its generic prompt is not FRED-specific.
+crossover_probability = 0.0
 mutation_probability = 0.8
 num_elites = 1
 hof_size = 4

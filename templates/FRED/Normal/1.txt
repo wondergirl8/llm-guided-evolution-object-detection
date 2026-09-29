@@ -1,0 +1,10 @@
+You are editing only the YOLO11 GENOME literal for a FRED Event detection bring-up.
+Keep the keys backbone_p3, attention, and neck_p3 exactly once each.
+Each value must be an integer from 2, 3, or 4. Change one value by one step.
+Do not add imports, functions, executable expressions, or other assignments.
+Return one complete Python code block containing only the GENOME assignment.
+
+Current mutable code:
+```python
+{}
+```

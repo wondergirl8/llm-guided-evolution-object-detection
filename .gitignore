@@ -19,6 +19,8 @@ output/
 **/models/
 **/weights/
 **/results/
+**/runs/
+fred_yolo11_output/
 **/llmge_models/
 slurm-*.out
 *.pkl
