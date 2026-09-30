@@ -153,11 +153,31 @@ data/.venv-yolo11/bin/python -c 'import json,sys; d=json.load(open(sys.argv[1]))
 
 The pilot summary will say `complete=false` because it covers eight of 172
 development sequences. After reviewing cost and findings, submit the remaining
-indexes with `--array=8-171%1` and repeat the summary. Reports are tied to the
-checked-out code revision and their pinned dataset, official split, and project
-split hashes. A complete scan is evidence for annotation-policy and split review;
+indexes with `--array=8-171%1` and repeat the summary. By default the report
+directory names the checked-out code revision; the summary hashes each report
+and the pinned inventory, official split, and project split. A complete scan is
+evidence for annotation-policy and split review;
 it does not approve a split. Class/condition balance, session or repeated-scene
 grouping, visual review, and the Phase 0 decision gate still require review.
+
+The first ICE pilot used code revision `6cadd2db302f` and found 846 partly
+visible out-of-bounds boxes across eight sequences. The audit summary now
+classifies such findings for review without changing their blocking severity.
+To finish that same evidence set after updating the code, keep its report
+directory explicitly:
+
+```bash
+sbatch --export=ALL,FRED_AUDIT_REPORT_DIR=data/fred_phase0/validation/development_audit_6cadd2db302f \
+  --array=8-171%1 sota/FRED_LLM_GE/phase0_data/jobs/audit_development_sequences.sbatch
+data/.venv-yolo11/bin/python -m sota.FRED_LLM_GE.phase0_data.development_audit \
+  summarize --report-dir data/fred_phase0/validation/development_audit_6cadd2db302f
+```
+
+Run `summarize` after the submitted tasks finish. Its `complete=true` means
+all development sequences have reports, even if some have data-quality errors.
+The `out_of_bounds_categories` field separates partly visible, fully outside,
+and unclassified findings. See `docs/decisions/DG-P0-04-audit-findings.md` for
+the provisional issue record; no formal bounds or export policy is approved.
 
 ## Current gate status
 

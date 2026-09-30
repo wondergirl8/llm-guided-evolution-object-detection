@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from sota.FRED_LLM_GE.phase0_data.development_audit import (
-    summarize, validate_inspection,
+    classify_bounds_finding, summarize, validate_inspection,
 )
 
 
@@ -39,6 +39,15 @@ def report(sequence_id, *, valid, findings=None):
 
 
 class DevelopmentAuditTest(unittest.TestCase):
+    def test_existing_bounds_messages_are_classified_without_changing_severity(self):
+        finding = {"code": "annotation.out_of_bounds",
+                   "message": "box (949.2, 507.64, 1120.8, 731.16) is outside 1280x720"}
+        self.assertEqual(classify_bounds_finding(finding), "partly_visible")
+        finding["message"] = "box (949.2, 721.0, 1120.8, 731.16) is outside 1280x720"
+        self.assertEqual(classify_bounds_finding(finding), "fully_outside")
+        finding["message"] = "unrecognized report format"
+        self.assertEqual(classify_bounds_finding(finding), "unclassified")
+
     def test_complete_data_failure_is_retained_as_evidence(self):
         finding = {"severity": "error", "code": "annotation.out_of_bounds"}
         failed = report("3", valid=False, findings=[finding])
@@ -58,7 +67,8 @@ class DevelopmentAuditTest(unittest.TestCase):
             root = Path(directory)
             (root / "sequence_3.json").write_text(json.dumps(report(
                 "3", valid=False, findings=[
-                    {"severity": "error", "code": "annotation.out_of_bounds"},
+                    {"severity": "error", "code": "annotation.out_of_bounds",
+                     "message": "box (10.0, 5.0, 31.0, 20.0) is outside 30x30"},
                 ],
             )), encoding="utf-8")
             inventory = SimpleNamespace(dataset_revision="dataset-rev")
@@ -85,6 +95,7 @@ class DevelopmentAuditTest(unittest.TestCase):
             self.assertEqual(summary["sequences"][0]["data_status"], "failed")
             self.assertEqual(summary["sequences"][0]["finding_counts"],
                              {"error:annotation.out_of_bounds": 1})
+            self.assertEqual(summary["out_of_bounds_categories"], {"partly_visible": 1})
 
 
 if __name__ == "__main__":

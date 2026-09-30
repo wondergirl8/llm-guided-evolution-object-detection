@@ -24,10 +24,14 @@ test -x "$PY" && test -s "$INVENTORY" && test -s "$OFFICIAL" && test -s "$PROJEC
 SEQUENCE_ID=$("$PY" -m sota.FRED_LLM_GE.phase0_data.development_audit \
   sequence-id --official "$OFFICIAL" --index "$SLURM_ARRAY_TASK_ID")
 CODE_REVISION=$(git rev-parse --short=12 HEAD)
-REPORT_DIR="data/fred_phase0/validation/development_audit_${CODE_REVISION}"
+REPORT_DIR=${FRED_AUDIT_REPORT_DIR:-"data/fred_phase0/validation/development_audit_${CODE_REVISION}"}
+case "$REPORT_DIR" in
+  data/fred_phase0/validation/development_audit_*) ;;
+  *) echo "FRED_AUDIT_REPORT_DIR must name a development_audit directory under Phase 0 validation" >&2; exit 2 ;;
+esac
 REPORT="$REPORT_DIR/sequence_${SEQUENCE_ID}.json"
 mkdir -p "$REPORT_DIR"
-echo "Audit sequence $SEQUENCE_ID (${SLURM_ARRAY_TASK_ID}); report: $REPORT"
+echo "Audit sequence $SEQUENCE_ID (${SLURM_ARRAY_TASK_ID}); code: $CODE_REVISION; report: $REPORT"
 
 verify_report() {
   "$PY" -m sota.FRED_LLM_GE.phase0_data.development_audit verify-report \

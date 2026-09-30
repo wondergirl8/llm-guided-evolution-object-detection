@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -24,6 +26,29 @@ from .splits import (
 DEFAULT_INVENTORY = Path("data/fred_phase0/metadata/source_inventory.json")
 DEFAULT_OFFICIAL = Path("data/fred_phase0/metadata/official_challenging_split.json")
 DEFAULT_PROJECT = Path("sota/FRED_LLM_GE/configs/phase0/project_split_bringup_v1.json")
+BOUNDS_MESSAGE = re.compile(r"^box \(([^)]+)\) is outside (\d+)x(\d+)$")
+
+
+def classify_bounds_finding(finding: dict) -> str | None:
+    """Classify an existing raw-box finding without altering its severity."""
+    if finding.get("code") != "annotation.out_of_bounds":
+        return None
+    message = finding.get("message")
+    match = BOUNDS_MESSAGE.fullmatch(message) if isinstance(message, str) else None
+    if match is None:
+        return "unclassified"
+    try:
+        box = tuple(float(part.strip()) for part in match.group(1).split(","))
+        width, height = int(match.group(2)), int(match.group(3))
+    except ValueError:
+        return "unclassified"
+    if len(box) != 4 or not all(math.isfinite(value) for value in box):
+        return "unclassified"
+    x1, y1, x2, y2 = box
+    if width <= 0 or height <= 0 or x1 >= x2 or y1 >= y2:
+        return "unclassified"
+    overlaps = max(0, x1) < min(width, x2) and max(0, y1) < min(height, y2)
+    return "partly_visible" if overlaps else "fully_outside"
 
 
 def load_inputs(inventory_path: Path, official_path: Path, project_path: Path):
@@ -86,6 +111,7 @@ def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
     missing = []
     sequence_summaries = []
     findings = Counter()
+    bounds = Counter()
     totals = Counter()
     for sequence_id in expected:
         path = report_dir / f"sequence_{sequence_id}.json"
@@ -118,14 +144,20 @@ def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
             counters[split][name] += value
             sequence_counts[name] = value
         sequence_findings = Counter()
+        sequence_bounds = Counter()
         for finding in report["findings"]:
             if finding.get("severity") not in ("error", "warning") or not finding.get("code"):
                 raise ValueError(f"sequence {sequence_id}: malformed finding")
             finding_key = f"{finding['severity']}:{finding['code']}"
             findings[finding_key] += 1
             sequence_findings[finding_key] += 1
+            bounds_category = classify_bounds_finding(finding)
+            if bounds_category is not None:
+                bounds[bounds_category] += 1
+                sequence_bounds[bounds_category] += 1
         sequence_summaries.append({
             "sequence_id": sequence_id,
+            "report_sha256": sha256_file(path),
             "project_split": split,
             "data_status": report["status"],
             "sample_count": report["sample_count"],
@@ -134,6 +166,7 @@ def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
             "first_annotation_timestamp": sequence.get("first_annotation_timestamp"),
             "last_annotation_timestamp": sequence.get("last_annotation_timestamp"),
             "finding_counts": dict(sorted(sequence_findings.items())),
+            "out_of_bounds_categories": dict(sorted(sequence_bounds.items())),
         })
     return {
         "schema_version": "fred-development-audit-summary-v1",
@@ -152,6 +185,7 @@ def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
         "by_project_split": {name: dict(counters[name]) for name in counters},
         "totals": dict(totals),
         "finding_counts": dict(sorted(findings.items())),
+        "out_of_bounds_categories": dict(sorted(bounds.items())),
     }
 
 
@@ -202,7 +236,8 @@ def main(argv=None):
     print(f"audit summary: {output}; inspected "
           f"{result['inspected_sequence_count']}/{result['expected_sequence_count']}; "
           f"invalid data sequences={len(result['invalid_sequence_ids'])}; "
-          f"complete={result['complete']}")
+          f"complete={result['complete']}; "
+          f"bounds={result['out_of_bounds_categories']}")
 
 
 if __name__ == "__main__":
