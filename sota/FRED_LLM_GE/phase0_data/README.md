@@ -110,6 +110,55 @@ python -m sota.FRED_LLM_GE.phase0_data build-manifest \
 A complete scan requires both `--all-sequences` and `--confirm-full-scan`. It still
 uses bounded sequence-level materialization rather than a permanent source mirror.
 
+## Strict development-sequence audit on ICE
+
+The bounded YOLO11 bring-up uses a named partial-box exception. It is only a
+plumbing check; its manifest is not an approved research split. Before freezing a
+development split, inspect the official challenging-train sequences without that
+exception. The array job below fetches one pinned sequence per task through the
+existing bounded cache and writes a separate report for each sequence. It never
+inspects the held-out challenging-test sequences.
+
+Start with eight tasks, one at a time, from the repository root
+after the Phase 0 environment and source inventory are present:
+
+```bash
+mkdir -p data/logs
+if test -x data/.venv-yolo11/bin/python && \
+   test -s data/fred_phase0/metadata/source_inventory.json && \
+   test -s data/fred_phase0/metadata/official_challenging_split.json && \
+   test -s sota/FRED_LLM_GE/configs/phase0/project_split_bringup_v1.json; then
+  sbatch --array=0-7%1 sota/FRED_LLM_GE/phase0_data/jobs/audit_development_sequences.sbatch
+else
+  echo "Phase 0 environment or pinned source metadata is missing"
+fi
+```
+
+Check the submitted array ID and logs with `squeue -u "$USER"` and
+`tail -n 80 data/logs/fred-dev-audit-<array-id>_<task-id>.out`. A task can
+complete successfully with `data_status=failed`: that means its inspection
+finished and recorded blocking source-data findings. An execution failure or
+incomplete report still fails the Slurm task.
+
+Summarize the pilot after its eight tasks finish:
+
+```bash
+REV=$(git rev-parse --short=12 HEAD)
+REPORT_DIR="data/fred_phase0/validation/development_audit_${REV}"
+data/.venv-yolo11/bin/python -m sota.FRED_LLM_GE.phase0_data.development_audit \
+  summarize --report-dir "$REPORT_DIR"
+data/.venv-yolo11/bin/python -c 'import json,sys; d=json.load(open(sys.argv[1])); print("inspected", d["inspected_sequence_count"], "/", d["expected_sequence_count"]); print("invalid data sequences", d["invalid_sequence_ids"]); print("finding counts", d["finding_counts"])' \
+  "$REPORT_DIR/summary.json"
+```
+
+The pilot summary will say `complete=false` because it covers eight of 172
+development sequences. After reviewing cost and findings, submit the remaining
+indexes with `--array=8-171%1` and repeat the summary. Reports are tied to the
+checked-out code revision and their pinned dataset, official split, and project
+split hashes. A complete scan is evidence for annotation-policy and split review;
+it does not approve a split. Class/condition balance, session or repeated-scene
+grouping, visual review, and the Phase 0 decision gate still require review.
+
 ## Current gate status
 
 The implementation foundation is available, but Phase 0 is not frozen. Dataset-wide
