@@ -28,6 +28,20 @@ responds, `data/fred_generation_smoke/<jobid>/`. A valid source is named
 `prompt.txt`; `preflight_passed.txt` appears only after construction succeeds.
 Outputs are ignored by Git and a repeated job gets a new candidate ID.
 
+After a successful proposal job, train and evaluate that exact candidate for
+one epoch on the existing bounded export to check the candidate execution
+path. Pass the proposal job ID as the sole argument:
+
+```bash
+sbatch sota/FRED_LLM_GE/phase1_detection/jobs/train_proposed_yolo11_smoke.sbatch 6009285
+```
+
+The trainer writes `proposal_smoke_P<proposal-job-id>_results.csv` and a
+matching JSON provenance record under the YOLO11 seed `results/` directory.
+The output prefix prevents `run_improved.py` from interpreting this technical
+score as an evolutionary candidate's fitness. This check does not select a
+parent or advance a generation.
+
 This is **candidate generation only**. The bring-up split and its 32/32 image
 export cannot supply evolution fitness. Before a fitness-selected generation,
 the project needs the Phase 0 leakage/grouping audit and frozen split, the
