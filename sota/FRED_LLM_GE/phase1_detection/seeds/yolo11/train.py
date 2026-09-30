@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -51,7 +52,7 @@ def _validate_data(data: Path):
 
 def run(model_name: str, variant_dir: Path, data: Path, weights: str,
         epochs: int, batch: int, imgsz: int, device: str,
-        preflight_only: bool = False) -> Path | None:
+        preflight_only: bool = False, run_id: str | None = None) -> Path | None:
     if epochs <= 0 or batch <= 0 or imgsz <= 0:
         raise ValueError("epochs, batch and imgsz must be positive")
     _validate_data(data)
@@ -59,31 +60,46 @@ def run(model_name: str, variant_dir: Path, data: Path, weights: str,
 
     from ultralytics import YOLO, __version__ as ultralytics_version
 
+    if Path(weights).name != "yolo11m.pt":
+        raise ValueError("the pinned FRED bring-up checkpoint must be yolo11m.pt")
     base_model = YOLO(weights)
     base_config = base_model.model.yaml
+    if base_config.get("scale") not in (None, "m"):
+        raise ValueError("checkpoint architecture does not have YOLO11m scale")
     candidate_config = module.build_config(base_config)
+    candidate_config["scale"] = "m"
     # Recheck model structure against the chosen checkpoint before GPU use.
     if candidate_config["nc"] != 1 or candidate_config["head"][-1][2] != "Detect":
         raise ValueError("candidate changed protected detection semantics")
     gene_id = "seed" if model_name == "network" else model_name.removeprefix("network_")
+    output_id = run_id or gene_id
+    if not re.fullmatch(r"[A-Za-z0-9_]+", output_id):
+        raise ValueError("run_id must contain only letters, numbers, and underscores")
     run_root = SEED_DIR / "runs"
     run_root.mkdir(exist_ok=True)
-    results_path = SEED_DIR / "results" / f"{gene_id}_results.csv"
+    results_path = SEED_DIR / "results" / f"{output_id}_results.csv"
     if not preflight_only and results_path.exists():
         raise FileExistsError(f"refusing to replace existing gene results: {results_path}")
+    if not preflight_only and (run_root / output_id).exists():
+        raise FileExistsError(f"refusing to reuse existing training run: {run_root / output_id}")
     if not preflight_only:
         results_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=f"{gene_id}-config-", dir=run_root) as temp_name:
+    with tempfile.TemporaryDirectory(prefix=f"{output_id}-config-", dir=run_root) as temp_name:
         config_path = Path(temp_name) / "candidate.yaml"
         config_path.write_text(yaml.safe_dump(candidate_config, sort_keys=False), encoding="utf-8")
         model = YOLO(str(config_path)).load(weights)
+        base_params = sum(parameter.numel() for parameter in base_model.model.parameters())
+        candidate_params = sum(parameter.numel() for parameter in model.model.parameters())
+        if model.model.yaml.get("scale") != "m" or candidate_params < base_params * 0.8:
+            raise RuntimeError("candidate was not built at the pinned YOLO11m scale")
         if preflight_only:
-            print(f"preflight passed: {model_name}; ultralytics {ultralytics_version}")
+            print(f"preflight passed: {model_name}; scale m; "
+                  f"{candidate_params} parameters; ultralytics {ultralytics_version}")
             return None
         # A candidate's metrics always come from a newly trained checkpoint.
         model.train(data=str(data), epochs=epochs, batch=batch, imgsz=imgsz,
                     device=device, seed=0, deterministic=True, project=str(run_root),
-                    name=gene_id, exist_ok=False, save=True)
+                    name=output_id, exist_ok=False, save=True)
         best = Path(model.trainer.best)
         if not best.is_file():
             raise RuntimeError(f"training produced no best checkpoint: {best}")
@@ -93,6 +109,7 @@ def run(model_name: str, variant_dir: Path, data: Path, weights: str,
         param_count = sum(parameter.numel() for parameter in trained.model.parameters())
         provenance = {
             "gene_id": gene_id,
+            "run_id": output_id,
             "model_source_sha256": hashlib.sha256(
                 (SEED_DIR / "network.py" if model_name == "network" else
                  variant_dir / f"{model_name}.py").read_bytes()).hexdigest(),
@@ -121,10 +138,12 @@ def main(argv=None):
     parser.add_argument("--batch", type=int, default=int(os.getenv("FRED_YOLO_BATCH", "2")))
     parser.add_argument("--imgsz", type=int, default=int(os.getenv("FRED_YOLO_IMGSZ", "640")))
     parser.add_argument("--device", default=os.getenv("FRED_YOLO_DEVICE", "0"))
+    parser.add_argument("--run-id", help="distinct output name for a bounded rerun")
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args(argv)
     run(args.model, args.variant_dir, args.data, args.weights,
-        args.epochs, args.batch, args.imgsz, args.device, args.preflight_only)
+        args.epochs, args.batch, args.imgsz, args.device, args.preflight_only,
+        args.run_id)
 
 
 if __name__ == "__main__":

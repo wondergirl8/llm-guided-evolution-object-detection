@@ -207,12 +207,13 @@ class Yolo11InterfaceTest(unittest.TestCase):
             (data_root / "data.yaml").write_text("placeholder", encoding="utf-8")
             (data_root / "source.json").write_text(json.dumps({"purpose": "test"}), encoding="utf-8")
             calls = []
+            generated_configs = []
 
             class FakeYOLO:
                 def __init__(self, path):
                     self.path = path
                     self.model = types.SimpleNamespace(
-                        yaml=fake_yolo11_config(),
+                        yaml={**fake_yolo11_config(), "scale": "m"},
                         parameters=lambda: [types.SimpleNamespace(numel=lambda: 1234)],
                     )
                 def load(self, weights):
@@ -227,10 +228,14 @@ class Yolo11InterfaceTest(unittest.TestCase):
                     calls.append(("val", kwargs))
                     return types.SimpleNamespace(box=types.SimpleNamespace(map50=0.5, map=0.25))
 
+            def dump_config(config, **kwargs):
+                generated_configs.append(config)
+                return "candidate config"
+
             fake_yaml = types.SimpleNamespace(
                 safe_load=lambda _: {"path": str(data_root), "train": "images/train",
                                      "val": "images/val", "names": {0: "drone"}},
-                safe_dump=lambda _, **kwargs: "candidate config",
+                safe_dump=dump_config,
             )
             fake_ultralytics = types.SimpleNamespace(YOLO=FakeYOLO, __version__="test")
             with patch.dict(sys.modules, {"yaml": fake_yaml, "ultralytics": fake_ultralytics,
@@ -245,6 +250,7 @@ class Yolo11InterfaceTest(unittest.TestCase):
                 rows = list(csv.reader(file))
             self.assertEqual(rows[0], ["map50", "map50_95", "param_count"])
             self.assertEqual(tuple(map(float, rows[1])), (0.5, 0.25, 1234.0))
+            self.assertEqual(generated_configs[0]["scale"], "m")
             self.assertIn("job done", output.getvalue())
             self.assertEqual(calls[1][0], "train")
             self.assertEqual(calls[1][1]["epochs"], 1)

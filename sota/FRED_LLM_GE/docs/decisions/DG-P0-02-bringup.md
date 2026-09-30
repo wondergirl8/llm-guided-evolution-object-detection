@@ -78,3 +78,13 @@ The export takes up to 32 in-bounds annotated frames from each selected
 sequence so the one-epoch seed exercises labels. Full-sequence out-of-bounds
 findings remain a separate data-quality issue for the formal research split and
 target policy.
+
+## GPU seed smoke observation
+
+ICE job `6008570` completed one epoch on 32 train and 32 validation images and
+wrote a checkpoint and result. Its generated candidate YAML omitted the model
+scale, so Ultralytics assumed `n` and built about 2.59 million parameters even
+though the input checkpoint was `yolo11m.pt`. This is a plumbing success only,
+not a valid YOLO11m baseline. The trainer now pins scale `m`, checks the rebuilt
+model against the checkpoint's parameter count, and writes the corrected smoke
+run under `seed_mscale_v1` so the earlier artifacts are preserved.
