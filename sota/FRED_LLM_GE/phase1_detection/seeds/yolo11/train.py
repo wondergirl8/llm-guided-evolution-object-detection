@@ -85,13 +85,19 @@ def run(model_name: str, variant_dir: Path, data: Path, weights: str,
     if not preflight_only:
         results_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f"{output_id}-config-", dir=run_root) as temp_name:
-        config_path = Path(temp_name) / "candidate.yaml"
+        # Ultralytics 8.4.165 overwrites YAML's scale using the file name.
+        config_path = Path(temp_name) / "yolo11m.yaml"
         config_path.write_text(yaml.safe_dump(candidate_config, sort_keys=False), encoding="utf-8")
         model = YOLO(str(config_path)).load(weights)
         base_params = sum(parameter.numel() for parameter in base_model.model.parameters())
         candidate_params = sum(parameter.numel() for parameter in model.model.parameters())
-        if model.model.yaml.get("scale") != "m" or candidate_params < base_params * 0.8:
-            raise RuntimeError("candidate was not built at the pinned YOLO11m scale")
+        actual_scale = model.model.yaml.get("scale")
+        if actual_scale != "m" or candidate_params < base_params * 0.8:
+            raise RuntimeError(
+                "candidate was not built at the pinned YOLO11m scale: "
+                f"scale={actual_scale!r}, candidate_params={candidate_params}, "
+                f"checkpoint_params={base_params}"
+            )
         if preflight_only:
             print(f"preflight passed: {model_name}; scale m; "
                   f"{candidate_params} parameters; ultralytics {ultralytics_version}")

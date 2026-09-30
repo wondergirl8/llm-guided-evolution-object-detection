@@ -208,10 +208,12 @@ class Yolo11InterfaceTest(unittest.TestCase):
             (data_root / "source.json").write_text(json.dumps({"purpose": "test"}), encoding="utf-8")
             calls = []
             generated_configs = []
+            model_paths = []
 
             class FakeYOLO:
                 def __init__(self, path):
                     self.path = path
+                    model_paths.append(str(path))
                     self.model = types.SimpleNamespace(
                         yaml={**fake_yolo11_config(), "scale": "m"},
                         parameters=lambda: [types.SimpleNamespace(numel=lambda: 1234)],
@@ -251,6 +253,7 @@ class Yolo11InterfaceTest(unittest.TestCase):
             self.assertEqual(rows[0], ["map50", "map50_95", "param_count"])
             self.assertEqual(tuple(map(float, rows[1])), (0.5, 0.25, 1234.0))
             self.assertEqual(generated_configs[0]["scale"], "m")
+            self.assertTrue(any(Path(path).name == "yolo11m.yaml" for path in model_paths))
             self.assertIn("job done", output.getvalue())
             self.assertEqual(calls[1][0], "train")
             self.assertEqual(calls[1][1]["epochs"], 1)

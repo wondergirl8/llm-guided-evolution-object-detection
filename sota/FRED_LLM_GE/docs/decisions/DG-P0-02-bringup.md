@@ -82,9 +82,11 @@ target policy.
 ## GPU seed smoke observation
 
 ICE job `6008570` completed one epoch on 32 train and 32 validation images and
-wrote a checkpoint and result. Its generated candidate YAML omitted the model
-scale, so Ultralytics assumed `n` and built about 2.59 million parameters even
-though the input checkpoint was `yolo11m.pt`. This is a plumbing success only,
-not a valid YOLO11m baseline. The trainer now pins scale `m`, checks the rebuilt
-model against the checkpoint's parameter count, and writes the corrected smoke
-run under `seed_mscale_v1` so the earlier artifacts are preserved.
+wrote a checkpoint and result. Ultralytics assumed `n` and built about 2.59
+million parameters even though the input checkpoint was `yolo11m.pt`. This is
+a plumbing success only, not a valid YOLO11m baseline. Job `6008761` then
+failed the new scale preflight before training: Ultralytics 8.4.165 overwrites
+the YAML `scale` field from the model filename, and `candidate.yaml` has no
+size suffix. The trainer now writes `yolo11m.yaml`, checks the rebuilt model
+against the checkpoint's parameter count, and uses `seed_mscale_v1` so the
+earlier artifacts are preserved.
