@@ -16,6 +16,9 @@ archives, and exposes a model-neutral canonical sample contract.
 - runtime extraction allowlists RGB frames, released event frames, and `coordinates.txt`;
 - raw `Event/events.hdf5` presence is validated from pinned archive metadata without routine extraction;
 - malformed annotations and pairing/coordinate failures are blocking findings;
+- the explicit `--allow-partial-out-of-bounds` exception is limited to named
+  BRINGUP sequences; it warns on partially visible boxes without changing raw
+  coordinates, while fully outside boxes and all other errors still block;
 - released frame naming, sequence identity, event counters, duplicates, and interior gaps are validated before pairing;
 - validation reports require complete expected sequence coverage and record execution failures separately from data findings;
 - official challenging membership is checksum protected;

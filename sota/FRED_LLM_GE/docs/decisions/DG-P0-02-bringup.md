@@ -53,13 +53,28 @@ If any check fails, stop rather than substituting another split.
 
 The first preparation attempt selected train sequence `0`. Its pinned
 `coordinates.txt` produced 183 out-of-bounds boxes against 1280×720 frames, so
-Phase 0 correctly refused to publish a manifest. The bring-up job now inspects
-at most the first eight sequence IDs in each already assigned project split and
-selects the first sequence that passes strict validation and has annotations.
-It records each rejected sequence's report under the job-specific validation
-directory. If none passes, the job stops. This changes only the tiny smoke
-subset; it does not change split membership or repair source annotations.
+Phase 0 correctly refused to publish a manifest. A second job inspected the
+first eight train sequences and all eight failed solely on out-of-bounds boxes.
+Train sequences `3` and `5` each had only two partial overlaps with the image
+edge; their reports are under `data/fred_phase0/validation/bringup_6007084/`.
 
-The export takes up to 32 annotated frames from each selected sequence so the
-one-epoch seed exercises labels. Full-sequence out-of-bounds findings remain a
-separate data-quality issue for the formal research split and target policy.
+For this technical smoke only, the job explicitly enables the
+`--allow-partial-out-of-bounds` policy. A partially visible box becomes a
+warning in the validation report, while a fully outside box and all other
+integrity errors remain blocking. The canonical box coordinates remain
+unchanged. The YOLO11 adapter excludes frames with any out-of-bounds box; it
+does not clip or repair labels. The manifest records the bring-up-only policy
+and cannot be treated as a formal research manifest. This policy requires a
+BRINGUP approval reference and named sequences; a complete-inventory build
+cannot use it.
+
+The job tries train sequence `3` first, then other sequence IDs among the first
+eight in the assigned train split. It tries at most the first eight sequence
+IDs in the assigned validation split. It records every inspection under the
+job-specific validation directory. If none passes, the job stops. Split
+membership does not change.
+
+The export takes up to 32 in-bounds annotated frames from each selected
+sequence so the one-epoch seed exercises labels. Full-sequence out-of-bounds
+findings remain a separate data-quality issue for the formal research split and
+target policy.

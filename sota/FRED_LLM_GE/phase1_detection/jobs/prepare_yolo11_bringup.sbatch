@@ -43,7 +43,8 @@ select_valid_sequence() {
     echo "Inspecting $split sequence $sequence"
     if "$PY" -m sota.FRED_LLM_GE.phase0_data inspect-sequence "$sequence" \
       --inventory "$INVENTORY" --official-split "$OFFICIAL" \
-      --project-split "$PROJECT" --output "$report" >"$log" 2>&1; then
+      --project-split "$PROJECT" --allow-partial-out-of-bounds \
+      --output "$report" >"$log" 2>&1; then
       if "$PY" - "$report" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1]))
@@ -51,7 +52,14 @@ sys.exit(0 if report['sequences'][0]['annotation_count'] > 0 else 1)
 PY
       then
         SELECTED_SEQUENCE=$sequence
-        echo "Selected $split sequence $sequence (validation passed, annotations present)"
+        "$PY" - "$report" "$split" "$sequence" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1]))
+partial = sum(f['code'] == 'annotation.partial_out_of_bounds_bringup'
+              for f in report['findings'])
+print(f"Selected {sys.argv[2]} sequence {sys.argv[3]} "
+      f"(validation passed; {partial} partial-box warnings; annotations present)")
+PY
         return 0
       fi
       echo "Rejected: no annotations; report: $report"
@@ -77,7 +85,11 @@ PY
 mapfile -t TRAIN_CANDIDATES < <("$PY" - "$PROJECT" train "$MAX_CANDIDATES" <<'PY'
 import json, sys
 split = json.load(open(sys.argv[1]))
-print(*split[sys.argv[2]][:int(sys.argv[3])], sep='\n')
+sequences = list(split[sys.argv[2]][:int(sys.argv[3])])
+if '3' in sequences:
+    sequences.remove('3')  # The pinned report found only two partial boxes here.
+    sequences.insert(0, '3')
+print(*sequences, sep='\n')
 PY
 )
 mapfile -t VAL_CANDIDATES < <("$PY" - "$PROJECT" validation "$MAX_CANDIDATES" <<'PY'
@@ -95,6 +107,7 @@ echo "Preparing FRED train sequence $TRAIN_SEQ and validation sequence $VAL_SEQ"
   --inventory "$INVENTORY" \
   --official-split "$OFFICIAL" \
   --project-split "$PROJECT" \
+  --allow-partial-out-of-bounds \
   --sequence "$TRAIN_SEQ" --sequence "$VAL_SEQ" \
   --output "$MANIFEST"
 "$PY" -m sota.FRED_LLM_GE.phase1_detection.adapters.yolo11 \

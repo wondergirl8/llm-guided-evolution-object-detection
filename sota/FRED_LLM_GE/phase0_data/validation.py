@@ -73,6 +73,7 @@ def inspect_sequence(
     prepared_sequence: PreparedSequence,
     official_split: OfficialSplitManifest,
     project_split: ProjectSplitManifest,
+    allow_partial_out_of_bounds: bool = False,
 ) -> SequenceInspection:
     sequence_id = inventory_record.sequence_id
     root = prepared_sequence.sequence_root
@@ -135,10 +136,13 @@ def inspect_sequence(
             for annotation in annotations:
                 x1, y1, x2, y2 = annotation.box_xyxy
                 if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
+                    partial_overlap = max(0, x1) < min(width, x2) and max(0, y1) < min(height, y2)
+                    permitted = allow_partial_out_of_bounds and partial_overlap
                     findings.append(
                         ValidationFinding(
-                            code="annotation.out_of_bounds",
-                            severity="error",
+                            code=("annotation.partial_out_of_bounds_bringup"
+                                  if permitted else "annotation.out_of_bounds"),
+                            severity="warning" if permitted else "error",
                             message=f"box {annotation.box_xyxy} is outside {width}x{height}",
                             sequence_id=sequence_id,
                             sample_id=stable_sample_id(sequence_id, pair.frame_index),

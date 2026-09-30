@@ -94,11 +94,14 @@ class Yolo11InterfaceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "manifest.sqlite"
             with closing(sqlite3.connect(path)) as db:
-                db.execute("CREATE TABLE samples (sequence_id TEXT, frame_index INTEGER, project_split TEXT)")
-                db.executemany("INSERT INTO samples VALUES (?, ?, ?)", [
-                    ("2", 2, "train"), ("1", 1, "train"),
-                    ("1", 2, "train"), ("3", 1, "validation"),
+                db.execute("CREATE TABLE samples (sample_id TEXT, sequence_id TEXT, frame_index INTEGER, project_split TEXT, event_width INTEGER, event_height INTEGER)")
+                db.execute("CREATE TABLE annotations (sample_id TEXT, x1 REAL, y1 REAL, x2 REAL, y2 REAL)")
+                db.executemany("INSERT INTO samples VALUES (?, ?, ?, ?, 100, 50)", [
+                    ("2:2", "2", 2, "train"), ("1:1", "1", 1, "train"),
+                    ("1:2", "1", 2, "train"), ("3:1", "3", 1, "validation"),
                 ])
+                db.executemany("INSERT INTO annotations VALUES (?, 10, 5, 30, 15)",
+                               [("2:2",), ("1:1",), ("1:2",), ("3:1",)])
                 db.commit()
             self.assertEqual(dict(selected_indices(path, "train", 2)), {"1": [0, 1]})
             self.assertEqual(dict(selected_indices(path, "train", 3)), {"1": [0, 1]})
@@ -111,9 +114,12 @@ class Yolo11InterfaceTest(unittest.TestCase):
             inventory_path = temp / "inventory.json"
             inventory_path.write_text("{}", encoding="utf-8")
             with closing(sqlite3.connect(manifest)) as db:
-                db.execute("CREATE TABLE samples (sequence_id TEXT, frame_index INTEGER, project_split TEXT)")
-                db.executemany("INSERT INTO samples VALUES (?, ?, ?)",
-                               [("1", 1, "train"), ("2", 1, "validation")])
+                db.execute("CREATE TABLE samples (sample_id TEXT, sequence_id TEXT, frame_index INTEGER, project_split TEXT, event_width INTEGER, event_height INTEGER)")
+                db.execute("CREATE TABLE annotations (sample_id TEXT, x1 REAL, y1 REAL, x2 REAL, y2 REAL)")
+                db.executemany("INSERT INTO samples VALUES (?, ?, ?, ?, 100, 50)",
+                               [("1:1", "1", 1, "train"), ("2:1", "2", 1, "validation")])
+                db.executemany("INSERT INTO annotations VALUES (?, 10, 5, 30, 15)",
+                               [("1:1",), ("2:1",)])
                 db.commit()
             prepared = []
             active = []
@@ -170,7 +176,8 @@ class Yolo11InterfaceTest(unittest.TestCase):
                 prefix + "fred_api": stub(prefix + "fred_api", HFFredSource=FakeSource),
                 prefix + "inventory": stub(prefix + "inventory", load_inventory=lambda p: FakeInventory()),
                 prefix + "manifest": stub(prefix + "manifest", read_manifest_metadata=lambda p: {
-                    "project_split_approval_reference": "approved", "dataset_revision": "rev"}),
+                    "project_split_approval_reference": "approved", "dataset_revision": "rev",
+                    "annotation_policy": "coordinates.txt_unmodified_v1"}),
                 prefix + "schema": stub(prefix + "schema", AccessMode=types.SimpleNamespace(
                     TRAIN="train", TRUSTED_EVALUATOR="trusted_evaluator"),
                     Modality=types.SimpleNamespace(EVENT="event"), ProjectSplit=str),

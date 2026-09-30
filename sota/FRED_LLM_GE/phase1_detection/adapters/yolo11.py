@@ -40,9 +40,12 @@ def selected_indices(manifest_path: Path, split: str, limit: int):
         raise ValueError("bring-up sample limits must be from 1 to 128")
     with closing(sqlite3.connect(f"file:{manifest_path.resolve()}?mode=ro", uri=True)) as connection:
         rows = connection.execute(
-            "SELECT s.sequence_id, EXISTS("
-            "SELECT 1 FROM annotations a WHERE a.sample_id = s.sample_id"
-            ") FROM samples s WHERE s.project_split = ? "
+            "SELECT s.sequence_id, "
+            "EXISTS(SELECT 1 FROM annotations a WHERE a.sample_id = s.sample_id), "
+            "EXISTS(SELECT 1 FROM annotations a WHERE a.sample_id = s.sample_id "
+            "AND (a.x1 < 0 OR a.y1 < 0 OR a.x2 > s.event_width "
+            "OR a.y2 > s.event_height)) "
+            "FROM samples s WHERE s.project_split = ? "
             "ORDER BY CAST(s.sequence_id AS INTEGER), s.frame_index",
             (split,),
         ).fetchall()
@@ -51,10 +54,10 @@ def selected_indices(manifest_path: Path, split: str, limit: int):
     first_sequence = rows[0][0]
     # Prefer annotated frames so a small bring-up set actually exercises labels.
     # Dataset indices still refer to the full split ordering.
-    annotated = [index for index, (sequence_id, has_label) in enumerate(rows)
-                 if sequence_id == first_sequence and has_label]
+    annotated = [index for index, (sequence_id, has_label, out_of_bounds) in enumerate(rows)
+                 if sequence_id == first_sequence and has_label and not out_of_bounds]
     if not annotated:
-        raise ValueError(f"{split} sequence {first_sequence} has no annotated frames")
+        raise ValueError(f"{split} sequence {first_sequence} has no in-bounds annotated frames")
     return {first_sequence: annotated[:limit]}
 
 
@@ -124,6 +127,8 @@ def export_subset(manifest_path: Path, inventory_path: Path, output: Path,
             "inventory_hash": inventory.inventory_hash,
             "dataset_revision": inventory.dataset_revision,
             "project_split_approval_reference": metadata["project_split_approval_reference"],
+            "annotation_policy": metadata["annotation_policy"],
+            "selection_policy": "first_in_bounds_annotated_frames_per_split_v1",
             "counts": counts,
             "purpose": "bounded bring-up only; not a formal FRED baseline",
         }, indent=2) + "\n", encoding="utf-8")

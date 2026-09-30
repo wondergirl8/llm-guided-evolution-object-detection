@@ -42,6 +42,7 @@ def _inspect_prepared_sequence(
     record: object,
     official: object,
     project: object,
+    allow_partial_out_of_bounds: bool = False,
 ):
     sequence_id = record.sequence_id
     source.prepare_sequence(sequence_id, record)
@@ -53,6 +54,7 @@ def _inspect_prepared_sequence(
                 prepared_sequence=prepared_sequence,
                 official_split=official,
                 project_split=project,
+                allow_partial_out_of_bounds=allow_partial_out_of_bounds,
             )
 
 
@@ -108,7 +110,10 @@ def command_fetch_sequence(args: argparse.Namespace) -> int:
 
 
 def command_inspect_sequence(args: argparse.Namespace) -> int:
+    allow_partial_out_of_bounds = bool(getattr(args, "allow_partial_out_of_bounds", False))
     config, inventory, official, project = _load_build_inputs(args)
+    if allow_partial_out_of_bounds and "BRINGUP" not in project.approval_reference:
+        raise ValueError("partial bounds policy requires a BRINGUP approval reference")
     record = _record(inventory, args.sequence)
     source = _source(config)
     inspection = _inspect_prepared_sequence(
@@ -117,6 +122,7 @@ def command_inspect_sequence(args: argparse.Namespace) -> int:
         record=record,
         official=official,
         project=project,
+        allow_partial_out_of_bounds=allow_partial_out_of_bounds,
     )
     output = (
         Path(args.output)
@@ -131,6 +137,7 @@ def command_inspect_sequence(args: argparse.Namespace) -> int:
             "repository_revision": config.fred_repository.revision,
             "project_split_version": project.version,
             "timestamp_verification_status": config.timestamp.verification_status,
+            "partial_out_of_bounds_bringup_policy": allow_partial_out_of_bounds,
         },
         expected_sequence_ids=(args.sequence,),
     )
@@ -141,7 +148,13 @@ def command_inspect_sequence(args: argparse.Namespace) -> int:
 
 
 def command_build_manifest(args: argparse.Namespace) -> int:
+    allow_partial_out_of_bounds = bool(getattr(args, "allow_partial_out_of_bounds", False))
     config, inventory, official, project = _load_build_inputs(args)
+    if allow_partial_out_of_bounds:
+        if args.all_sequences:
+            raise ValueError("partial bounds policy is limited to selected bring-up sequences")
+        if "BRINGUP" not in project.approval_reference:
+            raise ValueError("partial bounds policy requires a BRINGUP approval reference")
     if args.all_sequences:
         if not args.confirm_full_scan:
             raise ValueError("--all-sequences requires --confirm-full-scan")
@@ -169,14 +182,19 @@ def command_build_manifest(args: argparse.Namespace) -> int:
         "timestamp_policy": config.timestamp.policy,
         "timestamp_verification_status": config.timestamp.verification_status,
         "complete_inventory": set(sequence_ids) == set(inventory.by_sequence()),
-        "annotation_policy": "coordinates.txt_unmodified_v1",
+        "annotation_policy": (
+            "coordinates_unmodified_partial_bounds_bringup_v1"
+            if allow_partial_out_of_bounds
+            else "coordinates.txt_unmodified_v1"
+        ),
         "config_sha256": sha256_file(config.config_path),
     }
-    metadata["validation_status"] = (
-        "passed_complete_inventory"
-        if metadata["complete_inventory"]
-        else "passed_selected_sequences_non_freeze"
-    )
+    if allow_partial_out_of_bounds:
+        metadata["validation_status"] = "passed_selected_sequences_partial_bounds_bringup_only"
+    elif metadata["complete_inventory"]:
+        metadata["validation_status"] = "passed_complete_inventory"
+    else:
+        metadata["validation_status"] = "passed_selected_sequences_non_freeze"
     execution_error = None
     try:
         with ManifestWriter(destination, metadata) as writer:
@@ -188,6 +206,7 @@ def command_build_manifest(args: argparse.Namespace) -> int:
                     record=record,
                     official=official,
                     project=project,
+                    allow_partial_out_of_bounds=allow_partial_out_of_bounds,
                 )
                 inspections.append(inspection)
                 if not inspection.is_valid:
@@ -337,6 +356,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_build_inputs(inspect)
     inspect.add_argument("sequence")
     inspect.add_argument("--output", type=Path)
+    inspect.add_argument("--allow-partial-out-of-bounds", action="store_true")
     inspect.set_defaults(handler=command_inspect_sequence)
 
     manifest = commands.add_parser("build-manifest")
@@ -345,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("--all-sequences", action="store_true")
     manifest.add_argument("--confirm-full-scan", action="store_true")
     manifest.add_argument("--output", type=Path)
+    manifest.add_argument("--allow-partial-out-of-bounds", action="store_true")
     manifest.set_defaults(handler=command_build_manifest)
 
     smoke = commands.add_parser("smoke")
