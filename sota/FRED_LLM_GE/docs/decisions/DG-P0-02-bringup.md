@@ -48,3 +48,18 @@ separate and disposable.
 Before the smoke run, validate source hashes, exact partition coverage,
 non-overlap, pinned dataset identity, and distinct train/validation sequences.
 If any check fails, stop rather than substituting another split.
+
+## Sequence selection for the technical smoke
+
+The first preparation attempt selected train sequence `0`. Its pinned
+`coordinates.txt` produced 183 out-of-bounds boxes against 1280×720 frames, so
+Phase 0 correctly refused to publish a manifest. The bring-up job now inspects
+at most the first eight sequence IDs in each already assigned project split and
+selects the first sequence that passes strict validation and has annotations.
+It records each rejected sequence's report under the job-specific validation
+directory. If none passes, the job stops. This changes only the tiny smoke
+subset; it does not change split membership or repair source annotations.
+
+The export takes up to 32 annotated frames from each selected sequence so the
+one-epoch seed exercises labels. Full-sequence out-of-bounds findings remain a
+separate data-quality issue for the formal research split and target policy.

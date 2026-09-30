@@ -10,7 +10,6 @@ import json
 import math
 import sqlite3
 import tempfile
-from collections import defaultdict
 from contextlib import closing
 from pathlib import Path
 
@@ -41,19 +40,22 @@ def selected_indices(manifest_path: Path, split: str, limit: int):
         raise ValueError("bring-up sample limits must be from 1 to 128")
     with closing(sqlite3.connect(f"file:{manifest_path.resolve()}?mode=ro", uri=True)) as connection:
         rows = connection.execute(
-            "SELECT sequence_id FROM samples WHERE project_split = ? "
-            "ORDER BY CAST(sequence_id AS INTEGER), frame_index",
+            "SELECT s.sequence_id, EXISTS("
+            "SELECT 1 FROM annotations a WHERE a.sample_id = s.sample_id"
+            ") FROM samples s WHERE s.project_split = ? "
+            "ORDER BY CAST(s.sequence_id AS INTEGER), s.frame_index",
             (split,),
         ).fetchall()
     if not rows:
         raise ValueError(f"manifest contains no {split} samples")
-    selected = defaultdict(list)
     first_sequence = rows[0][0]
-    for index, (sequence_id,) in enumerate(rows[:limit]):
-        if sequence_id != first_sequence:
-            break  # A bring-up export prepares at most one sequence per split.
-        selected[sequence_id].append(index)
-    return selected
+    # Prefer annotated frames so a small bring-up set actually exercises labels.
+    # Dataset indices still refer to the full split ordering.
+    annotated = [index for index, (sequence_id, has_label) in enumerate(rows)
+                 if sequence_id == first_sequence and has_label]
+    if not annotated:
+        raise ValueError(f"{split} sequence {first_sequence} has no annotated frames")
+    return {first_sequence: annotated[:limit]}
 
 
 def export_subset(manifest_path: Path, inventory_path: Path, output: Path,
