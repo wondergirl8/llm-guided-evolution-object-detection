@@ -5,6 +5,13 @@ Boxes are original-image pixel xyxy; labels must already be mapped to drone=0.
 No confidence filtering, NMS (removes overlapping duplicate predictions;), resizing, annotation parsing or split construction
 is performed here. Those choices belong to the frozen data/model adapters.
 Input box: [left, top, right, bottom], class 0 
+
+
+
+
+fitness.py takes a candidate model’s predictions and the correct FRED annotations, 
+computes object-detection accuracy, and returns three values inside a 
+DetectionResult (mAp50, Map50_95, param_count)
 """
 
 import contextlib
