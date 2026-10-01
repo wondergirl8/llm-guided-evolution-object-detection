@@ -181,9 +181,22 @@ all development sequences have reports, even if some have data-quality errors.
 The `out_of_bounds_categories` field separates partly visible, fully outside,
 and unclassified findings. See `docs/decisions/DG-P0-04-audit-findings.md` for
 the provisional issue record; no formal bounds or export policy is approved.
-Advance to `16-23%1`, `24-31%1`, and so on only after the previous batch
-finishes. If eight tasks are still over the current available quota, submit
-fewer at once and inspect `squeue -u "$USER"` before retrying.
+After the `16-23%1` batch finishes, one packed eight-task array can cover the
+remaining indexes without queueing 148 separate Slurm jobs:
+
+```bash
+sbatch --export=ALL,FRED_AUDIT_REPORT_DIR=data/fred_phase0/validation/development_audit_6cadd2db302f \
+  --array=24-31%1 sota/FRED_LLM_GE/phase0_data/jobs/audit_development_packed.sbatch
+```
+
+Each array task scans every eighth sequence index starting at its task ID, up
+to 171, within the same four-hour allocation. The shared cache therefore has
+one active inspector at a time. If a task reaches its wall-time limit or fails
+for an execution reason, resubmit the same `24-31%1` array after it has left
+the queue: complete reports are verified and skipped, while missing reports
+are retried. Inspect the new `fred-dev-pack-<array-id>_<task-id>.out` logs and
+rerun the summary to see remaining coverage. A data-quality failure recorded
+in a complete report does not fail the Slurm task.
 
 ## Current gate status
 
