@@ -59,8 +59,38 @@ timestamp errors. The new parser accepts both released filename forms while
 retaining sequence/counter checks, and pairing failures no longer generate
 secondary unmatched-timestamp findings.
 
-The original reports remain immutable evidence. A targeted ICE recheck of the
-100 affected sequences is required before their new pairing and timestamp
-outcomes can be stated. The other 72 reports can be reused with their paths
-and hashes recorded in the combined audit summary. Box handling remains a
-separate `DG-P0-04` research decision.
+The original reports remain immutable evidence. The targeted ICE recheck at
+code revision `fa6815b20050` inspected the 100 affected sequences. The
+combined summary reused the other 72 original reports, recording each report
+path and hash. It is complete for all 172 challenging-train sequences, with
+no missing IDs. The filename finding cleared, and unmatched timestamps fell
+from 279,843 to two. Rechecking formerly unpaired frames raised the observed
+partly visible box count from 9,440 to 10,254. There were no fully outside
+boxes. Of the 83 sequences with strict errors, 81 have partly visible box
+findings; sequences `225` and `230` have one unmatched annotation each, both
+at line 1 with timestamp `0.0`.
+
+## Proposed research policy (not yet approved)
+
+The [pinned upstream loader](https://raw.githubusercontent.com/miccunifi/FRED/2bf89c5376eda528431b62d6c60f2c13d8f95ab4/src/data/data.py)
+assigns frame index 0 timestamp `0.033333`; it cannot associate a `0.0`
+annotation with a released frame. It would not use either of these two
+records as a training target. Their exact coordinate contents have not been
+reviewed, so this establishes only that they precede the first paired frame.
+
+Recommend a versioned `DG-P0-04` policy that keeps all 172 development
+sequences, retains the released coordinates of every frame-paired annotation
+verbatim in the canonical manifest, and treats a positive-area overlap with
+the image as a recorded warning. For YOLO targets, clip the *corners* of such
+a box to the verified image rectangle before normalization; record both boxes,
+clipped-label count, and policy version. A zero-area result, fully outside
+box, malformed record, or any other unmatched timestamp remains blocking.
+The two `0.0` records would be recorded as source annotations without a
+paired frame and omitted from frame labels; neither entire sequence needs
+exclusion on that ground. Apply the same transform to train and validation
+targets. Do not inspect held-out test annotations to make this choice.
+
+This is a proposal for the `DG-P0-04` PROJECT/RESEARCH owner. Existing strict
+reports remain failed and no canonical manifest or formal fitness result is
+authorized by this note. Visual checks across both released filename forms
+and representative clipped boxes remain necessary before a Phase 0 freeze.
