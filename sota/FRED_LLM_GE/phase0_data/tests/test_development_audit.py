@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from sota.FRED_LLM_GE.phase0_data.development_audit import (
-    classify_bounds_finding, summarize, validate_inspection,
+    affected_filename_indexes, classify_bounds_finding, summarize, validate_inspection,
 )
 
 
@@ -39,6 +39,42 @@ def report(sequence_id, *, valid, findings=None):
 
 
 class DevelopmentAuditTest(unittest.TestCase):
+    def test_affected_filename_indexes_checks_original_input_hashes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary_path = root / "summary.json"
+            summary = {
+                "schema_version": "fred-development-audit-summary-v1",
+                "complete": True,
+                "inspected_sequence_count": 2,
+                "dataset_revision": "dataset-rev",
+                "inventory_sha256": "hash",
+                "official_split_sha256": "hash",
+                "project_split_sha256": "hash",
+                "sequences": [
+                    {"sequence_id": "3", "finding_counts": {}},
+                    {"sequence_id": "8", "finding_counts": {
+                        "error:pairing.event_filename_unrecognized": 1,
+                    }},
+                ],
+            }
+            summary_path.write_text(json.dumps(summary))
+            inventory = SimpleNamespace(dataset_revision="dataset-rev")
+            official = SimpleNamespace(challenging_train=("3", "8"))
+            with patch(
+                "sota.FRED_LLM_GE.phase0_data.development_audit.load_inputs",
+                return_value=(inventory, official, object()),
+            ), patch(
+                "sota.FRED_LLM_GE.phase0_data.development_audit.sha256_file",
+                return_value="hash",
+            ):
+                args = (summary_path, root / "inventory", root / "official", root / "project")
+                self.assertEqual(affected_filename_indexes(*args), (1,))
+                summary["project_split_sha256"] = "stale"
+                summary_path.write_text(json.dumps(summary))
+                with self.assertRaisesRegex(ValueError, "stale project_split_sha256"):
+                    affected_filename_indexes(*args)
+
     def test_existing_bounds_messages_are_classified_without_changing_severity(self):
         finding = {"code": "annotation.out_of_bounds",
                    "message": "box (949.2, 507.64, 1120.8, 731.16) is outside 1280x720"}
@@ -96,6 +132,43 @@ class DevelopmentAuditTest(unittest.TestCase):
             self.assertEqual(summary["sequences"][0]["finding_counts"],
                              {"error:annotation.out_of_bounds": 1})
             self.assertEqual(summary["out_of_bounds_categories"], {"partly_visible": 1})
+
+    def test_reuse_keeps_unaffected_reports_but_requires_pairing_recheck(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous, current = root / "previous", root / "current"
+            previous.mkdir()
+            current.mkdir()
+            (previous / "sequence_3.json").write_text(json.dumps(report("3", valid=True)))
+            stale = report("8", valid=False, findings=[
+                {"severity": "error", "code": "pairing.event_filename_unrecognized"},
+            ])
+            stale["sample_count"] = 0
+            (previous / "sequence_8.json").write_text(json.dumps(stale))
+            inventory = SimpleNamespace(dataset_revision="dataset-rev")
+            official = SimpleNamespace(
+                repository_revision="repo-rev", challenging_train=("3", "8"),
+            )
+            project = SimpleNamespace(version="split-v1", train=("3",), validation=("8",))
+            with patch(
+                "sota.FRED_LLM_GE.phase0_data.development_audit.load_inputs",
+                return_value=(inventory, official, project),
+            ), patch(
+                "sota.FRED_LLM_GE.phase0_data.development_audit.sha256_file",
+                return_value="hash",
+            ):
+                first = summarize(current, root / "inventory", root / "official",
+                                  root / "project", reuse_unaffected_from=previous)
+                self.assertEqual(first["reused_previous_sequence_ids"], ["3"])
+                self.assertEqual(first["missing_sequence_ids"], ["8"])
+                (current / "sequence_8.json").write_text(json.dumps(report("8", valid=True)))
+                final = summarize(current, root / "inventory", root / "official",
+                                  root / "project", reuse_unaffected_from=previous)
+            self.assertTrue(final["complete"])
+            self.assertEqual(final["inspected_sequence_count"], 2)
+            self.assertEqual(final["reused_previous_sequence_ids"], ["3"])
+            self.assertEqual(final["sequences"][1]["report_path"],
+                             (current / "sequence_8.json").as_posix())
 
 
 if __name__ == "__main__":

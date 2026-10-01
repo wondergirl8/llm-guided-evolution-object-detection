@@ -28,6 +28,20 @@ def test_pairing_uses_natural_order(sequence_root: Path):
     ]
 
 
+def test_released_event_filename_without_frame_token_pairs(sequence_root: Path):
+    frames = sequence_root / "Event" / "Frames"
+    for path in list(frames.glob("*.png")):
+        path.rename(path.with_name(path.name.replace("_frame_", "_")))
+
+    result = pair_sequence_frames(sequence_root, sequence_id="0", timestamp_policy=POLICY)
+
+    assert not result.findings
+    assert [item.event_relative_path for item in result.pairs] == [
+        "Event/Frames/Video_0_33333.png",
+        "Event/Frames/Video_0_66666.png",
+    ]
+
+
 def test_pairing_count_mismatch_is_blocking(sequence_root: Path):
     (sequence_root / "Event" / "Frames" / "Video_0_frame_66666.png").unlink()
     result = pair_sequence_frames(sequence_root, sequence_id="0", timestamp_policy=POLICY)

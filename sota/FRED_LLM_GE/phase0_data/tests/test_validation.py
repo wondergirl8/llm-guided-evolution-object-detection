@@ -71,6 +71,26 @@ def test_out_of_bounds_box_is_blocking(sequence_root: Path, tmp_path: Path):
     assert any(item.code == "annotation.out_of_bounds" for item in result.findings)
 
 
+def test_unpaired_frames_do_not_cascade_to_unmatched_annotations(
+    sequence_root: Path, tmp_path: Path
+):
+    source = sequence_root / "Event" / "Frames" / "Video_0_frame_66666.png"
+    source.rename(source.with_name("unexpected_66666.png"))
+    result = inspect_sequence(
+        config=load_config(CONFIG, workspace_root=tmp_path),
+        inventory_record=SequenceInventoryRecord(
+            "0", "train", RemoteObject("hf://archive", "train/0.zip")
+        ),
+        prepared_sequence=prepared_sequence(sequence_root),
+        official_split=OfficialSplitManifest("x", ("0",), ("1",), "a", "b", "c", "now"),
+        project_split=ProjectSplitManifest("v1", "sequence", ("0",), (), ("1",), "DG-P0-02"),
+    )
+    assert result.annotation_count == 2
+    assert not result.is_valid
+    assert any(f.code == "pairing.event_filename_unrecognized" for f in result.findings)
+    assert not any(f.code == "annotation.unmatched_timestamp" for f in result.findings)
+
+
 def test_bringup_policy_warns_for_partial_box_without_altering_it(
     sequence_root: Path, tmp_path: Path
 ):

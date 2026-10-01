@@ -98,8 +98,37 @@ def validate_inspection(report: dict, sequence_id: str, *,
     return report
 
 
+def affected_filename_indexes(summary_path: Path, inventory_path: Path,
+                              official_path: Path, project_path: Path) -> tuple[int, ...]:
+    """Locate the original audit's filename failures for a bounded recheck."""
+    inventory, official, _ = load_inputs(inventory_path, official_path, project_path)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if (summary.get("schema_version") != "fred-development-audit-summary-v1"
+            or summary.get("complete") is not True
+            or summary.get("inspected_sequence_count") != len(official.challenging_train)
+            or summary.get("dataset_revision") != inventory.dataset_revision):
+        raise ValueError("original development audit is incomplete or stale")
+    for name, path in (("inventory_sha256", inventory_path),
+                       ("official_split_sha256", official_path),
+                       ("project_split_sha256", project_path)):
+        if summary.get(name) != sha256_file(path):
+            raise ValueError(f"original audit has a stale {name}")
+    sequences = summary.get("sequences", [])
+    if (len(sequences) != len(official.challenging_train)
+            or {item["sequence_id"] for item in sequences} != set(official.challenging_train)):
+        raise ValueError("original audit does not cover each development sequence exactly once")
+    affected = {
+        item["sequence_id"] for item in sequences
+        if item["finding_counts"].get("error:pairing.event_filename_unrecognized", 0)
+    }
+    return tuple(index for index, sequence_id in enumerate(official.challenging_train)
+                 if sequence_id in affected)
+
+
 def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
-              project_path: Path) -> dict:
+              project_path: Path, *, reuse_unaffected_from: Path | None = None) -> dict:
+    if reuse_unaffected_from is not None and report_dir.resolve() == reuse_unaffected_from.resolve():
+        raise ValueError("new and previous report directories must differ")
     inventory, official, project = load_inputs(
         inventory_path, official_path, project_path,
     )
@@ -109,12 +138,17 @@ def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
     inspected = []
     invalid = []
     missing = []
+    reused = []
     sequence_summaries = []
     findings = Counter()
     bounds = Counter()
     totals = Counter()
     for sequence_id in expected:
         path = report_dir / f"sequence_{sequence_id}.json"
+        from_previous = False
+        if not path.is_file() and reuse_unaffected_from is not None:
+            path = reuse_unaffected_from / f"sequence_{sequence_id}.json"
+            from_previous = True
         if not path.is_file():
             missing.append(sequence_id)
             continue
@@ -124,7 +158,15 @@ def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
             repository_revision=official.repository_revision,
             project_split_version=project.version,
         )
+        if from_previous and any(
+            finding.get("code") == "pairing.event_filename_unrecognized"
+            for finding in report["findings"]
+        ):
+            missing.append(sequence_id)
+            continue
         inspected.append(sequence_id)
+        if from_previous:
+            reused.append(sequence_id)
         if not report["valid"]:
             invalid.append(sequence_id)
         split = "train" if sequence_id in train else "validation"
@@ -157,6 +199,7 @@ def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
                 sequence_bounds[bounds_category] += 1
         sequence_summaries.append({
             "sequence_id": sequence_id,
+            "report_path": path.as_posix(),
             "report_sha256": sha256_file(path),
             "project_split": split,
             "data_status": report["status"],
@@ -176,6 +219,7 @@ def summarize(report_dir: Path, inventory_path: Path, official_path: Path,
         "expected_sequence_count": len(expected),
         "inspected_sequence_count": len(inspected),
         "missing_sequence_ids": missing,
+        "reused_previous_sequence_ids": reused,
         "invalid_sequence_ids": invalid,
         "sequences": sequence_summaries,
         "dataset_revision": inventory.dataset_revision,
@@ -201,7 +245,11 @@ def main(argv=None):
     summary = commands.add_parser("summarize")
     summary.add_argument("--report-dir", type=Path, required=True)
     summary.add_argument("--output", type=Path)
-    for command in (verify, summary):
+    summary.add_argument("--reuse-unaffected-from", type=Path)
+    affected = commands.add_parser("affected-filename-indexes")
+    affected.add_argument("--summary", type=Path, required=True)
+    affected.add_argument("--expected-count", type=int, required=True)
+    for command in (verify, summary, affected):
         command.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
         command.add_argument("--official", type=Path, default=DEFAULT_OFFICIAL)
         command.add_argument("--project", type=Path, default=DEFAULT_PROJECT)
@@ -228,8 +276,17 @@ def main(argv=None):
         print(f"sequence {args.sequence}: data_status={report['status']}; "
               f"samples={report['sample_count']}; findings={dict(counts)}")
         return
+    if args.command == "affected-filename-indexes":
+        indexes = affected_filename_indexes(
+            args.summary, args.inventory, args.official, args.project,
+        )
+        if len(indexes) != args.expected_count:
+            raise ValueError(f"expected {args.expected_count} affected sequences; found {len(indexes)}")
+        print(*indexes, sep="\n")
+        return
     result = summarize(
         args.report_dir, args.inventory, args.official, args.project,
+        reuse_unaffected_from=args.reuse_unaffected_from,
     )
     output = args.output or args.report_dir / "summary.json"
     atomic_write_json(output, result)
@@ -237,6 +294,7 @@ def main(argv=None):
           f"{result['inspected_sequence_count']}/{result['expected_sequence_count']}; "
           f"invalid data sequences={len(result['invalid_sequence_ids'])}; "
           f"complete={result['complete']}; "
+          f"reused={len(result['reused_previous_sequence_ids'])}; "
           f"bounds={result['out_of_bounds_categories']}")
 
 

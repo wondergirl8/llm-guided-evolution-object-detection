@@ -198,6 +198,43 @@ are retried. Inspect the new `fred-dev-pack-<array-id>_<task-id>.out` logs and
 rerun the summary to see remaining coverage. A data-quality failure recorded
 in a complete report does not fail the Slurm task.
 
+## Recheck the released event-frame filename variant
+
+The completed 172-sequence scan identified a second released event filename
+form, `Video_<sequence>_<counter>.png`, in 100 sequences. The former validator
+only accepted `Video_<sequence>_frame_<counter>.png`, and its empty pairing
+result caused secondary unmatched-timestamp findings. After pulling the
+parser fix, recheck just those 100 sequences in a new code-revision directory:
+
+```bash
+mkdir -p data/logs
+sbatch --array=0-7%1 \
+  sota/FRED_LLM_GE/phase0_data/jobs/audit_event_filename_variant.sbatch
+```
+
+The job reads the complete original summary at
+`data/fred_phase0/validation/development_audit_6cadd2db302f/summary.json`,
+verifies its pinned input hashes, and distributes the 100 affected sequence
+indexes across eight queued tasks. It leaves the original reports untouched.
+The task logs are `data/logs/fred-event-recheck-<array-id>_<task-id>.out`.
+If a task times out, resubmitting the same array verifies and skips its
+completed new reports.
+
+When the array finishes, combine new reports with only the 72 unaffected
+original reports:
+
+```bash
+REV=$(git rev-parse --short=12 HEAD)
+data/.venv-yolo11/bin/python -m sota.FRED_LLM_GE.phase0_data.development_audit \
+  summarize --report-dir "data/fred_phase0/validation/development_audit_${REV}" \
+  --reuse-unaffected-from data/fred_phase0/validation/development_audit_6cadd2db302f
+```
+
+The combined summary records each report's path and hash. It excludes old
+reports with the filename finding until a fresh report for that sequence
+exists, so `complete=true` cannot be reached by reusing invalid pairing
+evidence. Strict out-of-bounds findings remain blocking pending `DG-P0-04`.
+
 ## Current gate status
 
 The implementation foundation is available, but Phase 0 is not frozen. Dataset-wide

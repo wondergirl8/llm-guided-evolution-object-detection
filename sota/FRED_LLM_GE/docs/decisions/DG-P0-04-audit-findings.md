@@ -35,3 +35,32 @@ formal data policy or a fitness result.
 The audit summary classifies existing bounds findings as `partly_visible`,
 `fully_outside`, or `unclassified` for evidence only. Classification does not
 change report severity, publish a manifest, clip a box, or exclude a sample.
+
+## Complete development scan and pairing diagnostic
+
+The completed strict scan covered all 172 official challenging-train
+sequences. User-provided summary output reported 9,440 partly visible
+out-of-bounds boxes and no fully outside boxes. It also reported 100 sequences
+with `pairing.event_filename_unrecognized` and 279,843
+`annotation.unmatched_timestamp` findings. A per-sequence check showed that
+every unmatched timestamp came from those same 100 sequences; there were no
+unmatched timestamps in the other 72.
+
+Representative released filenames are `Video_116_33333.png`,
+`Video_116_66666.png`, and `Video_116_99999.png`. The original Phase 0
+validator accepted only `Video_<sequence>_frame_<counter>.png`. A rejected
+filename made pairing return no frame pairs, after which annotation
+association emitted a secondary unmatched-timestamp finding for every source
+annotation. The [pinned upstream loader](https://raw.githubusercontent.com/miccunifi/FRED/2bf89c5376eda528431b62d6c60f2c13d8f95ab4/src/data/data.py)
+uses natural ordering of `.png` event frames and does not require the
+`_frame_` token. This establishes a validator
+format mismatch and a diagnostic cascade, not 279,843 independently verified
+timestamp errors. The new parser accepts both released filename forms while
+retaining sequence/counter checks, and pairing failures no longer generate
+secondary unmatched-timestamp findings.
+
+The original reports remain immutable evidence. A targeted ICE recheck of the
+100 affected sequences is required before their new pairing and timestamp
+outcomes can be stated. The other 72 reports can be reused with their paths
+and hashes recorded in the combined audit summary. Box handling remains a
+separate `DG-P0-04` research decision.

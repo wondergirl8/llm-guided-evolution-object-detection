@@ -105,6 +105,15 @@ def inspect_sequence(
             raw_hdf5_size,
         )
 
+    # No frame association is possible after a blocking pairing failure.
+    # Retain its root finding without adding one secondary timestamp error
+    # for every source annotation in the sequence.
+    if not pairing.pairs:
+        return SequenceInspection(
+            sequence_id, (), tuple(findings), pairing.rgb_count,
+            pairing.event_count, len(parsed.annotations), raw_hdf5_size,
+        )
+
     official_value, project_value = _split_for_sequence(
         sequence_id, official_split, project_split
     )

@@ -12,16 +12,16 @@ from .schema import ValidationFinding
 
 
 _NATURAL_PARTS = re.compile(r"(\d+)")
-_EVENT_FRAME_NAME = re.compile(r"^Video_(\d+)_frame_(\d+)\.png$")
+_EVENT_FRAME_NAME = re.compile(r"^Video_(\d+)_(?:frame_)?(\d+)\.png$")
 _RGB_FRAME_NAME = re.compile(
     r"^Video_(\d+)_(\d{2})_(\d{2})_(\d{2})\.(\d+)\.jpg$"
 )
 
 
-def _natural_key(path: Path) -> tuple[object, ...]:
-    parts: list[object] = []
+def _natural_key(path: Path) -> tuple[tuple[int, object], ...]:
+    parts: list[tuple[int, object]] = []
     for part in _NATURAL_PARTS.split(path.name):
-        parts.append(int(part) if part.isdigit() else part.lower())
+        parts.append((0, int(part)) if part.isdigit() else (1, part.lower()))
     return tuple(parts)
 
 
