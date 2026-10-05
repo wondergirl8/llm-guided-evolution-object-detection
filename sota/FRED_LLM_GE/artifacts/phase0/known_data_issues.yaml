@@ -1,10 +1,11 @@
 schema_version: phase0-known-data-issues-v1
-policy_status: pending_DG-P0-04
+policy_status: approved_dg-p0-04-v1_pending_visual_and_split_freeze
+approval_reference: Bill approved the proposed DG-P0-04 annotation policy in Codex on 2026-10-05.
 exclusions: []
 issues:
   - id: P0-ISSUE-001
-    status: open_pending_DG-P0-04
-    provisional_severity: blocking_for_freeze
+    status: covered_by_dg-p0-04-v1_pending_verification
+    provisional_severity: warning_only_for_verified_positive_area_image_overlap
     affected_scope:
       official_split: challenging_test
       public_sequence_details: redacted
@@ -15,6 +16,25 @@ issues:
       public_summary: A trusted integrity check found a released annotation extending beyond the image boundary.
       protected_evidence_fingerprint_sha256: 8c01ec121279dfc00c86f220d93dcc696c9c7336365b02b2d259c75b653c5309
       label_level_evidence_committed: false
-    handling: No clipping, repair, filtering, or exclusion has been applied.
-    next_step: Determine intended extended-coordinate semantics and prevalence during the complete coordinate audit, then resolve under DG-P0-04.
-guardrail: No sequence or sample may be silently repaired or excluded before an approved policy decision.
+    handling: Source coordinates remain immutable. Only derived YOLO labels may clip corners to the verified image rectangle under the explicit approved policy; non-overlapping or malformed boxes remain blocking.
+    next_step: Verify the transform on development data without viewing held-out labels; Phase 0 freeze remains pending.
+  - id: P0-ISSUE-002
+    status: approved_handling_pending_ICE_verification
+    category: development_extended_boxes
+    affected_scope:
+      official_split: challenging_train
+      sequence_count: 81
+      annotation_count: 10254
+    evidence:
+      source: User-provided complete ICE development audit at fa6815b20050; 172 of 172 sequences covered.
+    handling: Preserve source boxes; warn on positive-area overlap; clip corners only in YOLO export and record both boxes and counts.
+  - id: P0-ISSUE-003
+    status: approved_handling_pending_ICE_verification
+    category: development_unpaired_zero_timestamp
+    affected_scope:
+      official_split: challenging_train
+      sequence_ids: ['225', '230']
+      source_line: 1
+      annotation_count: 2
+    handling: Preserve complete source records separately and omit them from frame labels; do not exclude either sequence. Other unmatched timestamps remain blocking.
+guardrail: Explicit policy selection and traceable derived transforms are required. Approval does not freeze the dataset or authorize fitness from the bring-up split.

@@ -241,3 +241,43 @@ The implementation foundation is available, but Phase 0 is not frozen. Dataset-w
 content verification, the project-owned split decision, questionable-data policy,
 visual review, held-out integrity run, and cold/warm performance acceptance remain
 required by the completion gate.
+# Approved annotation policy verification
+
+Bill approved `dg-p0-04-v1` on 2026-10-05. The decision is recorded in
+`../docs/decisions/DG-P0-04-audit-findings.md`. Strict inspection remains the
+default. Explicit `--annotation-policy dg-p0-04-v1` enables recorded warnings
+for partly visible boxes and for only the two documented first-line `0.0`
+annotations in sequences 225/230. Every paired source box remains unchanged;
+the two unpaired source records are retained in reports and in the manifest's
+additive `unpaired_annotations` table, included in its records hash. Existing
+manifest readers retain their paired sample/annotation interface.
+
+YOLO export from a manifest using this policy clips box corners before
+normalization and writes `label_provenance.jsonl`, with original and derived
+boxes, dimensions, source identity, and policy. `source.json` records counts
+for each split. Existing bring-up manifests keep their in-bounds selection.
+The bounded adapter continues to produce bring-up exports, not formal fitness.
+
+After syncing this change to ICE, run from the repository:
+
+```bash
+mkdir -p data/logs
+sbatch sota/FRED_LLM_GE/phase0_data/jobs/review_approved_annotation_policy.sbatch
+```
+
+This is one CPU job. It verifies and reuses the completed 172-sequence strict
+audit, checks original report hashes, and makes fresh source inspections only
+for the first boundary-case train/validation sequences plus 116, 225, and 230
+(deduplicated). It never opens a held-out test archive. Output is under
+`data/fred_policy_review/<jobid>/`: `review.json`, selected sequence reports,
+and paired RGB/event overlays. Red boxes are source boxes; green boxes are
+derived label boxes. Per-image numerical records retain both coordinates.
+
+`numerical_checks_passed_visual_review_required` means the transform and source
+checks passed, while the overlays still require review. The JSON always keeps
+`phase0_frozen: false` and `evolution_fitness_authorized: false`. A failed source
+check writes failure evidence and exits nonzero. Existing output directories
+cannot be overwritten. Preserve the old strict audit and keep the checkout
+unchanged while the job runs. The remaining steps are visual review,
+recording/session leakage review and split freeze, the controlled Phase 1
+training/metric protocol, a baseline, and evolution integration.

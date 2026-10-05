@@ -1,6 +1,10 @@
-# DG-P0-04 evidence: extended FRED boxes (provisional)
+# DG-P0-04: approved handling of extended FRED boxes
 
-**Status:** evidence collection; no formal annotation or inclusion policy approved.
+**Status:** annotation policy `dg-p0-04-v1` approved by Bill in Codex on
+2026-10-05, in response to the concrete policy proposal below: "yes i approve lets continue".
+This resolves annotation handling only; visual verification, recording/session
+leakage review, split freeze, training/fitness protocol, and baseline validation
+remain separate requirements.
 **Source:** FRED dataset revision `980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd` and
 FRED repository revision `2bf89c5376eda528431b62d6c60f2c13d8f95ab4`.
 
@@ -22,12 +26,12 @@ interpretation that at least some boundary extensions are intentional; it does
 not establish that every one of the 846 boxes is correct or how a detector
 should use them.
 
-## Pending decision and evidence
+## Decision history before approval
 
 `DG-P0-04` is a PROJECT/RESEARCH gate. The final blocking/warning categories
 and any inclusion or exclusion rule require the full audit, issue frequencies,
 affected sequences/samples, upstream evidence, and correctness assessment.
-Until that decision, the strict reports remain failed. Canonical annotations
+Before approval, the strict reports remained failed. Canonical annotations
 retain their released coordinates. The bounded YOLO11 smoke run's separate
 bring-up exception and its in-bounds frame selection do not authorize a
 formal data policy or a fitness result.
@@ -70,7 +74,7 @@ boxes. Of the 83 sequences with strict errors, 81 have partly visible box
 findings; sequences `225` and `230` have one unmatched annotation each, both
 at line 1 with timestamp `0.0`.
 
-## Proposed research policy (not yet approved)
+## Approved research policy (`dg-p0-04-v1`)
 
 The [pinned upstream loader](https://raw.githubusercontent.com/miccunifi/FRED/2bf89c5376eda528431b62d6c60f2c13d8f95ab4/src/data/data.py)
 assigns frame index 0 timestamp `0.033333`; it cannot associate a `0.0`
@@ -78,7 +82,7 @@ annotation with a released frame. It would not use either of these two
 records as a training target. Their exact coordinate contents have not been
 reviewed, so this establishes only that they precede the first paired frame.
 
-Recommend a versioned `DG-P0-04` policy that keeps all 172 development
+The approved versioned `DG-P0-04` policy keeps all 172 development
 sequences, retains the released coordinates of every frame-paired annotation
 verbatim in the canonical manifest, and treats a positive-area overlap with
 the image as a recorded warning. For YOLO targets, clip the *corners* of such
@@ -90,7 +94,22 @@ paired frame and omitted from frame labels; neither entire sequence needs
 exclusion on that ground. Apply the same transform to train and validation
 targets. Do not inspect held-out test annotations to make this choice.
 
-This is a proposal for the `DG-P0-04` PROJECT/RESEARCH owner. Existing strict
-reports remain failed and no canonical manifest or formal fitness result is
-authorized by this note. Visual checks across both released filename forms
-and representative clipped boxes remain necessary before a Phase 0 freeze.
+Historical strict reports remain immutable and keep their original failures.
+New inspection/manifest commands must explicitly select `--annotation-policy
+dg-p0-04-v1`; they retain source boxes and store the two unpaired source records
+separately. The warning for an unpaired record is restricted to sequence 225 or
+230, source line 1, timestamp zero, with first paired timestamp `0.033333`.
+Other unmatched records and non-overlapping/zero-area/malformed boxes remain
+blocking. The approval is pinned to the dataset/repository revisions above and
+the audited timestamp policy. No held-out label inspection is authorized.
+
+YOLO export applies corner clipping identically to train and validation and
+records source box, label box, dimensions, policy, and clipped-label counts.
+Existing in-bounds bring-up export retains its selection behavior. No sequence
+is excluded. This approval does not authorize evolution fitness from the
+bring-up split or replace the Phase 0 freeze and Phase 1 protocol gates.
+
+`phase0_data/jobs/review_approved_annotation_policy.sbatch` reuses the full
+strict audit with verified source-report hashes, then performs fresh inspection
+of a bounded development set. Its overlays show source boxes in red and YOLO
+label boxes in green. Review them before a Phase 0 freeze.

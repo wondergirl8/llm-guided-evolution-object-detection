@@ -77,6 +77,8 @@ def validate_inspection(report: dict, sequence_id: str, *,
             raise ValueError(f"sequence {sequence_id}: stale {name} in inspection")
     if context.get("partial_out_of_bounds_bringup_policy") is not False:
         raise ValueError(f"sequence {sequence_id}: inspection used the bring-up exception")
+    if context.get("annotation_policy") not in (None, "coordinates.txt_unmodified_v1"):
+        raise ValueError(f"sequence {sequence_id}: inspection did not use strict annotation handling")
     scope = report.get("scope", {})
     if (report.get("execution", {}).get("status") != "completed"
             or not scope.get("complete")

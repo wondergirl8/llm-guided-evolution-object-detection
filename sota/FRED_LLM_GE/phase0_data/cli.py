@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from .config import Phase0Config, load_config
+from .annotation_policy import APPROVAL_REFERENCE, POLICY_VERSION, validate_policy_source
 from .dataset import FREDDataset
 from .fred_api import HFFredSource
 from .inventory import build_inventory, load_inventory, write_inventory
@@ -43,6 +44,7 @@ def _inspect_prepared_sequence(
     official: object,
     project: object,
     allow_partial_out_of_bounds: bool = False,
+    annotation_policy: str | None = None,
 ):
     sequence_id = record.sequence_id
     source.prepare_sequence(sequence_id, record)
@@ -55,6 +57,7 @@ def _inspect_prepared_sequence(
                 official_split=official,
                 project_split=project,
                 allow_partial_out_of_bounds=allow_partial_out_of_bounds,
+                annotation_policy=annotation_policy,
             )
 
 
@@ -112,6 +115,10 @@ def command_fetch_sequence(args: argparse.Namespace) -> int:
 def command_inspect_sequence(args: argparse.Namespace) -> int:
     allow_partial_out_of_bounds = bool(getattr(args, "allow_partial_out_of_bounds", False))
     config, inventory, official, project = _load_build_inputs(args)
+    annotation_policy = getattr(args, "annotation_policy", None)
+    validate_policy_source(config, annotation_policy)
+    if annotation_policy and allow_partial_out_of_bounds:
+        raise ValueError("choose the approved policy or the bring-up exception")
     if allow_partial_out_of_bounds and "BRINGUP" not in project.approval_reference:
         raise ValueError("partial bounds policy requires a BRINGUP approval reference")
     record = _record(inventory, args.sequence)
@@ -123,6 +130,7 @@ def command_inspect_sequence(args: argparse.Namespace) -> int:
         official=official,
         project=project,
         allow_partial_out_of_bounds=allow_partial_out_of_bounds,
+        annotation_policy=annotation_policy,
     )
     output = (
         Path(args.output)
@@ -138,6 +146,8 @@ def command_inspect_sequence(args: argparse.Namespace) -> int:
             "project_split_version": project.version,
             "timestamp_verification_status": config.timestamp.verification_status,
             "partial_out_of_bounds_bringup_policy": allow_partial_out_of_bounds,
+            "annotation_policy": annotation_policy or "coordinates.txt_unmodified_v1",
+            "annotation_policy_approval_reference": APPROVAL_REFERENCE if annotation_policy else None,
         },
         expected_sequence_ids=(args.sequence,),
     )
@@ -150,6 +160,10 @@ def command_inspect_sequence(args: argparse.Namespace) -> int:
 def command_build_manifest(args: argparse.Namespace) -> int:
     allow_partial_out_of_bounds = bool(getattr(args, "allow_partial_out_of_bounds", False))
     config, inventory, official, project = _load_build_inputs(args)
+    annotation_policy = getattr(args, "annotation_policy", None)
+    validate_policy_source(config, annotation_policy)
+    if annotation_policy and allow_partial_out_of_bounds:
+        raise ValueError("choose the approved policy or the bring-up exception")
     if allow_partial_out_of_bounds:
         if args.all_sequences:
             raise ValueError("partial bounds policy is limited to selected bring-up sequences")
@@ -189,12 +203,17 @@ def command_build_manifest(args: argparse.Namespace) -> int:
         ),
         "config_sha256": sha256_file(config.config_path),
     }
+    if annotation_policy:
+        metadata["annotation_policy"] = annotation_policy
+        metadata["annotation_policy_approval_reference"] = APPROVAL_REFERENCE
     if allow_partial_out_of_bounds:
         metadata["validation_status"] = "passed_selected_sequences_partial_bounds_bringup_only"
     elif metadata["complete_inventory"]:
         metadata["validation_status"] = "passed_complete_inventory"
     else:
         metadata["validation_status"] = "passed_selected_sequences_non_freeze"
+    if annotation_policy and "BRINGUP" in project.approval_reference:
+        metadata["validation_status"] = "passed_annotation_policy_bringup_split_non_freeze"
     execution_error = None
     try:
         with ManifestWriter(destination, metadata) as writer:
@@ -207,6 +226,7 @@ def command_build_manifest(args: argparse.Namespace) -> int:
                     official=official,
                     project=project,
                     allow_partial_out_of_bounds=allow_partial_out_of_bounds,
+                    annotation_policy=annotation_policy,
                 )
                 inspections.append(inspection)
                 if not inspection.is_valid:
@@ -215,6 +235,8 @@ def command_build_manifest(args: argparse.Namespace) -> int:
                     )
                 for sample in inspection.samples:
                     writer.add_sample(sample)
+                for annotation in inspection.unpaired_annotations:
+                    writer.add_unpaired_annotation(sequence_id, annotation, annotation_policy)
     except BaseException as error:
         execution_error = {
             "type": type(error).__name__,
@@ -357,6 +379,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("sequence")
     inspect.add_argument("--output", type=Path)
     inspect.add_argument("--allow-partial-out-of-bounds", action="store_true")
+    inspect.add_argument("--annotation-policy", choices=[POLICY_VERSION])
     inspect.set_defaults(handler=command_inspect_sequence)
 
     manifest = commands.add_parser("build-manifest")
@@ -366,6 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("--confirm-full-scan", action="store_true")
     manifest.add_argument("--output", type=Path)
     manifest.add_argument("--allow-partial-out-of-bounds", action="store_true")
+    manifest.add_argument("--annotation-policy", choices=[POLICY_VERSION])
     manifest.set_defaults(handler=command_build_manifest)
 
     smoke = commands.add_parser("smoke")

@@ -11,7 +11,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .provenance import stable_hash, stable_json_dumps, utc_now
-from .schema import FREDSample
+from .schema import Annotation, FREDSample
+from .annotation_policy import POLICY_VERSION, permits_unpaired_annotation
 
 
 MANIFEST_BACKEND = "sqlite-v1"
@@ -85,6 +86,13 @@ class ManifestWriter:
                 source_line INTEGER,
                 PRIMARY KEY(sample_id, annotation_index)
             );
+            CREATE TABLE unpaired_annotations (
+                sequence_id TEXT NOT NULL,
+                source_line INTEGER NOT NULL,
+                annotation_json TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                PRIMARY KEY(sequence_id, source_line)
+            );
             """
         )
 
@@ -130,6 +138,16 @@ class ManifestWriter:
             ],
         )
 
+    def add_unpaired_annotation(self, sequence_id: str, annotation: Annotation,
+                                policy: str | None) -> None:
+        if (policy != POLICY_VERSION or self.metadata.get("annotation_policy") != policy
+                or not permits_unpaired_annotation(sequence_id, annotation, "0.033333")):
+            raise ManifestError("unpaired annotation is outside the approved DG-P0-04 policy")
+        self.connection.execute(
+            "INSERT INTO unpaired_annotations VALUES (?, ?, ?, ?)",
+            (sequence_id, annotation.source_line, stable_json_dumps(asdict(annotation)), policy),
+        )
+
     def _records_sha256(self) -> str:
         digest = hashlib.sha256()
         queries = (
@@ -141,6 +159,10 @@ class ManifestWriter:
             (
                 "annotations",
                 "SELECT * FROM annotations ORDER BY sample_id, annotation_index",
+            ),
+            (
+                "unpaired_annotations",
+                "SELECT * FROM unpaired_annotations ORDER BY CAST(sequence_id AS INTEGER), source_line",
             ),
         )
         for table, query in queries:
@@ -166,6 +188,10 @@ class ManifestWriter:
                 "backend": MANIFEST_BACKEND,
                 "created_at": utc_now(),
                 "sample_count": sample_count,
+                "unpaired_annotation_count": self.connection.execute(
+                    "SELECT COUNT(*) FROM unpaired_annotations"
+                ).fetchone()[0],
+                "unpaired_annotation_storage": "source_records_json_v1",
                 "records_sha256": self._records_sha256(),
             }
             final_metadata["content_identity"] = stable_hash(

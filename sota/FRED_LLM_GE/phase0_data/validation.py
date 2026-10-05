@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -12,12 +12,16 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from .annotations import AnnotationParseError, parse_coordinates_file
+from .annotation_policy import (
+    POLICY_VERSION, permits_unpaired_annotation, validate_policy_source,
+)
 from .config import Phase0Config
 from .fred_api import PreparedSequence
 from .inventory import SequenceInventoryRecord
 from .provenance import atomic_write_json, utc_now
 from .schema import (
     FREDSample,
+    Annotation,
     ModalityReference,
     OfficialSplit,
     ProjectSplit,
@@ -38,6 +42,7 @@ class SequenceInspection:
     event_count: int
     annotation_count: int
     raw_hdf5_size_bytes: int | None
+    unpaired_annotations: tuple[Annotation, ...] = ()
 
     @property
     def is_valid(self) -> bool:
@@ -74,7 +79,11 @@ def inspect_sequence(
     official_split: OfficialSplitManifest,
     project_split: ProjectSplitManifest,
     allow_partial_out_of_bounds: bool = False,
+    annotation_policy: str | None = None,
 ) -> SequenceInspection:
+    validate_policy_source(config, annotation_policy)
+    if annotation_policy and allow_partial_out_of_bounds:
+        raise ValueError("choose the approved annotation policy or the bring-up exception")
     sequence_id = inventory_record.sequence_id
     root = prepared_sequence.sequence_root
     findings: list[ValidationFinding] = []
@@ -117,13 +126,30 @@ def inspect_sequence(
     official_value, project_value = _split_for_sequence(
         sequence_id, official_split, project_split
     )
+    unpaired_annotations: list[Annotation] = []
     associated = _associate_annotations(
         parsed.annotations,
         pairing.pairs,
         tolerance=Decimal(config.timestamp.tolerance_seconds),
         sequence_id=sequence_id,
         findings=findings,
+        annotation_policy=annotation_policy,
+        unpaired_annotations=unpaired_annotations,
     )
+    if unpaired_annotations:
+        first_size = _image_size(root / pairing.pairs[0].rgb_relative_path, sequence_id, findings)
+        if first_size:
+            width, height = first_size
+            for annotation in unpaired_annotations:
+                x1, y1, x2, y2 = annotation.box_xyxy
+                if max(0, x1) >= min(width, x2) or max(0, y1) >= min(height, y2):
+                    findings.append(ValidationFinding(
+                        code="annotation.unpaired_box_no_image_overlap", severity="error",
+                        message="unpaired source box has no positive-area overlap with verified sequence dimensions",
+                        sequence_id=sequence_id, source_reference="coordinates.txt",
+                        line_number=annotation.source_line,
+                        details={"source_annotation": asdict(annotation), "image_size": first_size},
+                    ))
     samples: list[FREDSample] = []
     archive_ref = inventory_record.archive.logical_reference
     for pair in pairing.pairs:
@@ -146,16 +172,21 @@ def inspect_sequence(
                 x1, y1, x2, y2 = annotation.box_xyxy
                 if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
                     partial_overlap = max(0, x1) < min(width, x2) and max(0, y1) < min(height, y2)
-                    permitted = allow_partial_out_of_bounds and partial_overlap
+                    permitted = bool(allow_partial_out_of_bounds or annotation_policy) and partial_overlap
                     findings.append(
                         ValidationFinding(
-                            code=("annotation.partial_out_of_bounds_bringup"
+                            code=("annotation.partial_out_of_bounds_approved"
+                                  if permitted and annotation_policy
+                                  else "annotation.partial_out_of_bounds_bringup"
                                   if permitted else "annotation.out_of_bounds"),
                             severity="warning" if permitted else "error",
                             message=f"box {annotation.box_xyxy} is outside {width}x{height}",
                             sequence_id=sequence_id,
                             sample_id=stable_sample_id(sequence_id, pair.frame_index),
                             line_number=annotation.source_line,
+                            details={"source_box_xyxy": annotation.box_xyxy,
+                                     "image_size": (width, height),
+                                     "annotation_policy": annotation_policy},
                         )
                     )
         samples.append(
@@ -196,6 +227,7 @@ def inspect_sequence(
         event_count=pairing.event_count,
         annotation_count=len(parsed.annotations),
         raw_hdf5_size_bytes=raw_hdf5_size,
+        unpaired_annotations=tuple(unpaired_annotations),
     )
 
 
@@ -206,6 +238,8 @@ def _associate_annotations(
     tolerance: Decimal,
     sequence_id: str,
     findings: list[ValidationFinding],
+    annotation_policy: str | None = None,
+    unpaired_annotations: list[Annotation] | None = None,
 ) -> dict[int, tuple[Any, ...]]:
     if tolerance < 0:
         raise ValueError("timestamp tolerance must be non-negative")
@@ -242,15 +276,17 @@ def _associate_annotations(
             if abs(frame_timestamps[index] - timestamp) <= tolerance
         ]
         if len(matches) != 1:
-            code = (
-                "annotation.unmatched_timestamp"
-                if not matches
-                else "annotation.ambiguous_timestamp"
-            )
+            permitted = (annotation_policy == POLICY_VERSION and not matches
+                         and permits_unpaired_annotation(sequence_id, annotation, pairs[0].timestamp))
+            if permitted and unpaired_annotations is not None:
+                unpaired_annotations.append(annotation)
+            code = "annotation.ambiguous_timestamp" if matches else "annotation.unmatched_timestamp"
+            if permitted:
+                code = "annotation.unpaired_zero_approved"
             findings.append(
                 ValidationFinding(
                     code=code,
-                    severity="error",
+                    severity="warning" if permitted else "error",
                     message=(
                         f"annotation timestamp {annotation.timestamp} matched "
                         f"{len(matches)} frames within tolerance {tolerance}"
@@ -258,6 +294,9 @@ def _associate_annotations(
                     sequence_id=sequence_id,
                     source_reference="coordinates.txt",
                     line_number=annotation.source_line,
+                    details={"source_annotation": asdict(annotation),
+                             "annotation_policy": annotation_policy,
+                             "omitted_from_frame_labels": bool(permitted)},
                 )
             )
             continue
@@ -384,6 +423,10 @@ def write_validation_report(
                 for item in inspections
             ],
             "findings": findings,
+            "unpaired_annotations": [
+                {"sequence_id": item.sequence_id, **asdict(annotation)}
+                for item in inspections for annotation in item.unpaired_annotations
+            ],
         },
     )
 
