@@ -281,3 +281,55 @@ cannot be overwritten. Preserve the old strict audit and keep the checkout
 unchanged while the job runs. The remaining steps are visual review,
 recording/session leakage review and split freeze, the controlled Phase 1
 training/metric protocol, a baseline, and evolution integration.
+
+## Development-wide repeated-scene audit
+
+ICE policy-review job `6088625` passed its numerical checks. The user-provided
+24 overlays were reviewed locally; corner clipping passed for the reviewed
+Event targets. `../docs/decisions/DG-P0-05-review-6088625.md` records the scope,
+archive fingerprint, RGB visibility limitations, and a concrete cross-split
+scene observation: train sequence 225 and validation sequence 230 share the
+same courtyard view. This blocks treating the bring-up membership as a frozen
+research split.
+
+After syncing the scene-audit implementation to ICE, submit eight packed CPU
+tasks (one running at a time) from the repository:
+
+```bash
+mkdir -p data/logs
+sbatch --array=0-7%1 sota/FRED_LLM_GE/phase0_data/jobs/audit_development_scenes.sbatch
+```
+
+Each task handles a stride of official challenging-train sequence IDs. The
+existing bounded prepared-sequence cache is reused. Collection opens four
+deterministically selected paired RGB frames per sequence (25%, 50%, 75%, and
+95% positions), writes small background thumbnails, and summarizes source
+annotation classes and nominal sequence lengths. No held-out sequence is
+opened. This may fetch evicted development archives again; it uses CPU and
+network/disk resources, with no model training.
+
+Outputs are under `data/fred_scene_audit/v1_<12-character-code-revision>/`.
+Each sequence record is published after its thumbnails, with pinned-input and
+thumbnail hashes. Retries retain verified completed records. Keep the checkout
+unchanged while the array runs. If a task times out or fails, repeat the same
+submission on the same commit after the array finishes; completed sequences
+are skipped. Source, split, code, or thumbnail mismatches stop reuse.
+
+The final successful task automatically writes `summary.json` and overview
+pages when all 172 records exist and verify. Logs are
+`data/logs/fred-scene-audit-<array-job-id>_<task-id>.out`. If needed, summarize
+again after all tasks finish:
+
+```bash
+REV=$(git rev-parse --short=12 HEAD)
+data/.venv-yolo11/bin/python -m sota.FRED_LLM_GE.phase0_data.scene_audit \
+  --output "data/fred_scene_audit/v1_${REV}" summarize
+```
+
+The two nearest training-background candidates for each validation sequence
+are ranked by perceptual difference-hash distance. Flat/low-contrast frames
+are excluded from that ranking. These are review aids, not verified recording
+groups, automatic exclusions, or proof of independence; four snapshots can
+miss scene changes. Session IDs and condition metadata remain unverified.
+The summary explicitly preserves `phase0_frozen: false` and `split_changed:
+false`. Human grouping and the DG-P0-02 research split decision remain required.

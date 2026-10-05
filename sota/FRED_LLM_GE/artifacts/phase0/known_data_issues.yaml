@@ -1,5 +1,5 @@
 schema_version: phase0-known-data-issues-v1
-policy_status: approved_dg-p0-04-v1_pending_visual_and_split_freeze
+policy_status: approved_dg-p0-04-v1_ICE_and_bounded_visual_verified_pending_split_freeze
 approval_reference: Bill approved the proposed DG-P0-04 annotation policy in Codex on 2026-10-05.
 exclusions: []
 issues:
@@ -19,7 +19,7 @@ issues:
     handling: Source coordinates remain immutable. Only derived YOLO labels may clip corners to the verified image rectangle under the explicit approved policy; non-overlapping or malformed boxes remain blocking.
     next_step: Verify the transform on development data without viewing held-out labels; Phase 0 freeze remains pending.
   - id: P0-ISSUE-002
-    status: approved_handling_pending_ICE_verification
+    status: approved_handling_ICE_and_bounded_visual_verified
     category: development_extended_boxes
     affected_scope:
       official_split: challenging_train
@@ -29,7 +29,7 @@ issues:
       source: User-provided complete ICE development audit at fa6815b20050; 172 of 172 sequences covered.
     handling: Preserve source boxes; warn on positive-area overlap; clip corners only in YOLO export and record both boxes and counts.
   - id: P0-ISSUE-003
-    status: approved_handling_pending_ICE_verification
+    status: approved_handling_ICE_and_bounded_visual_verified
     category: development_unpaired_zero_timestamp
     affected_scope:
       official_split: challenging_train
@@ -37,4 +37,16 @@ issues:
       source_line: 1
       annotation_count: 2
     handling: Preserve complete source records separately and omit them from frame labels; do not exclude either sequence. Other unmatched timestamps remain blocking.
+  - id: P0-ISSUE-004
+    status: open_DG-P0-02_scene_grouping_review
+    category: repeated_scene_across_bringup_split
+    affected_scope:
+      official_split: challenging_train
+      training_sequence: '225'
+      validation_sequence: '230'
+    evidence:
+      source: docs/decisions/DG-P0-05-review-6088625.md
+      observation: The final reviewed RGB frames share the courtyard facade, shutters, circular opening, and well from a similar view.
+      recording_session_id: unknown
+    handling: Keep the bring-up split unchanged and exclude its scores from fitness; audit scene groups before the research split is frozen.
 guardrail: Explicit policy selection and traceable derived transforms are required. Approval does not freeze the dataset or authorize fitness from the bring-up split.
