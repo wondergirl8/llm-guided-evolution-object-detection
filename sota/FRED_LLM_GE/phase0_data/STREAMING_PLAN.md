@@ -2,7 +2,7 @@
 
 ## Goal
 
-Implement one `data/fred_stream.py` script with an event-frame iterator and a small command-line entry point. It should read the released FRED event-frame PNGs from the official Hugging Face dataset through its remote API and yield each usable frame with its relative timestamp. It must work without a local FRED dataset copy. The archived Phase 0 implementation is outside this task.
+Implement one `data/fred_stream.py` script inside `sota/FRED_LLM_GE`, with an event-frame iterator and a small command-line entry point. It should read the released FRED event-frame PNGs from the official Hugging Face dataset through its remote API and yield each usable frame with its relative timestamp. It must work without a local FRED dataset copy. The archived Phase 0 implementation is outside this task.
 
 This is an event-frame access step, not a claim that the broader Phase 0 data and evaluation gates are complete.
 

@@ -1,17 +1,16 @@
 # FRED event frames
 
 Open `sota/FRED_LLM_GE` as the editor workspace and run `uv sync` there to create
-the project `.venv`. The workspace settings select that interpreter and add the
-repository root to editor import paths. The project pytest configuration adds
-the same path when running tests.
+the project `.venv`. The workspace settings select that interpreter, and the local
+`data` package is directly importable from this project.
 
-The top-level `data/fred_stream.py` reads released event PNG frames from one FRED
+The project's `data/fred_stream.py` reads released event PNG frames from one FRED
 sequence through the Hugging Face `datasets` streaming API. It needs no local FRED dataset copy.
 The ZIP stays remote; the script first scans member paths, then decodes only the
 event frames requested by the caller.
 
-From a Python process started at the repository root with
-`uv run --project sota/FRED_LLM_GE python`, inspect the first frame with:
+From a Python process started in `sota/FRED_LLM_GE` with `uv run python`, inspect
+the first frame with:
 
 ```python
 from data.fred_stream import stream_event_frames
@@ -22,7 +21,7 @@ print(timestamp_s, image.size)
 Or run a bounded smoke check from the FRED project directory:
 
 ```sh
-uv run python ../../data/fred_stream.py train 36 --limit 2
+uv run python data/fred_stream.py train 36 --limit 2
 ```
 
 Each result is a Pillow image and its relative timestamp in seconds. The script

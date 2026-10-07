@@ -4,14 +4,14 @@
 
 From this directory, run `uv sync` to create `.venv` from `pyproject.toml` and
 `uv.lock`. Use `uv run` for FRED commands. If this directory is open in VS Code,
-`.vscode/settings.json` selects the environment and lets Pylance resolve the
-repository-level `data` package.
+`.vscode/settings.json` selects the environment. The `data` package lives in this
+project directory, so Pylance can resolve it directly.
 If VS Code has already selected another interpreter for this workspace, run
 **Python: Select Interpreter** and choose this directory's `.venv/bin/python`.
 
 ```sh
 uv run pytest phase0_data/test_fred_stream.py -q
-uv run python ../../data/fred_stream.py train 36 --limit 2
+uv run python data/fred_stream.py train 36 --limit 2
 ```
 
 This directory contains the staged implementation of the FRED data, detection,

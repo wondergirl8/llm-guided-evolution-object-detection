@@ -11,11 +11,11 @@ sota/Pointnet_Pointnet2_pytorch/results/
 1/
 first_test/
 data/
-!/data/
-/data/*
-!/data/fred_stream.py
-!/data/__init__.py
 !sota/Titanic/data/
+!/sota/FRED_LLM_GE/data/
+/sota/FRED_LLM_GE/data/*
+!/sota/FRED_LLM_GE/data/__init__.py
+!/sota/FRED_LLM_GE/data/fred_stream.py
 .DS_Store
 mistralai
 **/*.egg-info
