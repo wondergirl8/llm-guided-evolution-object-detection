@@ -1,11 +1,10 @@
 import math
-import sys
-from pathlib import Path
-
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "adapters"))
-from yolo11_adapter import yolo11_frame, yolo11_prediction
+from sota.FRED_LLM_GE.phase1_detection.adapters.yolo11 import (
+    yolo11_frame,
+    yolo11_prediction,
+)
 
 
 class TensorLike:
