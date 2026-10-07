@@ -12,6 +12,10 @@ sota/Pointnet_Pointnet2_pytorch/results/
 first_test/
 data/
 !sota/Titanic/data/
+!/sota/FRED_LLM_GE/data/
+/sota/FRED_LLM_GE/data/*
+!/sota/FRED_LLM_GE/data/__init__.py
+!/sota/FRED_LLM_GE/data/fred_stream.py
 .DS_Store
 mistralai
 **/*.egg-info
@@ -25,6 +29,7 @@ slurm-*.out
 *_temp_*
 cifar10/
 uv.lock
+!/sota/FRED_LLM_GE/uv.lock
 pareto_fronts
 */run_job_outputs
 .venv/
