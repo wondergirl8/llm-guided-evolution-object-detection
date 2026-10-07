@@ -35,6 +35,8 @@ dependencies = [
     "jsonschema",
     "huggingface-hub==0.35.1",
     "pillow>=10.0",
+    # COCO's reference evaluator computes mAP50 and mAP50:95.
+    "pycocotools>=2.0.10,<3",
     "certifi>=2024.2.2",
 ]
 
