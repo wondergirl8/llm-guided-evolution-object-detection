@@ -1,5 +1,10 @@
 # FRED YOLO11 candidate-generation check
 
+The current next step is the combined seed-training/evaluation check in
+[`INTEGRATION_RUNBOOK.md`](INTEGRATION_RUNBOOK.md). It includes a no-commit ICE
+patch handoff and CPU/GPU job commands. The proposal and candidate checks below
+already succeeded as ICE jobs 6009285 and 6009377; they need not be repeated.
+
 The bounded seed job has already demonstrated one-epoch YOLO11m training on
 ICE. `jobs/propose_yolo11_candidate.sbatch` is the next engineering check: it
 uses the public `Qwen/Qwen2.5-Coder-7B-Instruct` model on one allocated H100 to

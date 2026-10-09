@@ -20,6 +20,6 @@ REV=$(git rev-parse --short=12 HEAD)
 OUTPUT="data/fred_scene_audit/v1_${REV}"
 test -x "$PY" || { echo "Existing FRED ICE Python environment is required" >&2; exit 1; }
 echo "Scene audit shard $SLURM_ARRAY_TASK_ID of 8; output $OUTPUT"
-"$PY" -m sota.FRED_LLM_GE.phase0_data.scene_audit --output "$OUTPUT" \
+"$PY" -m sota.FRED_LLM_GE.archive.phase0_data_old.scene_audit --output "$OUTPUT" \
   collect --shard "$SLURM_ARRAY_TASK_ID" --shards 8 --summarize-when-complete
 echo "Scene audit shard complete; the final successful shard publishes summary.json."

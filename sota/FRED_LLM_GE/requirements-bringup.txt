@@ -1,0 +1,9 @@
+# Standalone bounded integration check. Does not install the full generic suite.
+torch==2.6.0
+torchvision==0.21.0
+ultralytics==8.4.165
+pycocotools>=2.0.10,<3
+huggingface-hub==0.35.1
+PyYAML>=6,<7
+Pillow>=10
+certifi>=2024.2.2

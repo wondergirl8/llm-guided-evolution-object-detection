@@ -2,12 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from sota.FRED_LLM_GE.phase0_data.manifest import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.manifest import (
     ManifestError,
     ManifestWriter,
     read_manifest_metadata,
 )
-from sota.FRED_LLM_GE.phase0_data.schema import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.schema import (
     Annotation,
     FREDSample,
     ModalityReference,

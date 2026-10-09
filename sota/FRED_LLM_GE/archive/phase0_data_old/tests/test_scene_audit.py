@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from sota.FRED_LLM_GE.phase0_data import scene_audit
-from sota.FRED_LLM_GE.phase0_data.config import load_config
+from sota.FRED_LLM_GE.archive.phase0_data_old import scene_audit
+from sota.FRED_LLM_GE.archive.phase0_data_old.config import load_config
 from .test_validation import CONFIG
 
 

@@ -22,8 +22,8 @@ from .validator import SEED_PATH, validate_source
 
 
 ROOT = Path(__file__).resolve().parents[5]
-PROMPT_PATH = ROOT / "templates" / "FRED" / "Normal" / "1.txt"
-RULES_PATH = ROOT / "templates" / "FRED" / "ConstantRules.txt"
+PROMPT_PATH = ROOT / "templates" / "FRED" / "Event" / "Normal" / "1.txt"
+RULES_PATH = ROOT / "templates" / "FRED" / "Event" / "ConstantRules.txt"
 DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
 FENCE = re.compile(r"\A```(?:python)?\s*\n(.*?)\n```\s*\Z", re.DOTALL)
 

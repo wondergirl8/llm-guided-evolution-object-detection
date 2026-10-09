@@ -10,7 +10,7 @@ cd "$SLURM_SUBMIT_DIR"
 
 module load cuda
 PY=data/.venv-yolo11/bin/python
-TRAINER=sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/train.py
+TRAINER=sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/train_eval.py
 DATA=data/fred_yolo11_bringup/data.yaml
 RUN_ID=seed_mscale_v1
 RESULT="sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/results/${RUN_ID}_results.csv"
@@ -24,7 +24,7 @@ test ! -e "$RESULT" || {
 "$PY" "$TRAINER" --model network --data "$DATA" \
   --weights "$PWD/yolo11m.pt" --run-id "$RUN_ID" --preflight-only
 "$PY" "$TRAINER" --model network --data "$DATA" \
-  --weights "$PWD/yolo11m.pt" --epochs 1 --batch 2 --imgsz 640 --device 0 \
+  --weights "$PWD/yolo11m.pt" --epochs 1 --fraction 1 --batch 2 --imgsz 640 --device 0 \
   --run-id "$RUN_ID"
 test -s "$RESULT"
 echo "FRED YOLO11 bounded seed smoke run complete"

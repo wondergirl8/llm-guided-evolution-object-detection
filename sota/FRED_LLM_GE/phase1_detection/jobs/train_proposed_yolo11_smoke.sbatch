@@ -16,7 +16,7 @@ fi
 module load cuda
 PY=data/.venv-yolo11/bin/python
 DATA=data/fred_yolo11_bringup/data.yaml
-TRAINER=sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/train.py
+TRAINER=sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/train_eval.py
 PROPOSAL_JOB_ID=$1
 CANDIDATE_ID="P${PROPOSAL_JOB_ID}"
 PROPOSAL_DIR="data/fred_generation_smoke/${PROPOSAL_JOB_ID}"
@@ -61,7 +61,7 @@ PY
   --weights "$PWD/yolo11m.pt" --preflight-only
 "$PY" "$TRAINER" --model "network_${CANDIDATE_ID}" \
   --variant_dir "$PROPOSAL_DIR" --data "$DATA" \
-  --weights "$PWD/yolo11m.pt" --epochs 1 --batch 2 --imgsz 640 --device 0 \
+  --weights "$PWD/yolo11m.pt" --epochs 1 --fraction 1 --batch 2 --imgsz 640 --device 0 \
   --run-id "$RUN_ID"
 test -s "$RESULT"
 echo "Candidate training/evaluation smoke complete; result is not evolution fitness: $RESULT"

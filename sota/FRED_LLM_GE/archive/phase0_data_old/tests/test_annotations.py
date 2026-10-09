@@ -1,6 +1,6 @@
 import pytest
 
-from sota.FRED_LLM_GE.phase0_data.annotations import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.annotations import (
     AnnotationParseError,
     parse_coordinates_text,
 )

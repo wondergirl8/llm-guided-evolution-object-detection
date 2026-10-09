@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from sota.FRED_LLM_GE.phase0_data.config import load_config
+from sota.FRED_LLM_GE.archive.phase0_data_old.config import load_config
 
 
-CONFIG = Path(__file__).resolve().parents[2] / "configs" / "phase0" / "default.yaml"
+CONFIG = Path(__file__).resolve().parents[3] / "configs" / "phase0" / "default.yaml"
 
 
 def test_default_config_has_full_pins_and_bounded_cache(tmp_path: Path):

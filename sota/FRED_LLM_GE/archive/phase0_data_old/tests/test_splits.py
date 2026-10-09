@@ -1,6 +1,6 @@
 import pytest
 
-from sota.FRED_LLM_GE.phase0_data.splits import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.splits import (
     OfficialSplitManifest,
     ProjectSplitManifest,
     parse_split_text,

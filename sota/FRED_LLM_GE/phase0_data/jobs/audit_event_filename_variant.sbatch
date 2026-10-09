@@ -29,7 +29,7 @@ test -x "$PY" && test -s "$OLD_DIR/summary.json" || {
 }
 test "$NEW_DIR" != "$OLD_DIR" || { echo "Recheck requires a new code revision" >&2; exit 1; }
 
-INDEX_TEXT=$("$PY" -m sota.FRED_LLM_GE.phase0_data.development_audit \
+INDEX_TEXT=$("$PY" -m sota.FRED_LLM_GE.archive.phase0_data_old.development_audit \
   affected-filename-indexes --summary "$OLD_DIR/summary.json" --expected-count 100 \
   --inventory "$INVENTORY" --official "$OFFICIAL" --project "$PROJECT")
 mapfile -t INDEXES <<< "$INDEX_TEXT"

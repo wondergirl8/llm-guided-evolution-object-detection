@@ -1,0 +1,6 @@
+FRED YOLO11 fixed rules: use the project-approved Event input and project
+train/validation split. Never edit data loading, class mapping, training,
+evaluation, checkpoint source, or Detect output semantics. Return only the
+literal GENOME dictionary assignment. Allowed repeat values are 2, 3, and 4.
+The three objectives are validation mAP50, validation mAP50:95, and parameter
+count. Do not use held-out test data for candidate selection.

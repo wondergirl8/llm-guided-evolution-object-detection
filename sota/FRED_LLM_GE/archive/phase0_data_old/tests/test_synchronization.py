@@ -2,8 +2,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from sota.FRED_LLM_GE.phase0_data.config import TimestampConfig
-from sota.FRED_LLM_GE.phase0_data.synchronization import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.config import TimestampConfig
+from sota.FRED_LLM_GE.archive.phase0_data_old.synchronization import (
     pair_sequence_frames,
     timestamp_for_frame,
 )

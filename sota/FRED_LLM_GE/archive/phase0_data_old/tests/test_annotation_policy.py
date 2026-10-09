@@ -10,20 +10,20 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from sota.FRED_LLM_GE.phase0_data.annotation_policy import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.annotation_policy import (
     APPROVAL_REFERENCE, POLICY_VERSION, converted_box, validate_policy_source,
 )
-from sota.FRED_LLM_GE.phase0_data.config import load_config
-from sota.FRED_LLM_GE.phase0_data.manifest import ManifestWriter, read_manifest_metadata
-from sota.FRED_LLM_GE.phase0_data.policy_review import review_strict_audit, selected_review_sequences
-from sota.FRED_LLM_GE.phase0_data.provenance import sha256_file
-from sota.FRED_LLM_GE.phase0_data.schema import RemoteObject
-from sota.FRED_LLM_GE.phase0_data.fred_api import ArchiveMemberMetadata
-from sota.FRED_LLM_GE.phase0_data.inventory import SequenceInventoryRecord
-from sota.FRED_LLM_GE.phase0_data.splits import OfficialSplitManifest, ProjectSplitManifest
-from sota.FRED_LLM_GE.phase0_data.validation import inspect_sequence, write_validation_report
-from sota.FRED_LLM_GE.phase0_data.visualization import HeldOutVisualizationError, render_annotation_overlay
-from sota.FRED_LLM_GE.phase1_detection.adapters.yolo11 import export_subset, yolo_labels
+from sota.FRED_LLM_GE.archive.phase0_data_old.config import load_config
+from sota.FRED_LLM_GE.archive.phase0_data_old.manifest import ManifestWriter, read_manifest_metadata
+from sota.FRED_LLM_GE.archive.phase0_data_old.policy_review import review_strict_audit, selected_review_sequences
+from sota.FRED_LLM_GE.archive.phase0_data_old.provenance import sha256_file
+from sota.FRED_LLM_GE.archive.phase0_data_old.schema import RemoteObject
+from sota.FRED_LLM_GE.archive.phase0_data_old.fred_api import ArchiveMemberMetadata
+from sota.FRED_LLM_GE.archive.phase0_data_old.inventory import SequenceInventoryRecord
+from sota.FRED_LLM_GE.archive.phase0_data_old.splits import OfficialSplitManifest, ProjectSplitManifest
+from sota.FRED_LLM_GE.archive.phase0_data_old.validation import inspect_sequence, write_validation_report
+from sota.FRED_LLM_GE.archive.phase0_data_old.visualization import HeldOutVisualizationError, render_annotation_overlay
+from sota.FRED_LLM_GE.data.yolo_export import export_subset, yolo_labels
 
 from .test_validation import CONFIG, prepared_sequence
 from .test_development_audit import report
@@ -126,7 +126,7 @@ def test_held_out_visual_guard_still_applies_with_approved_policy(tmp_path):
 
 
 def test_manifest_loader_and_both_export_splits_keep_box_lineage(sequence_root, tmp_path, monkeypatch):
-    from sota.FRED_LLM_GE.phase0_data import fred_api, inventory as inventory_module
+    from sota.FRED_LLM_GE.archive.phase0_data_old import fred_api, inventory as inventory_module
 
     kwargs = inspect_fixture(sequence_root, tmp_path)
     inspection = inspect_sequence(**kwargs, annotation_policy=POLICY_VERSION)
@@ -178,7 +178,7 @@ def test_manifest_loader_and_both_export_splits_keep_box_lineage(sequence_root, 
 
 
 def test_review_reuses_hash_linked_reports_and_does_not_hide_other_failures(tmp_path, monkeypatch):
-    from sota.FRED_LLM_GE.phase0_data import policy_review
+    from sota.FRED_LLM_GE.archive.phase0_data_old import policy_review
 
     ids = ("0", "116", "225", "230")
     inventory = SimpleNamespace(dataset_revision="dataset-rev")
@@ -226,7 +226,7 @@ def test_review_reuses_hash_linked_reports_and_does_not_hide_other_failures(tmp_
 
 
 def test_review_workflow_writes_real_fixture_overlays_and_failed_checks(tmp_path, monkeypatch):
-    from sota.FRED_LLM_GE.phase0_data import policy_review
+    from sota.FRED_LLM_GE.archive.phase0_data_old import policy_review
 
     config = load_config(CONFIG, workspace_root=tmp_path)
     ids = ("0", "116", "225", "230")

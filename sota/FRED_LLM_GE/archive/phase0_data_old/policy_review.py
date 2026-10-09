@@ -30,7 +30,7 @@ from .fred_api import HFFredSource
 from .provenance import atomic_write_json, sha256_file
 from .validation import inspect_sequence, write_validation_report
 from .visualization import render_annotation_overlay
-from ..phase1_detection.adapters.yolo11 import yolo_targets
+from ...data.yolo_export import yolo_targets
 
 
 def review_strict_audit(summary_path, inventory_path, official_path, project_path):

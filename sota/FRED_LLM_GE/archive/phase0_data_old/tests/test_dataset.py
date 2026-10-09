@@ -8,21 +8,21 @@ import zipfile
 import pytest
 from PIL import Image
 
-from sota.FRED_LLM_GE.phase0_data import cache as cache_module
-from sota.FRED_LLM_GE.phase0_data import dataset as dataset_module
-from sota.FRED_LLM_GE.phase0_data import fred_api as fred_api_module
-from sota.FRED_LLM_GE.phase0_data.cache import BoundedCache
-from sota.FRED_LLM_GE.phase0_data.dataset import DatasetAccessError, FREDDataset
-from sota.FRED_LLM_GE.phase0_data.fred_api import (
+from sota.FRED_LLM_GE.archive.phase0_data_old import cache as cache_module
+from sota.FRED_LLM_GE.archive.phase0_data_old import dataset as dataset_module
+from sota.FRED_LLM_GE.archive.phase0_data_old import fred_api as fred_api_module
+from sota.FRED_LLM_GE.archive.phase0_data_old.cache import BoundedCache
+from sota.FRED_LLM_GE.archive.phase0_data_old.dataset import DatasetAccessError, FREDDataset
+from sota.FRED_LLM_GE.archive.phase0_data_old.fred_api import (
     HFFredSource,
     PreparedSequenceUnavailable,
 )
-from sota.FRED_LLM_GE.phase0_data.inventory import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.inventory import (
     SequenceInventoryRecord,
     SourceInventory,
 )
-from sota.FRED_LLM_GE.phase0_data.manifest import ManifestWriter
-from sota.FRED_LLM_GE.phase0_data.schema import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.manifest import ManifestWriter
+from sota.FRED_LLM_GE.archive.phase0_data_old.schema import (
     AccessMode,
     Annotation,
     FREDSample,

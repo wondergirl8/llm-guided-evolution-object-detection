@@ -2,22 +2,22 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from sota.FRED_LLM_GE.phase0_data.config import load_config
-from sota.FRED_LLM_GE.phase0_data.fred_api import ArchiveMemberMetadata
-from sota.FRED_LLM_GE.phase0_data.inventory import SequenceInventoryRecord
-from sota.FRED_LLM_GE.phase0_data.schema import RemoteObject
-from sota.FRED_LLM_GE.phase0_data.splits import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.config import load_config
+from sota.FRED_LLM_GE.archive.phase0_data_old.fred_api import ArchiveMemberMetadata
+from sota.FRED_LLM_GE.archive.phase0_data_old.inventory import SequenceInventoryRecord
+from sota.FRED_LLM_GE.archive.phase0_data_old.schema import RemoteObject
+from sota.FRED_LLM_GE.archive.phase0_data_old.splits import (
     OfficialSplitManifest,
     ProjectSplitManifest,
 )
-from sota.FRED_LLM_GE.phase0_data.validation import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.validation import (
     SequenceInspection,
     inspect_sequence,
     write_validation_report,
 )
 
 
-CONFIG = Path(__file__).resolve().parents[2] / "configs" / "phase0" / "default.yaml"
+CONFIG = Path(__file__).resolve().parents[3] / "configs" / "phase0" / "default.yaml"
 
 
 def prepared_sequence(sequence_root: Path, *, has_raw_hdf5: bool = True):

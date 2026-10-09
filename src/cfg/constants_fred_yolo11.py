@@ -18,14 +18,14 @@ DATA_PATH = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "phase0_data")
 SEED_NETWORK = os.path.join(SOTA_ROOT, "network.py")
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
-TRAIN_FILE = os.path.join(SOTA_ROOT, "train.py")
+TRAIN_FILE = os.path.join(SOTA_ROOT, "train_eval.py")
 
 # run_improved.py resolves the prompt glob against ROOT_DIR and loads the
 # domain rules separately. Keep rules outside the selectable prompt glob.
-DEFAULT_PROMPT_GROUP = "FRED/Normal"
+DEFAULT_PROMPT_GROUP = "FRED/Event/Normal"
 PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
-CONSTANT_RULES_PATH = "templates/FRED/ConstantRules.txt"
+CONSTANT_RULES_PATH = "templates/FRED/Event/ConstantRules.txt"
 
 OUTPUT_DIR = os.path.join(ROOT_DIR, "fred_yolo11_output")
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep

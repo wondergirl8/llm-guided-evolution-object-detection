@@ -35,8 +35,11 @@ dependencies = [
     "jsonschema",
     "huggingface-hub==0.35.1",
     "pillow>=10.0",
-    "ultralytics>=8.3,<9",
+    # COCO's reference evaluator computes mAP50 and mAP50:95.
+    "pycocotools>=2.0.10,<3",
     "certifi>=2024.2.2",
+    "datasets==4.8.5",
+    "ultralytics>=8.3,<9",
 ]
 
 [tool.pytest.ini_options]

@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from sota.FRED_LLM_GE.phase0_data import cli
-from sota.FRED_LLM_GE.phase0_data.schema import RemoteObject
-from sota.FRED_LLM_GE.phase0_data.splits import ProjectSplitManifest
+from sota.FRED_LLM_GE.archive.phase0_data_old import cli
+from sota.FRED_LLM_GE.archive.phase0_data_old.schema import RemoteObject
+from sota.FRED_LLM_GE.archive.phase0_data_old.splits import ProjectSplitManifest
 
 
 class FailingSource:

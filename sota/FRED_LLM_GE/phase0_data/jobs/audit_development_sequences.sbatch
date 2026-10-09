@@ -21,7 +21,7 @@ test -x "$PY" && test -s "$INVENTORY" && test -s "$OFFICIAL" && test -s "$PROJEC
   exit 1
 }
 
-SEQUENCE_ID=$("$PY" -m sota.FRED_LLM_GE.phase0_data.development_audit \
+SEQUENCE_ID=$("$PY" -m sota.FRED_LLM_GE.archive.phase0_data_old.development_audit \
   sequence-id --official "$OFFICIAL" --index "$SLURM_ARRAY_TASK_ID")
 CODE_REVISION=$(git rev-parse --short=12 HEAD)
 REPORT_DIR=${FRED_AUDIT_REPORT_DIR:-"data/fred_phase0/validation/development_audit_${CODE_REVISION}"}
@@ -34,7 +34,7 @@ mkdir -p "$REPORT_DIR"
 echo "Audit sequence $SEQUENCE_ID (${SLURM_ARRAY_TASK_ID}); code: $CODE_REVISION; report: $REPORT"
 
 verify_report() {
-  "$PY" -m sota.FRED_LLM_GE.phase0_data.development_audit verify-report \
+  "$PY" -m sota.FRED_LLM_GE.archive.phase0_data_old.development_audit verify-report \
     --report "$REPORT" --sequence "$SEQUENCE_ID" \
     --inventory "$INVENTORY" --official "$OFFICIAL" --project "$PROJECT"
 }
@@ -48,7 +48,7 @@ fi
 # An inspection can return nonzero for source annotation findings and still
 # publish a complete report. Preserve those findings as audit evidence.
 set +e
-"$PY" -m sota.FRED_LLM_GE.phase0_data inspect-sequence "$SEQUENCE_ID" \
+"$PY" -m sota.FRED_LLM_GE.archive.phase0_data_old inspect-sequence "$SEQUENCE_ID" \
   --inventory "$INVENTORY" --official-split "$OFFICIAL" \
   --project-split "$PROJECT" --output "$REPORT"
 inspect_status=$?

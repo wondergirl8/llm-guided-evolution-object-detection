@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from sota.FRED_LLM_GE.phase0_data import fred_api as fred_api_module
-from sota.FRED_LLM_GE.phase0_data.cache import BoundedCache, CacheIdentity
-from sota.FRED_LLM_GE.phase0_data.fred_api import (
+from sota.FRED_LLM_GE.archive.phase0_data_old import fred_api as fred_api_module
+from sota.FRED_LLM_GE.archive.phase0_data_old.cache import BoundedCache, CacheIdentity
+from sota.FRED_LLM_GE.archive.phase0_data_old.fred_api import (
     FredRemoteError,
     HFFredSource,
     PREPARED_SEQUENCE_VERSION,
@@ -16,7 +16,7 @@ from sota.FRED_LLM_GE.phase0_data.fred_api import (
     _import_huggingface_hub,
     _validate_zip_members,
 )
-from sota.FRED_LLM_GE.phase0_data.schema import RemoteObject
+from sota.FRED_LLM_GE.archive.phase0_data_old.schema import RemoteObject
 
 
 DATASET_ID = "owner/fred"

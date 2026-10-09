@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sota.FRED_LLM_GE.phase0_data.development_audit import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.development_audit import (
     affected_filename_indexes, classify_bounds_finding, summarize, validate_inspection,
 )
 
@@ -62,10 +62,10 @@ class DevelopmentAuditTest(unittest.TestCase):
             inventory = SimpleNamespace(dataset_revision="dataset-rev")
             official = SimpleNamespace(challenging_train=("3", "8"))
             with patch(
-                "sota.FRED_LLM_GE.phase0_data.development_audit.load_inputs",
+                "sota.FRED_LLM_GE.archive.phase0_data_old.development_audit.load_inputs",
                 return_value=(inventory, official, object()),
             ), patch(
-                "sota.FRED_LLM_GE.phase0_data.development_audit.sha256_file",
+                "sota.FRED_LLM_GE.archive.phase0_data_old.development_audit.sha256_file",
                 return_value="hash",
             ):
                 args = (summary_path, root / "inventory", root / "official", root / "project")
@@ -113,10 +113,10 @@ class DevelopmentAuditTest(unittest.TestCase):
             )
             project = SimpleNamespace(version="split-v1", train=("3",), validation=("8",))
             with patch(
-                "sota.FRED_LLM_GE.phase0_data.development_audit.load_inputs",
+                "sota.FRED_LLM_GE.archive.phase0_data_old.development_audit.load_inputs",
                 return_value=(inventory, official, project),
             ), patch(
-                "sota.FRED_LLM_GE.phase0_data.development_audit.sha256_file",
+                "sota.FRED_LLM_GE.archive.phase0_data_old.development_audit.sha256_file",
                 return_value="hash",
             ):
                 summary = summarize(root, root / "inventory", root / "official",
@@ -151,10 +151,10 @@ class DevelopmentAuditTest(unittest.TestCase):
             )
             project = SimpleNamespace(version="split-v1", train=("3",), validation=("8",))
             with patch(
-                "sota.FRED_LLM_GE.phase0_data.development_audit.load_inputs",
+                "sota.FRED_LLM_GE.archive.phase0_data_old.development_audit.load_inputs",
                 return_value=(inventory, official, project),
             ), patch(
-                "sota.FRED_LLM_GE.phase0_data.development_audit.sha256_file",
+                "sota.FRED_LLM_GE.archive.phase0_data_old.development_audit.sha256_file",
                 return_value="hash",
             ):
                 first = summarize(current, root / "inventory", root / "official",

@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from sota.FRED_LLM_GE.phase0_data.schema import Annotation
-from sota.FRED_LLM_GE.phase0_data.visualization import (
+from sota.FRED_LLM_GE.archive.phase0_data_old.schema import Annotation
+from sota.FRED_LLM_GE.archive.phase0_data_old.visualization import (
     HeldOutVisualizationError,
     render_annotation_overlay,
 )

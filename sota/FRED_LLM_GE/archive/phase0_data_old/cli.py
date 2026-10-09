@@ -24,7 +24,7 @@ from .splits import (
 from .validation import inspect_sequence, write_validation_report
 
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PACKAGE_ROOT / "configs" / "phase0" / "default.yaml"
 
 

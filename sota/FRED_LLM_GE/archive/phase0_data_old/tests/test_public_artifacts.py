@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ISSUE_REGISTRY = PROJECT_ROOT / "artifacts" / "phase0" / "known_data_issues.yaml"
 PROTECTED_LABEL_KEYS = {
     "box_xyxy",

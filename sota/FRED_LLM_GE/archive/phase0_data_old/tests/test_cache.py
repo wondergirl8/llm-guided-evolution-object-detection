@@ -3,8 +3,8 @@ import threading
 
 import pytest
 
-from sota.FRED_LLM_GE.phase0_data import cache as cache_module
-from sota.FRED_LLM_GE.phase0_data.cache import (
+from sota.FRED_LLM_GE.archive.phase0_data_old import cache as cache_module
+from sota.FRED_LLM_GE.archive.phase0_data_old.cache import (
     BoundedCache,
     CacheCapacityError,
     CacheIdentity,

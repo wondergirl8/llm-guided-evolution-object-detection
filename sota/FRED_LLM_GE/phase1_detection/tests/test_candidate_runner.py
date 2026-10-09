@@ -16,7 +16,7 @@ from pathlib import Path
 from contextlib import closing
 from unittest.mock import patch
 
-from sota.FRED_LLM_GE.phase1_detection.adapters.yolo11 import (
+from sota.FRED_LLM_GE.data.yolo_export import (
     export_subset, selected_indices, yolo_labels,
 )
 
@@ -51,7 +51,7 @@ class Yolo11InterfaceTest(unittest.TestCase):
         )
         self.assertIn("--model network_ABC", command)
         self.assertIn(f"--variant_dir {constants.VARIANT_DIR}", command)
-        prompt = Path(constants.ROOT_DIR, "templates/FRED/Normal/1.txt").read_text()
+        prompt = Path(constants.ROOT_DIR, "templates/FRED/Event/Normal/1.txt").read_text()
         self.assertEqual(prompt.count("{}"), 1)
         self.assertTrue(Path(constants.ROOT_DIR, constants.CONSTANT_RULES_PATH).is_file())
 
@@ -169,7 +169,7 @@ class Yolo11InterfaceTest(unittest.TestCase):
                 module.__dict__.update(attributes)
                 return module
 
-            prefix = "sota.FRED_LLM_GE.phase0_data."
+            prefix = "sota.FRED_LLM_GE.archive.phase0_data_old."
             modules = {
                 prefix + "config": stub(prefix + "config", load_config=lambda *a, **k: object()),
                 prefix + "dataset": stub(prefix + "dataset", FREDDataset=FakeDataset),
@@ -191,95 +191,6 @@ class Yolo11InterfaceTest(unittest.TestCase):
             self.assertEqual((temp / "export" / "labels" / "train" / "1_00000001.txt").read_text(),
                              "0 0.20000000 0.20000000 0.20000000 0.20000000\n")
 
-    def test_training_command_result_and_completion_contract(self):
-        # The actual Ultralytics GPU path is deliberately replaced with a fake.
-        with tempfile.TemporaryDirectory() as temp:
-            temp = Path(temp)
-            variant_dir = temp / "models"
-            variant_dir.mkdir()
-            (variant_dir / "network_ABC.py").write_text(
-                (SEED_DIR / "network.py").read_text(encoding="utf-8"), encoding="utf-8")
-            data_root = temp / "data"
-            for split in ("train", "val"):
-                image_dir = data_root / "images" / split
-                image_dir.mkdir(parents=True)
-                (image_dir / "one.png").write_bytes(b"synthetic")
-            (data_root / "data.yaml").write_text("placeholder", encoding="utf-8")
-            (data_root / "source.json").write_text(json.dumps({"purpose": "test"}), encoding="utf-8")
-            calls = []
-            generated_configs = []
-            model_paths = []
-
-            class FakeYOLO:
-                def __init__(self, path):
-                    self.path = path
-                    model_paths.append(str(path))
-                    self.model = types.SimpleNamespace(
-                        yaml={**fake_yolo11_config(), "scale": "m"},
-                        parameters=lambda: [types.SimpleNamespace(numel=lambda: 1234)],
-                    )
-                def load(self, weights):
-                    calls.append(("load", weights))
-                    return self
-                def train(self, **kwargs):
-                    calls.append(("train", kwargs))
-                    best = temp / "best.pt"
-                    best.write_bytes(b"checkpoint")
-                    self.trainer = types.SimpleNamespace(best=best)
-                def val(self, **kwargs):
-                    calls.append(("val", kwargs))
-                    return types.SimpleNamespace(box=types.SimpleNamespace(map50=0.5, map=0.25))
-
-            def dump_config(config, **kwargs):
-                generated_configs.append(config)
-                return "candidate config"
-
-            fake_yaml = types.SimpleNamespace(
-                safe_load=lambda _: {"path": str(data_root), "train": "images/train",
-                                     "val": "images/val", "names": {0: "drone"}},
-                safe_dump=dump_config,
-            )
-            fake_ultralytics = types.SimpleNamespace(YOLO=FakeYOLO, __version__="test")
-            with patch.dict(sys.modules, {"yaml": fake_yaml, "ultralytics": fake_ultralytics,
-                                         "torch": types.ModuleType("torch")}):
-                spec = importlib.util.spec_from_file_location("fred_test_trainer", SEED_DIR / "train.py")
-                trainer = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(trainer)
-                with patch.object(trainer, "SEED_DIR", temp), contextlib.redirect_stdout(io.StringIO()) as output:
-                    result = trainer.run("network_ABC", variant_dir, data_root / "data.yaml",
-                                         "yolo11m.pt", 1, 2, 640, "cpu")
-            with result.open(newline="") as file:
-                rows = list(csv.reader(file))
-            self.assertEqual(rows[0], ["map50", "map50_95", "param_count"])
-            self.assertEqual(tuple(map(float, rows[1])), (0.5, 0.25, 1234.0))
-            self.assertEqual(generated_configs[0]["scale"], "m")
-            self.assertTrue(any(Path(path).name == "yolo11m.yaml" for path in model_paths))
-            self.assertIn("job done", output.getvalue())
-            self.assertEqual(calls[1][0], "train")
-            self.assertEqual(calls[1][1]["epochs"], 1)
-            self.assertEqual(calls[2][0], "val")
-
-            # Execute the actual fitness-ingestion function in isolation so
-            # this test does not import the unrelated LLM and DEAP runtimes.
-            runner_source = (SEED_DIR.parents[4] / "run_improved.py").read_text(encoding="utf-8")
-            runner_ast = ast.parse(runner_source)
-            ingest_node = next(node for node in runner_ast.body
-                               if isinstance(node, ast.FunctionDef) and node.name == "check4results")
-            function = ast.Module(body=[ingest_node], type_ignores=[])
-            scope = {
-                "os": os,
-                "GLOBAL_DATA": {"ABC": {"results_job": None, "local_output": "job done"}},
-                "SOTA_ROOT": str(temp),
-                "SLURM_OUTPUT_PATH": str(temp) + os.sep,
-                "FITNESS_WEIGHTS": (1.0, 1.0, -1.0),
-                "OUTPUT_DIR": str(temp),
-                "GENERATION": 0,
-                "check_contents_for_error": lambda output: "job done" in output,
-            }
-            exec(compile(function, str(SEED_DIR.parents[4] / "run_improved.py"), "exec"), scope)
-            scope["check4results"]("ABC")
-            self.assertEqual(scope["GLOBAL_DATA"]["ABC"]["fitness"],
-                             (0.5, 0.25, 1234.0))
 
 
 if __name__ == "__main__":

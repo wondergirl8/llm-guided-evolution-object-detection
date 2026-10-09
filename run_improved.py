@@ -324,7 +324,8 @@ def check_contents_for_error(contents):
     """
     contents_lower = contents.lower()
     # Check for explicit error indicators
-    if "traceback" in contents_lower or "slurmstepd: error" in contents_lower:
+    if ("traceback" in contents_lower or "slurmstepd: error" in contents_lower
+            or "fred_run_failed" in contents_lower):
         print("\t☠ Error Found in LLM Job Output.", flush=True)
         return False
     # Check for Slurm time-limit or cancellation

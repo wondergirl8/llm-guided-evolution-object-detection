@@ -41,9 +41,9 @@ select_valid_sequence() {
     report="$REPORT_DIR/${split}_${sequence}.json"
     log="$REPORT_DIR/${split}_${sequence}.log"
     echo "Inspecting $split sequence $sequence"
-    if "$PY" -m sota.FRED_LLM_GE.phase0_data inspect-sequence "$sequence" \
+    if "$PY" -m sota.FRED_LLM_GE.archive.phase0_data_old inspect-sequence "$sequence" \
       --inventory "$INVENTORY" --official-split "$OFFICIAL" \
-      --project-split "$PROJECT" --allow-partial-out-of-bounds \
+      --project-split "$PROJECT" --annotation-policy dg-p0-04-v1 \
       --output "$report" >"$log" 2>&1; then
       if "$PY" - "$report" <<'PY'
 import json, sys
@@ -103,14 +103,14 @@ TRAIN_SEQ=$SELECTED_SEQUENCE
 select_valid_sequence validation "${VAL_CANDIDATES[@]}"
 VAL_SEQ=$SELECTED_SEQUENCE
 echo "Preparing FRED train sequence $TRAIN_SEQ and validation sequence $VAL_SEQ"
-"$PY" -m sota.FRED_LLM_GE.phase0_data build-manifest \
+"$PY" -m sota.FRED_LLM_GE.archive.phase0_data_old build-manifest \
   --inventory "$INVENTORY" \
   --official-split "$OFFICIAL" \
   --project-split "$PROJECT" \
-  --allow-partial-out-of-bounds \
+  --annotation-policy dg-p0-04-v1 \
   --sequence "$TRAIN_SEQ" --sequence "$VAL_SEQ" \
   --output "$MANIFEST"
-"$PY" -m sota.FRED_LLM_GE.phase1_detection.adapters.yolo11 \
+"$PY" -m sota.FRED_LLM_GE.data.yolo_export \
   --manifest "$MANIFEST" --inventory "$INVENTORY" \
   --output "$EXPORT" --train-limit 32 --val-limit 32
 
