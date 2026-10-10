@@ -39,8 +39,9 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     # Split the input files
     parts_x = split_file(input_filename_x)
     parts_y = split_file(input_filename_y)
-    # Create tuples of parts to be augmented
-    parts = [(x, y, idx) for idx, (x, y) in enumerate(zip(parts_x[1:], parts_y[1:]))]
+    # Create tuples of parts to be augmented. parts_x[0] is the protected
+    # preamble, so indices start at 1 to address the mutable chunks.
+    parts = [(x, y, idx) for idx, (x, y) in enumerate(zip(parts_x[1:], parts_y[1:]), start=1)]
     random.shuffle(parts)
     # Find differing parts
     for x, y, augment_idx in parts:
@@ -55,12 +56,20 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
 
     # Add code to be augmented
     txt2llm = template_txt.format(x.strip(), y.strip())
-    # Generate augmented code
-    code_from_llm = generate_augmented_code(txt2llm, augment_idx, apply_quality_control,
+    # Append the project's rules (shape contract, no markers, ...) as mutation does
+    rules_path = globals().get("CONSTANT_RULES_PATH")
+    if rules_path:
+        if not os.path.isabs(rules_path):
+            rules_path = os.path.join(ROOT_DIR, rules_path)
+        with open(rules_path, 'r') as file:
+            txt2llm = f'{txt2llm}\n{file.read()}'
+    # Generate augmented code (retrieve_base_code indexes the mutable chunks from 0)
+    code_from_llm = generate_augmented_code(txt2llm, augment_idx - 1, apply_quality_control,
                                             top_p, llm_model, temperature)
     
     if not code_from_llm:
-        code_from_llm = txt2llm
+        # Keep the first parent's chunk rather than writing the prompt into the model
+        code_from_llm = x.strip()
     
     # Insert note if present
     temp_txt = parts_x[augment_idx]
@@ -87,10 +96,13 @@ def write_augmented_code(output_filename, parts_x, parts_y):
         _description_
     """    
 
-    try:
-        prompt_log_cross = parts_y[0].split("# --PROMPT LOG--\n")[0]
+    # Only copy parent y's prompt log; without the marker, split() would return
+    # y's whole preamble and paste it into the child as live code.
+    marker = "# --PROMPT LOG--\n"
+    if marker in parts_y[0]:
+        prompt_log_cross = parts_y[0].split(marker)[0]
         prompt_log_cross = f"\n# {'='*10} Start: GeneCrossed\n{prompt_log_cross.strip()}\n# {'='*10} End:\n"
-    except IndexError:
+    else:
         prompt_log_cross = ""
 
     python_network_txt = prompt_log_cross + '# --OPTION--'.join(parts_x)
