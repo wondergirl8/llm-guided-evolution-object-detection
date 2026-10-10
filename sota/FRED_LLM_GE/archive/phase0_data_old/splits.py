@@ -48,19 +48,22 @@ class ProjectSplitManifest:
     validation: tuple[str, ...]
     held_out_test: tuple[str, ...]
     approval_reference: str
+    recording_groups: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @property
     def content_hash(self) -> str:
-        return stable_hash(
-            {
-                "version": self.version,
-                "grouping_unit": self.grouping_unit,
-                "train": self.train,
-                "validation": self.validation,
-                "held_out_test": self.held_out_test,
-                "approval_reference": self.approval_reference,
-            }
-        )
+        content = {
+            "version": self.version,
+            "grouping_unit": self.grouping_unit,
+            "train": self.train,
+            "validation": self.validation,
+            "held_out_test": self.held_out_test,
+            "approval_reference": self.approval_reference,
+        }
+        # Preserve the identity of existing sequence-only manifests.
+        if self.grouping_unit == "recording_group":
+            content["recording_groups"] = dict(self.recording_groups)
+        return stable_hash(content)
 
 
 def parse_split_text(content: str, *, source: str) -> tuple[str, ...]:
@@ -184,6 +187,25 @@ def validate_project_split(
         raise ValueError("project train, validation, and held-out test must all be non-empty")
     if train & validation or train & test or validation & test:
         raise ValueError("project train/validation/test sequence membership overlaps")
+    if project.grouping_unit == "recording_group":
+        if not project.recording_groups:
+            raise ValueError("recording_group split requires explicit recording groups")
+        group_names, grouped = set(), set()
+        for name, members in project.recording_groups:
+            if not isinstance(name, str) or not name.strip() or name in group_names:
+                raise ValueError("recording groups require unique non-empty names")
+            group_names.add(name)
+            _validate_unique_decimal_members(members, f"recording group {name}")
+            group = set(members)
+            if not group or grouped & group:
+                raise ValueError("recording groups must be non-empty and disjoint")
+            if not (group <= train or group <= validation):
+                raise ValueError(f"recording group {name} crosses a split or includes a non-development ID")
+            grouped.update(group)
+        if grouped != train | validation:
+            raise ValueError("recording groups must cover development membership exactly")
+    elif project.recording_groups:
+        raise ValueError("explicit recording groups require recording_group grouping")
     official_train = set(official.challenging_train)
     official_test = set(official.challenging_test)
     if train | validation != official_train:
@@ -207,7 +229,7 @@ def validate_official_split_manifest(
 def _validate_unique_decimal_members(members: tuple[str, ...], name: str) -> None:
     if len(members) != len(set(members)):
         raise ValueError(f"{name} contains duplicate sequence IDs")
-    invalid = [member for member in members if not member.isdecimal()]
+    invalid = [member for member in members if not isinstance(member, str) or not member.isdecimal()]
     if invalid:
         raise ValueError(f"{name} contains invalid sequence IDs: {invalid}")
 
@@ -243,6 +265,9 @@ def load_official_split_manifest(path: str | Path) -> OfficialSplitManifest:
 
 def load_project_split_manifest(path: str | Path) -> ProjectSplitManifest:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    groups = raw.get("recording_groups", {})
+    if not isinstance(groups, dict) or any(not isinstance(members, list) for members in groups.values()):
+        raise ValueError("recording_groups must be an object of sequence-ID lists")
     return ProjectSplitManifest(
         version=raw["version"],
         grouping_unit=raw["grouping_unit"],
@@ -250,4 +275,5 @@ def load_project_split_manifest(path: str | Path) -> ProjectSplitManifest:
         validation=tuple(raw["validation"]),
         held_out_test=tuple(raw["held_out_test"]),
         approval_reference=raw["approval_reference"],
+        recording_groups=tuple((name, tuple(members)) for name, members in groups.items()),
     )

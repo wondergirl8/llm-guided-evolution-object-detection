@@ -246,6 +246,73 @@ leakage. If interrupted, a later job can use its partially completed resume
 directory as the source; verified records and their original producing contexts
 remain reusable across another unrelated commit.
 
+## Approved working scene split
+
+Bill approved the scene-group proposal for infrastructure work on 2026-10-10.
+The decision is recorded in
+`docs/decisions/DG-P0-02-scene-groups-infrastructure-v1.md`; exact membership is
+`configs/phase0/project_split_scene_groups_infrastructure_v1.json`.
+It assigns 129 sequences to training and 43 to validation (the complete skyline
+and arched-hall groups), preserving all 59 official held-out test IDs. Every
+reviewed group stays wholly on one side. Uncertain outdoor connections are
+conservatively merged. Recording-session independence remains unverified.
+
+This is the working split for new infrastructure development. Preserve the
+previous split, manifest, 32/32 export and training runs as evidence of their
+original conditions. New manifest builds must pass the new JSON explicitly with
+`--project-split` and use fresh output/export paths; old validation sequence 8 now
+belongs to training, so the old export cannot represent the new split. Archived
+audit/resume defaults deliberately retain the original split for reproduction.
+The manifest's `BRINGUP` approval reference preserves non-freeze status under
+the approved annotation policy. This does not select the team's loader or settle
+the formal baseline/evolution protocol.
+
+On the Mac, review the change and manually commit/push these eight files on
+`fred-yolo11-infrastructure`:
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+cd /Users/billnguyen/Documents/llm-guided-evolution-object-detection
+test "$(git branch --show-current)" = fred-yolo11-infrastructure
+git add -- \
+  sota/FRED_LLM_GE/archive/phase0_data_old/splits.py \
+  sota/FRED_LLM_GE/configs/phase0/project_split_scene_groups_infrastructure_v1.json \
+  sota/FRED_LLM_GE/docs/decisions/DG-P0-02-scene-groups-infrastructure-v1.md \
+  sota/FRED_LLM_GE/artifacts/phase0/known_data_issues.yaml \
+  sota/FRED_LLM_GE/phase0_data/check_scene_split.py \
+  sota/FRED_LLM_GE/phase0_data/test_scene_split.py \
+  sota/FRED_LLM_GE/phase0_data/jobs/check_scene_split.sh \
+  sota/FRED_LLM_GE/phase1_detection/INTEGRATION_RUNBOOK.md
+git commit -m "Adopt approved FRED infrastructure scene-group split"
+git push origin fred-yolo11-infrastructure
+BASH
+```
+
+Then paste this in the existing ICE repository. This is a quick read-only check
+using the completed audit, not a Slurm/data-collection/training job:
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+test "$(git branch --show-current)" = fred-yolo11-infrastructure
+git diff --quiet
+git diff --cached --quiet
+test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
+git fetch origin fred-yolo11-infrastructure
+git merge --ff-only origin/fred-yolo11-infrastructure
+bash sota/FRED_LLM_GE/phase0_data/jobs/check_scene_split.sh
+BASH
+```
+
+Success prints `SCENE SPLIT CHECK COMPLETE: 129 train / 43 validation; 59 held out;
+no training submitted`. The checker validates the existing official-manifest
+hash/membership, approved groups, saved summary/receipt hashes, every record and
+thumbnail hash, and reviewed frame totals. Audit records retain their original
+split labels and producing contexts. It never rewrites them to match the new
+membership. Missing or changed evidence fails visibly. Keep this result with the
+completed audit before preparing a fresh larger-data export.
+
 ## Research boundary
 
 The prepared-data exporter is `sota.FRED_LLM_GE.data.yolo_export`, using
@@ -258,9 +325,9 @@ split/leakage gate, controlled training/fitness protocol, validated baseline, an
 complete evolution bridge/pilot still precede a research generation. Do not
 start `run_improved.py` with this smoke dataset.
 
-The next data expansion needs explicit sequence membership and a leakage audit;
-the existing DG-P0-02 bring-up exception covers the bounded subset, not a formal
-larger-data protocol. Treat LR 0.0002 and full precision as the working engineering
+The next data expansion uses the approved working scene-group membership above;
+the final research freeze and larger-data protocol remain separate decisions.
+Treat LR 0.0002 and full precision as the working engineering
 settings supported by job 6135264, not a frozen DG-P1-04 decision. DG-P1-04/05/06
 still precede formal baseline execution. Configuration-check success alone is
 not evidence that the entire branch is ready to merge or that evolution works.

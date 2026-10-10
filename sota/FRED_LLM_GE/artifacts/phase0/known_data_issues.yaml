@@ -38,7 +38,7 @@ issues:
       annotation_count: 2
     handling: Preserve complete source records separately and omit them from frame labels; do not exclude either sequence. Other unmatched timestamps remain blocking.
   - id: P0-ISSUE-004
-    status: open_DG-P0-02_scene_grouping_review
+    status: working_scene_groups_approved_final_research_freeze_pending
     category: repeated_scene_across_bringup_split
     affected_scope:
       official_split: challenging_train
@@ -48,5 +48,6 @@ issues:
       source: docs/decisions/DG-P0-05-review-6088625.md
       observation: The final reviewed RGB frames share the courtyard facade, shutters, circular opening, and well from a similar view.
       recording_session_id: unknown
-    handling: Keep the bring-up split unchanged and exclude its scores from fitness; audit scene groups before the research split is frozen.
+    handling: Preserve the old bring-up split and exclude its scores from fitness. Use the approved 129/43 scene-group working split for new infrastructure development; research freeze remains pending.
+    working_split_decision: docs/decisions/DG-P0-02-scene-groups-infrastructure-v1.md
 guardrail: Explicit policy selection and traceable derived transforms are required. Approval does not freeze the dataset or authorize fitness from the bring-up split.
