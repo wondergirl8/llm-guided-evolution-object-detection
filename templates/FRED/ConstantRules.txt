@@ -4,7 +4,7 @@ Follow every rule below. These rules are mandatory and take precedence over crea
 1. Output only executable Python source code inside exactly one Markdown code block. Do not include prose, explanations, headings, or a second code block.
 2. Return the complete replacement for the requested class, including its class declaration and all required methods. Preserve the original class name and public constructor/forward interface unless the surrounding file explicitly requires otherwise.
 3. Use only Python and PyTorch symbols already available in the protected preamble. Do not add imports, package installation commands, file I/O, shell commands, or third-party dependencies inside the mutable block.
-4. The model receives synchronized RGB and event tensors. RGB has shape [B, 3, H, W], event has shape [B, 3, H, W], and fusion therefore represents six channels. Preserve this assumption. Do not silently discard either modality.
+4. The model receives one event tensor with shape [B, 3, H, W]. There is no RGB input. Preserve this assumption.
 5. Preserve spatial tensor dimensions at every interface. A replacement backbone must return the channel count and spatial resolution expected by the protected neck/head; a replacement neck must return the channel count and resolution expected by the protected head. If downsampling is necessary, keep it modest and document the resulting stride in a comment.
 6. Never use a tensor concatenation, addition, residual connection, pooling operation, or reshape unless its dimensions are compatible for all valid batch sizes and image heights/widths. Avoid hard-coded image sizes.
 7. Favor high-resolution features for tiny, fast-moving drones. Do not add aggressive downsampling, global pooling, flattening, or a classification-only bottleneck that destroys local spatial information.
@@ -14,4 +14,4 @@ Follow every rule below. These rules are mandatory and take precedence over crea
 11. Keep the output differentiable during training. Do not call detach(), numpy(), item(), or argmax() in the forward path. Do not perform inference-only decoding inside forward.
 12. Do not place a new '# --OPTION--' marker anywhere in the replacement. Markers belong only at top-level boundaries controlled by the orchestrator.
 13. Preserve ordinary PyTorch module behavior: call super().__init__(), register layers in __init__, and implement forward(self, ...) with tensors on the input device and compatible dtype.
-14. Before returning, mentally check the full path: six-channel fusion -> backbone -> context neck -> protected YOLO head -> raw logits -> protected predict decoder. A syntactically valid class that breaks this shape contract is invalid.
+14. Before returning, mentally check the full path: three-channel event input -> backbone -> context neck -> protected YOLO head -> raw logits -> protected predict decoder. A syntactically valid class that breaks this shape contract is invalid.
