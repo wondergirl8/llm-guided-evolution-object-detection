@@ -1,0 +1,8 @@
+Make one focused architectural change to this detector class that should help localize tiny drones in event-camera frames, such as better use of local context, a residual path, or a more efficient convolution pattern.
+
+Keep the class name, constructor arguments, forward signature, and output shape unchanged.
+
+The current code block:
+```python
+{}
+```
