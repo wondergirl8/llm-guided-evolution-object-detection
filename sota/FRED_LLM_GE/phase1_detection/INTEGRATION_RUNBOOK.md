@@ -1,87 +1,118 @@
-# Combined FRED Event-only YOLO11 integration check
+# FRED Event-only YOLO11 integration and stability checks
 
-The local `fred-yolo11-infrastructure` checkout contains a resolved, uncommitted
-merge of `MosesTheRedSea-main` at `3b48a878685fbb020598c3048797bb468e07330c`.
-No commit, push, or PR was made. The original HEAD is
-`ac33341b2e72346f176bb3b730d0a691e7a4f93a`.
+Work on `fred-yolo11-infrastructure` only. The combined integration was
+committed by the user after incorporating `MosesTheRedSea-main` at
+`3b48a878685fbb020598c3048797bb468e07330c`. The earlier uncommitted-merge patch
+workflow is obsolete: use a reviewed commit on your branch and pull that branch
+on ICE. Do not apply `fred-integration.patch` again.
 
-The attached binary patch applies this exact combined source to an ICE checkout
-at that original HEAD without creating a commit. Do not pull or reset the local
-checkout while its merge is pending. A later PR requires your reviewed commit;
-resolving local conflicts does not establish a published PR's mergeability.
+## Existing engineering evidence
 
-## What this check runs
+- Preparation job 6132562 installed the bounded dependencies and reused the export.
+- Integration job 6132563 exercised the protected seed, detection forward pass,
+  one-epoch training, checkpoint loading, and shared COCO evaluator.
+- Learning job 6133680 trained for 50 epochs on 32 training and 32 validation
+  images. It fitted the training subset but validation stayed weak. Its CSV
+  contains NaN validation losses in epochs 21, 22, and 25–32, so its successful
+  process exit is not evidence of stable training.
 
-1. A CPU preparation job installs the bounded-run dependencies into
-   `data/.venv-yolo11`. It reuses and validates the existing labeled export and
-   `yolo11m.pt`; only missing data/checkpoint artifacts are prepared/downloaded.
-2. One GPU job validates the protected Event-only seed, constructs YOLO11m,
-   performs a detection forward pass, trains for one epoch on the entire bounded
-   export, and evaluates the resulting checkpoint using the team's COCO reporter.
-3. Success requires a checkpoint, evaluation JSON, and matching three-column
-   result CSV. Failure exits nonzero and publishes no success fitness.
+These are engineering diagnostics. Do not repeat the preparation or one-epoch
+integration job just to test the precision change.
 
-Existing proposal job 6009285 and candidate training job 6009377 do not need to
-be repeated. This run checks the newly combined trainer/evaluator path.
+## Loss-history and precision controls
 
-The prepared-data exporter now lives at `sota.FRED_LLM_GE.data.yolo_export`,
-using `archive.phase0_data_old` as an explicit compatibility backend. The main
-branch's streaming loader and fusion seed remain separate. This integration
-does not settle the team's authoritative loader decision.
+The canonical `seeds/yolo11/train_eval.py` supports `--amp` (the previous default)
+and `--no-amp` (full precision). The selected option is recorded in the evaluation
+JSON's `metadata.training_config` and its configuration hash.
 
-## Upload and submit on ICE
+The trainer checks all six training/validation box, classification, and DFL loss
+columns after each recorded epoch and again before publishing a checkpoint or
+fitness. NaN, infinity, missing history, malformed loss cells, or missing/duplicate
+epochs exit nonzero with `FRED_RUN_FAILED [training_history]` and a failure JSON.
+Raw history/checkpoints remain in the run directory for diagnosis; no checkpoint
+is promoted to `trained_models` and no success report or fitness CSV is written.
+A healthy final epoch cannot hide earlier invalid losses. Finite losses alone do
+not establish convergence; their maximum values are retained for inspection.
 
-Upload `fred-integration.patch` to the **root of your existing ICE repository**.
-Open a terminal in that repository. Paste this complete block:
+The callback and history format were checked against Ultralytics v8.4.165:
+[trainer CSV/callback ordering](https://github.com/ultralytics/ultralytics/blob/v8.4.165/ultralytics/engine/trainer.py)
+and [precision configuration](https://github.com/ultralytics/ultralytics/blob/v8.4.165/ultralytics/cfg/default.yaml).
+
+## Full-precision stability diagnostic
+
+`jobs/check_yolo11_stability.sbatch` repeats the learning diagnostic with AMP
+disabled, retaining 50 epochs, batch 2, image size 640, full subset, seed 0,
+pretraining, augmentations, optimizer defaults, and shared evaluator settings.
+This tests a plausible source of instability; AMP is not yet a confirmed cause.
+
+The job reuses `data/.venv-yolo11`, `data/fred_yolo11_bringup/data.yaml`, and
+`yolo11m.pt`. It requires the existing `learning_check_6133680_evaluation.json`,
+checks the previous manifest/provenance and seed identity, and refuses tracked
+uncommitted changes. It does not download new data or upgrade dependencies.
+It requests one GPU, eight CPUs, 24 GB RAM, and at most two hours. Record the
+allocated GPU printed in the log when comparing runs.
+
+After reviewing, committing, and pushing the changes to your branch yourself,
+paste this in the existing ICE checkout:
 
 ```bash
 bash <<'BASH'
 set -euo pipefail
 test "$(git branch --show-current)" = fred-yolo11-infrastructure
-test "$(git rev-parse HEAD)" = ac33341b2e72346f176bb3b730d0a691e7a4f93a
 git diff --quiet
 git diff --cached --quiet
 test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
-test -s fred-integration.patch
-git apply --check fred-integration.patch
-git apply fred-integration.patch
+git fetch origin fred-yolo11-infrastructure
+git merge --ff-only origin/fred-yolo11-infrastructure
+JOB=sota/FRED_LLM_GE/phase1_detection/jobs/check_yolo11_stability.sbatch
+test -s "$JOB"
+test -x data/.venv-yolo11/bin/python
+test -s data/fred_yolo11_bringup/data.yaml
+test -s yolo11m.pt
 mkdir -p data/logs
-PREP_ID=$(sbatch --parsable sota/FRED_LLM_GE/phase1_detection/jobs/prepare_yolo11_integration.sbatch)
-PREP_ID=${PREP_ID%%;*}
-RUN_ID=$(sbatch --parsable --dependency="afterok:$PREP_ID" sota/FRED_LLM_GE/phase1_detection/jobs/check_yolo11_integration.sbatch)
-RUN_ID=${RUN_ID%%;*}
-printf 'PREPARATION JOB: %s\nGPU CHECK JOB: %s\n' "$PREP_ID" "$RUN_ID"
-printf 'Logs: data/logs/fred-integration-prepare-%s.out and data/logs/fred-integration-%s.out\n' "$PREP_ID" "$RUN_ID"
-squeue -j "$PREP_ID,$RUN_ID"
+JOB_ID=$(sbatch --parsable "$JOB")
+JOB_ID=${JOB_ID%%;*}
+printf 'Stability-check job: %s
+Log: data/logs/fred-stability-%s.out
+' "$JOB_ID" "$JOB_ID"
+squeue -j "$JOB_ID"
 BASH
 ```
 
-The block stops before modifying source if the branch, HEAD, tracked work, pending
-merge, or patch check differs. It does not commit or push. If submission fails
-after the patch applied, do not reapply it: inspect the message, then submit the
-two jobs from the `mkdir` step. If preparation fails, the dependent GPU job does
-not start; inspect its log and cancel that waiting GPU job with `scancel <id>`.
-
-The check requests one generic GPU for at most two hours. Supply your normal
-PACE account/partition options to both `sbatch` calls if your checkout's scheduler
-configuration requires them. Source is validated locally; ICE scheduling and
-actual GPU execution require the submitted-job output.
-
-After completion, replace the IDs below with the printed values:
+Supply your usual PACE account/partition options to `sbatch` if required. Once
+finished, replace `JOB_ID` below with the printed number:
 
 ```bash
-sacct -j PREPARATION_ID,GPU_CHECK_ID --format=JobID,State,ExitCode,Elapsed
-tail -n 60 data/logs/fred-integration-prepare-PREPARATION_ID.out
-tail -n 100 data/logs/fred-integration-GPU_CHECK_ID.out
+sacct -j JOB_ID --format=JobID,State,ExitCode,Elapsed
+tail -n 100 data/logs/fred-stability-JOB_ID.out
 ```
 
-Paste those outputs back for verification. The GPU log must end with the
-checkpoint/report/CSV paths and `ENGINEERING CHECK COMPLETE`.
+Success requires `STABILITY CHECK COMPLETE`, 50 finite epochs, and AMP disabled.
+The log prints separate training and validation shared COCO scores. Preserve and
+compare the loss maxima too: eliminating NaN does not establish healthy learning
+or generalization. If this run still fails, inspect its first invalid epoch and
+failure JSON before changing another training variable.
+
+Artifacts use `stability_check_JOB_ID` to avoid overwriting prior runs:
+
+- `seeds/yolo11/runs/stability_check_JOB_ID/`: raw history, plots, and checkpoints.
+- `seeds/yolo11/trained_models/stability_check_JOB_ID.pt`: accepted checkpoint.
+- `seeds/yolo11/results/stability_check_JOB_ID_evaluation.json`: shared validation
+  report, precision configuration, loss maxima, and history hash.
+- `seeds/yolo11/results/stability_check_JOB_ID_results.csv`: shared metric row.
+- `data/fred_diagnostics/stability_check_JOB_ID.json`: separate train/validation
+  comparison; training scores are not selection fitness.
+- `seeds/yolo11/failures/stability_check_JOB_ID_failure.json`: rejection details
+  when the trainer fails.
 
 ## Research boundary
 
-This is an engineering integration run, not a formal baseline or an evolutionary
-generation. Its bounded 32/32 export must not supply selection fitness. The frozen
-split/leakage gate, controlled training/fitness protocol, validated non-evolutionary
-baseline, and complete evolution bridge/pilot still precede a research generation.
-Do not start `run_improved.py` with this smoke dataset.
+The prepared-data exporter is `sota.FRED_LLM_GE.data.yolo_export`, using
+`archive.phase0_data_old` as an explicit compatibility backend. The team's
+streaming loader and fusion seed remain separate; this diagnostic does not
+settle the authoritative loader decision.
+
+The bounded 32/32 export must not supply research selection fitness. The frozen
+split/leakage gate, controlled training/fitness protocol, validated baseline, and
+complete evolution bridge/pilot still precede a research generation. Do not
+start `run_improved.py` with this smoke dataset.

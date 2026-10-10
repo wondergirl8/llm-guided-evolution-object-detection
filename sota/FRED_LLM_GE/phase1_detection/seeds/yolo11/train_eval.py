@@ -5,6 +5,7 @@ baseline or authorize using smoke scores for research selection.
 """
 
 import argparse
+import csv
 import hashlib
 import importlib.metadata
 import json
@@ -39,6 +40,51 @@ PREDICT_CONF = 0.001
 PREDICT_IOU = 0.7
 PREDICT_MAX_DET = 100
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+LOSS_COLUMNS = tuple(f"{split}/{loss}_loss" for split in ("train", "val")
+                     for loss in ("box", "cls", "dfl"))
+
+
+class TrainingHistoryError(RuntimeError):
+    """Training did not produce a complete, finite loss history."""
+
+
+def validate_training_history(path):
+    """Reject invalid epochs even when a later checkpoint has finite scores."""
+    path = Path(path)
+    if not path.is_file():
+        raise TrainingHistoryError(f"missing training history: {path}")
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, skipinitialspace=True)
+        columns = [name.strip() for name in (reader.fieldnames or [])]
+        if len(set(columns)) != len(columns) or not {"epoch", *LOSS_COLUMNS} <= set(columns):
+            raise TrainingHistoryError(f"missing/duplicate training loss columns: {path}")
+        reader.fieldnames = columns
+        count = 0
+        maxima = {name: 0.0 for name in LOSS_COLUMNS}
+        for count, row in enumerate(reader, start=1):
+            try:
+                epoch = float(row["epoch"])
+            except (TypeError, ValueError) as error:
+                raise TrainingHistoryError(f"invalid epoch at row {count}: {path}") from error
+            if epoch != count:
+                raise TrainingHistoryError(f"missing/duplicate epoch at row {count}: {path}")
+            for column in LOSS_COLUMNS:
+                try:
+                    value = float(row[column])
+                except (TypeError, ValueError) as error:
+                    raise TrainingHistoryError(f"invalid {column} at epoch {count}: {path}") from error
+                if not math.isfinite(value):
+                    raise TrainingHistoryError(f"non-finite {column} at epoch {count}: {path}")
+                maxima[column] = max(maxima[column], value)
+        if count == 0:
+            raise TrainingHistoryError(f"empty training history: {path}")
+    return {"status": "finite", "epochs_completed": count,
+            "sha256": sha256_file(path), "max_losses": maxima}
+
+
+def check_epoch_losses(training):
+    # v8.4.165 writes/closes the CSV before on_fit_epoch_end, including final eval.
+    validate_training_history(training.csv)
 
 
 def sha256_file(path):
@@ -233,7 +279,7 @@ def report_metadata(data, variant_path, model_path, train_config):
 
 
 def run(model_name, variant_dir, data, weights, epochs, batch, imgsz, device,
-        preflight_only=False, run_id=None, fraction=1.0):
+        preflight_only=False, run_id=None, fraction=1.0, amp=True):
     if min(epochs, batch, imgsz) <= 0 or not 0 < fraction <= 1:
         raise ValueError("invalid training budget")
     module = load_model_module(model_name, Path(variant_dir))
@@ -249,7 +295,7 @@ def run(model_name, variant_dir, data, weights, epochs, batch, imgsz, device,
     train_config = {"data": str(Path(data).resolve()), "weights": weights,
                     "epochs": epochs, "fraction": fraction, "batch": batch,
                     "imgsz": imgsz, "seed": 0, "device": str(device),
-                    "deterministic": True, "gene_id": gene_id}
+                    "deterministic": True, "gene_id": gene_id, "amp": amp}
     with tempfile.TemporaryDirectory(prefix="fred-yolo11-config-") as config_dir:
         model = build_candidate(module, weights, config_dir)
         params = sum(p.numel() for p in model.model.parameters())
@@ -257,9 +303,12 @@ def run(model_name, variant_dir, data, weights, epochs, batch, imgsz, device,
         if preflight_only:
             print(f"preflight passed: {model_name}; scale m; {params} parameters", flush=True)
             return None
+        model.add_callback("on_fit_epoch_end", check_epoch_losses)
         model.train(data=str(data), epochs=epochs, fraction=fraction, batch=batch,
                     imgsz=imgsz, device=device, seed=0, deterministic=True,
+                    amp=amp,
                     project=str(SCRIPT_DIR / "runs"), name=output_id, exist_ok=False, save=True)
+        history = validate_training_history(model.trainer.csv)
         best = Path(model.trainer.best)
         if not best.is_file():
             raise RuntimeError("training produced no best checkpoint")
@@ -270,7 +319,9 @@ def run(model_name, variant_dir, data, weights, epochs, batch, imgsz, device,
         from ultralytics import YOLO
         trained = YOLO(str(model_path))
         images, label_dir = val_images(data)
-        payload = {"metadata": report_metadata(data, module.__file__, model_path, train_config),
+        metadata = report_metadata(data, module.__file__, model_path, train_config)
+        metadata.update(training_config=train_config, training_history=history)
+        payload = {"metadata": metadata,
                    "frames": predict_frames(trained, images, label_dir, imgsz, batch, device),
                    "params": params, "expected_sample_ids": [p.stem for p in images]}
         result, report_path = map_reporter.report(payload, sota_root=SCRIPT_DIR,
@@ -293,6 +344,8 @@ def main(argv=None):
     parser.add_argument("--imgsz", type=int, default=int(os.getenv("FRED_YOLO_IMGSZ", "640")))
     parser.add_argument("--device", default=os.getenv("FRED_YOLO_DEVICE", "0"))
     parser.add_argument("--run-id")
+    parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True,
+                        help="mixed precision (default enabled); --no-amp uses full precision")
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args(argv)
     output_id = args.run_id or ("seed" if args.model == "network" else args.model.removeprefix("network_"))
@@ -303,9 +356,10 @@ def main(argv=None):
     try:
         started = time.time()
         run(args.model, args.variant_dir, args.data, args.weights, args.epochs,
-            args.batch, args.imgsz, args.device, args.preflight_only, args.run_id, args.fraction)
+            args.batch, args.imgsz, args.device, args.preflight_only, args.run_id, args.fraction, args.amp)
     except Exception as error:
-        category = "existing_run" if isinstance(error, FileExistsError) else "training_or_evaluation"
+        category = ("training_history" if isinstance(error, TrainingHistoryError) else
+                    "existing_run" if isinstance(error, FileExistsError) else "training_or_evaluation")
         write_failure_results(output_id, locals().get("started", time.time()), repr(error), category)
         return 1
     return 0

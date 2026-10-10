@@ -1,6 +1,7 @@
 """Offline integration evidence: synthetic model outputs, real COCO evaluation."""
 
 import ast
+import csv
 import json
 import types
 from pathlib import Path
@@ -34,11 +35,16 @@ def training_fixture(tmp_path, monkeypatch):
     calls = []
 
     class FakeYOLO:
+        epoch_losses = {}
+
         def __init__(self, path):
             self.model = types.SimpleNamespace(
                 yaml=fake_yolo11_config(),
                 parameters=lambda: [types.SimpleNamespace(numel=lambda: 1234)])
             self.path = Path(path)
+            self.callbacks = {}
+        def add_callback(self, event, callback):
+            self.callbacks.setdefault(event, []).append(callback)
         def load(self, weights):
             assert self.path.name == "yolo11m.yaml"
             return self
@@ -47,7 +53,19 @@ def training_fixture(tmp_path, monkeypatch):
             best = Path(kwargs["project"]) / kwargs["name"] / "weights" / "best.pt"
             best.parent.mkdir(parents=True)
             best.write_bytes(b"synthetic checkpoint")
-            self.trainer = types.SimpleNamespace(best=best)
+            history = best.parent.parent / "results.csv"
+            self.trainer = types.SimpleNamespace(best=best, csv=history)
+            with history.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["epoch", *trainer.LOSS_COLUMNS])
+                writer.writeheader()
+            for epoch in range(1, kwargs["epochs"] + 1):
+                with history.open("a", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=["epoch", *trainer.LOSS_COLUMNS])
+                    losses = {key: 1.0 for key in trainer.LOSS_COLUMNS}
+                    losses.update(self.epoch_losses.get(epoch, {}))
+                    writer.writerow({"epoch": epoch, **losses})
+                for callback in self.callbacks.get("on_fit_epoch_end", []):
+                    callback(self.trainer)
         def predict(self, source, **kwargs):
             if isinstance(source, np.ndarray):
                 return [types.SimpleNamespace(orig_shape=source.shape[:2])]
@@ -65,11 +83,16 @@ def test_seed_training_reaches_shared_evaluator_and_refuses_rerun(training_fixtu
     assert values == pytest.approx([1, 1, 1234])
     assert "job done" in capsys.readouterr().out
     assert calls[0]["fraction"] == 1 and calls[0]["exist_ok"] is False
+    assert calls[0]["amp"] is True
     report = json.loads((output / "results" / "seed_check_evaluation.json").read_text())
     assert report["metadata"]["modality"] == "event"
     assert report["metadata"]["experiment_purpose"] == "synthetic offline integration fixture"
     assert report["metadata"]["candidate_gene_id"] == "seed"
     assert report["metadata"]["code_files_sha256"]
+    assert report["metadata"]["training_config"]["amp"] is True
+    history = output / "runs" / "seed_check" / "results.csv"
+    assert report["metadata"]["training_history"]["sha256"] == trainer.sha256_file(history)
+    assert report["metadata"]["training_history"]["epochs_completed"] == 1
     assert (output / "trained_models" / "seed_check.pt").is_file()
     with pytest.raises(FileExistsError):
         trainer.run("network", output / "models", data, "yolo11m.pt", 1, 2, 64, "cpu", run_id="seed_check")
@@ -145,3 +168,61 @@ def test_run_loop_recognizes_failed_trainer_sentinel():
     namespace = {}
     exec(compile(ast.Module(body=[node], type_ignores=[]), "run_improved.py", "exec"), namespace)
     assert namespace[node.name]("FRED_RUN_FAILED [data]: missing labels") is False
+
+
+@pytest.mark.parametrize("flag,amp", [("--amp", True), ("--no-amp", False)])
+def test_precision_flag_reaches_training_and_report(training_fixture, flag, amp):
+    data, output, calls, _ = training_fixture
+    assert trainer.main(["--data", str(data), "--device", "cpu", "--epochs", "2",
+                         "--run-id", "precision_check", flag]) == 0
+    assert calls[0]["amp"] is amp
+    report = json.loads((output / "results" / "precision_check_evaluation.json").read_text())
+    assert report["metadata"]["training_config"]["amp"] is amp
+    assert report["metadata"]["training_history"]["epochs_completed"] == 2
+
+
+@pytest.mark.parametrize("column", trainer.LOSS_COLUMNS)
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_nonfinite_loss_stops_at_bad_epoch_without_fitness(
+        training_fixture, monkeypatch, capsys, column, value):
+    data, output, _, model = training_fixture
+    monkeypatch.setattr(model, "epoch_losses", {2: {column: value}})
+    assert trainer.main(["--data", str(data), "--device", "cpu", "--epochs", "3",
+                         "--run-id", "nonfinite_check", "--no-amp"]) == 1
+    failure = json.loads((output / "failures" / "nonfinite_check_failure.json").read_text())
+    assert failure["category"] == "training_history"
+    assert f"non-finite {column} at epoch 2" in failure["message"]
+    history = output / "runs" / "nonfinite_check" / "results.csv"
+    with history.open() as handle:
+        assert len(list(csv.DictReader(handle))) == 2  # Epoch 3 never runs.
+    assert not (output / "trained_models" / "nonfinite_check.pt").exists()
+    assert not (output / "results" / "nonfinite_check_results.csv").exists()
+    assert not (output / "results" / "nonfinite_check_evaluation.json").exists()
+    text = capsys.readouterr().out
+    assert "FRED_RUN_FAILED" in text and "job done" not in text
+
+
+def test_final_guard_rejects_recovered_history_when_callback_did_not_run(
+        training_fixture, monkeypatch):
+    data, output, _, model = training_fixture
+    monkeypatch.setattr(model, "add_callback", lambda *args: None)
+    monkeypatch.setattr(model, "epoch_losses", {1: {"val/cls_loss": "nan"}})
+    # The last epoch is healthy, but the earlier invalid loss still rejects the run.
+    assert trainer.main(["--data", str(data), "--device", "cpu", "--epochs", "2",
+                         "--run-id", "recovered_check"]) == 1
+    assert not (output / "results" / "recovered_check_results.csv").exists()
+
+
+@pytest.mark.parametrize("contents", [
+    None, "", "epoch,train/box_loss\n1,1\n",
+    "epoch," + ",".join(trainer.LOSS_COLUMNS) + "\n",
+    "epoch," + ",".join(trainer.LOSS_COLUMNS) + "\n1,1,1,1,1,1\n",
+    "epoch," + ",".join(trainer.LOSS_COLUMNS) + "\n2,1,1,1,1,1,1\n",
+    "epoch," + ",".join(trainer.LOSS_COLUMNS) + "\ninvalid,1,1,1,1,1,1\n",
+])
+def test_missing_or_malformed_training_history_is_rejected(tmp_path, contents):
+    history = tmp_path / "results.csv"
+    if contents is not None:
+        history.write_text(contents)
+    with pytest.raises(trainer.TrainingHistoryError):
+        trainer.validate_training_history(history)
