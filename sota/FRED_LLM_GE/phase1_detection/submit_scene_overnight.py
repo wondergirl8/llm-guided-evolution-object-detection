@@ -49,18 +49,22 @@ def reservation(job: str) -> tuple[int, int]:
     return count, count * seconds
 
 
-def check_budget(jobs: list[tuple[str, str]]) -> dict:
+def check_budget(jobs: list[tuple[str, str]], *, new_gpu_seconds: int = GPU_SECONDS,
+                 new_jobs: int = 2) -> dict:
+    if (type(new_gpu_seconds) is not int or new_gpu_seconds <= 0
+            or type(new_jobs) is not int or new_jobs <= 0):
+        raise ValueError("new resource reservation must be positive integers")
     reservations = {job_id: reservation(record) for job_id, record in jobs}
     if len(reservations) != len(jobs):
         raise ValueError("duplicate Slurm job identities")
     existing_seconds = sum(amount for _, amount in reservations.values())
-    if len(jobs) + 2 > MAX_JOBS:
-        raise ValueError("adding two jobs would exceed the documented 50-job limit")
-    if existing_seconds + GPU_SECONDS > MAX_GPU_SECONDS:
+    if len(jobs) + new_jobs > MAX_JOBS:
+        raise ValueError("adding jobs would exceed the documented 50-job limit")
+    if existing_seconds + new_gpu_seconds > MAX_GPU_SECONDS:
         raise ValueError("adding this job would exceed the documented 32 GPU-hour envelope")
     return {"existing_jobs": len(jobs), "existing_reserved_gpu_hours": existing_seconds / 3600,
-            "new_gpu_hours": GPU_SECONDS / 3600,
-            "total_reserved_gpu_hours": (existing_seconds + GPU_SECONDS) / 3600,
+            "new_gpu_hours": new_gpu_seconds / 3600,
+            "total_reserved_gpu_hours": (existing_seconds + new_gpu_seconds) / 3600,
             "wait_for_gpu_jobs": [job_id for job_id, (count, _) in reservations.items() if count]}
 
 

@@ -405,6 +405,65 @@ receipt; Slurm executes independently of the terminal. In the morning inspect
 the two logs and the summary. Complete success prints
 `OVERNIGHT SCENE CHECK COMPLETE; engineering diagnostic only`.
 
+## Review a completed scene checkpoint by scene
+
+Job 6141846 completed 50 finite epochs on 1,536 training and 1,024 validation
+frames. Its shared COCO result was mAP50 0.8798196839268114 and mAP50:95
+0.4797038173366039. The CSV hash is
+`0f59558d9692ef7ab6ab44428a481bdaf3cb88c18a1ba46a852cb2f8bb49df64`.
+The best CSV epoch was 45 (Ultralytics mAP50 0.86556, mAP50:95 0.46116).
+The shared evaluator and Ultralytics plots use different evaluator settings;
+their scores are labeled separately rather than treated as identical.
+The downloaded review archive showed correctly placed arched-hall detections;
+the saved early validation batches cover sequence 180 only. The combined score
+does not establish equal performance in sequence 52 or across all development
+recordings. These remain engineering observations, not a formal baseline.
+
+`review_scene_checkpoint` reuses the saved checkpoint and existing export. It
+performs **no training, data download or evolutionary selection**. It checks
+checkpoint, original report, source record, training history and model/evaluator
+code identities, then predicts every validation frame once with the original
+postprocessing/image size/batch. It computes combined and per-sequence COCO AP,
+including frames with no detections. Combined AP must reproduce the original
+within an absolute tolerance of 0.00001; failure preserves predictions/metrics
+but does not publish a success summary. It records current validation image and
+label byte hashes and checks they remain unchanged during review. Those hashes
+do not prove byte identity back to the original training run.
+
+The review is one job with a **15-minute walltime, one GPU, 4 CPUs and 24 GiB**.
+It reuses the documented 32 GPU-hour / 50-job checks, reserving 0.25 new GPU-hours
+and one queue slot, waits for existing GPU jobs, and rejects duplicate active
+reviews. The original two-job overnight reservation is unchanged. New review
+outputs go to a unique `data/fred_checkpoint_reviews/scene_check_JOBID_*/`
+directory, never into the original run. Each scene preview has six evenly
+spaced label/prediction pairs. Display confidence is fixed at 0.5; AP uses
+conf=0.001, IoU=0.7, max_det=100 exactly as the original shared evaluation.
+
+After manually committing/pushing the review tools on the Mac, run **on ICE in
+the repository directory**:
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+test "$(git branch --show-current)" = fred-yolo11-infrastructure
+git diff --quiet
+git diff --cached --quiet
+test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
+git fetch origin fred-yolo11-infrastructure
+git merge --ff-only origin/fred-yolo11-infrastructure
+data/.venv-yolo11/bin/python -m sota.FRED_LLM_GE.phase1_detection.review_scene_checkpoint \
+  --directory data/fred_overnight/scene_zeqt5oqs \
+  --run-id scene_check_6141846
+BASH
+```
+
+Save the printed job ID and output path. Inspect its Slurm state and
+`data/logs/fred-scene-review-JOBID.out` afterward. A completed review prints
+`SCENE CHECKPOINT REVIEW COMPLETE; no training or evolution` and publishes
+`summary.json`, `metrics.json`, `predictions.json`, and two scene previews.
+If a source/code/reproduction check fails, inspect the preserved failure output
+before changing the dataset or requesting another training run.
+
 ## Research boundary
 
 The prepared-data exporter is `sota.FRED_LLM_GE.data.yolo_export`, using
