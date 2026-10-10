@@ -191,6 +191,61 @@ substitute `learning_rate_check_JOB_ID` for the lower-LR mode:
 - `seeds/yolo11/failures/stability_check_JOB_ID_failure.json`: rejection details
   when the trainer fails.
 
+## Resume the incomplete scene audit
+
+ICE array 6092655 left 136 of 172 scene records in
+`data/fred_scene_audit/v1_ac33341b2e72`. Six shards failed with
+`OUT_OF_MEMORY` at the 16 GB allocation; shards 2 and 3 completed. The current
+input/collector context differs from those saved records only in `code_revision`.
+The original collector, source configuration, and split membership are unchanged.
+
+`phase0_data/jobs/resume_development_scenes.sbatch` is a serial CPU job with
+48 GB memory and a four-hour limit. It imports the archived compatibility backend
+explicitly; this does not select a team-wide loader. It verifies all saved record
+contexts and thumbnail hashes before staging a new job-specific output directory,
+then uses the unchanged collector to skip the staged records and collect only
+missing sequences. Source artifacts remain unchanged. Reuse fails if any recorded
+input hash, collector source hash, or sampling policy differs; only a Git revision
+difference is permitted. More memory addresses the observed allocation failure,
+but successful remote completion still needs verification.
+
+Reused records contain the current verification `context`, an original
+`producing_context`, and `reused_from` source path/hash/context. The
+`resume_receipt.json` lists the reused records and the resume wrapper's source hash.
+Fresh records retain the current producing context. Do not rewrite the original
+records' Git revisions to make a resume pass.
+
+After manually committing/pushing and pulling this change on ICE, submit:
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+test "$(git branch --show-current)" = fred-yolo11-infrastructure
+git diff --quiet
+git diff --cached --quiet
+test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
+git fetch origin fred-yolo11-infrastructure
+git merge --ff-only origin/fred-yolo11-infrastructure
+JOB=sota/FRED_LLM_GE/phase0_data/jobs/resume_development_scenes.sbatch
+SOURCE=data/fred_scene_audit/v1_ac33341b2e72
+test -s "$JOB" && test -d "$SOURCE"
+test -x data/.venv-yolo11/bin/python
+mkdir -p data/logs
+JOB_ID=$(sbatch --parsable --partition=pace-cpu --account=isye "$JOB" "$SOURCE")
+JOB_ID=${JOB_ID%%;*}
+printf 'Scene-resume job: %s\nLog: data/logs/fred-scene-resume-%s.out\n' "$JOB_ID" "$JOB_ID"
+squeue -j "$JOB_ID"
+BASH
+```
+
+Success requires `SCENE AUDIT RESUME COMPLETE: 172/172`, scheduler exit `0:0`,
+and `data/fred_scene_audit/resume_JOB_ID/summary.json` with `complete: true`.
+Download that summary, `resume_receipt.json`, and the overview pages for manual
+scene-group review. Completion does not freeze a split or establish absence of
+leakage. If interrupted, a later job can use its partially completed resume
+directory as the source; verified records and their original producing contexts
+remain reusable across another unrelated commit.
+
 ## Research boundary
 
 The prepared-data exporter is `sota.FRED_LLM_GE.data.yolo_export`, using
