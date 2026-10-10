@@ -64,11 +64,8 @@ def reference_inputs(directory, reference_run):
             or trainer.validate_training_history(ROOT / "runs" / reference_run / "results.csv") !=
             metadata["training_history"]):
         raise ValueError("original provenance, checkpoint or history changed")
-    for name, digest in metadata["code_files_sha256"].items():
-        path = (ROOT / name if name in ("train_eval.py", "network.py", "validator.py") else
-                ROOT.parent.parent / "adapters" / name if name == "yolo11.py" else ROOT.parent.parent / name)
-        if sha256(path) != digest:
-            raise ValueError(f"original model/evaluator code changed: {name}")
+    from .checkpoint_code import verify_code_files
+    code_changes = verify_code_files(ROOT, metadata)
     # Snapshot the current starting weights; the old report did not hash their bytes.
     identities = {str(p): sha256(p) for p in (
         report_path, summary_path, weights, directory / "export/source.json",
@@ -76,7 +73,7 @@ def reference_inputs(directory, reference_run):
     return {"directory": str(directory), "reference_run": reference_run,
             "reference_metrics": report["metrics"], "starting_weights": str(weights),
             "input_sha256": identities, "training_config": metadata["training_config"],
-            "purpose": PURPOSE}
+            "purpose": PURPOSE, "reference_code_changes": code_changes}
 
 
 def assert_unchanged(identities):

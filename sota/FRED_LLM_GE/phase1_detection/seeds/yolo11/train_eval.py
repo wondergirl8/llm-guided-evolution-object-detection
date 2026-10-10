@@ -240,24 +240,30 @@ def validate_data(data):
 
 
 def predict_frames(model, images, label_dir, imgsz, batch, device):
-    results = iter(model.predict(source=[str(p) for p in images], conf=PREDICT_CONF,
-                                iou=PREDICT_IOU, max_det=PREDICT_MAX_DET, imgsz=imgsz,
-                                batch=batch, device=device, stream=True, verbose=False))
+    # Ultralytics treats a Python image list as one batch, regardless of batch=.
+    # Bound each source list explicitly, including the final partial batch.
+    if type(batch) is not int or batch <= 0:
+        raise ValueError("prediction batch must be a positive integer")
     frames = []
-    for image in images:
-        result = next(results, None)
-        if result is None:
-            raise ValueError("model returned fewer predictions than validation images")
-        if Path(result.path).resolve() != image.resolve():
-            raise ValueError("prediction order/identity differs from validation input")
-        height, width = result.orig_shape
-        frames.append(yolo11_frame(
-            sample_id=image.stem,
-            target=read_targets(label_dir / f"{image.stem}.txt", width, height),
-            result=result,
-        ))
-    if next(results, None) is not None:
-        raise ValueError("model returned extra validation predictions")
+    for start in range(0, len(images), batch):
+        chunk = images[start:start + batch]
+        results = iter(model.predict(source=[str(p) for p in chunk], conf=PREDICT_CONF,
+                                    iou=PREDICT_IOU, max_det=PREDICT_MAX_DET, imgsz=imgsz,
+                                    batch=batch, device=device, stream=True, verbose=False))
+        for image in chunk:
+            result = next(results, None)
+            if result is None:
+                raise ValueError("model returned fewer predictions than validation images")
+            if Path(result.path).resolve() != image.resolve():
+                raise ValueError("prediction order/identity differs from validation input")
+            height, width = result.orig_shape
+            frames.append(yolo11_frame(
+                sample_id=image.stem,
+                target=read_targets(label_dir / f"{image.stem}.txt", width, height),
+                result=result,
+            ))
+        if next(results, None) is not None:
+            raise ValueError("model returned extra validation predictions")
     return frames
 
 

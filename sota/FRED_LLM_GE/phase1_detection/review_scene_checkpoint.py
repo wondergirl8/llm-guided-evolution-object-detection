@@ -118,11 +118,8 @@ def execute(output):
         raise ValueError("original evaluation report or checkpoint changed")
     if scheduler.run(["git", "rev-parse", "HEAD"]) != request["code_revision"]:
         raise ValueError("review code revision changed")
-    for name, identity in report["metadata"]["code_files_sha256"].items():
-        path = (ROOT / name if name in ("train_eval.py", "network.py", "validator.py") else
-                ROOT.parent.parent / "adapters" / name if name == "yolo11.py" else ROOT.parent.parent / name)
-        if sha256(path) != identity:
-            raise ValueError(f"original model/evaluator code changed: {name}")
+    from .checkpoint_code import verify_code_files
+    code_changes = verify_code_files(ROOT, report["metadata"])
     if importlib.metadata.version("ultralytics") != "8.4.165":
         raise ValueError("pinned Ultralytics environment changed")
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
@@ -159,7 +156,8 @@ def execute(output):
                "original_run": run, "original_report_sha256": sha256(report_path),
                "checkpoint_sha256": sha256(checkpoint), "metrics": metrics,
                "scene_names": scene_names, "code_revision": request["code_revision"],
-               "preview_confidence": PREVIEW_CONF, "combined_matches_original_abs_tolerance": 1e-5})
+               "preview_confidence": PREVIEW_CONF, "combined_matches_original_abs_tolerance": 1e-5,
+               "code_changes": code_changes})
     print("SCENE CHECKPOINT REVIEW COMPLETE; no training or evolution", flush=True)
 
 

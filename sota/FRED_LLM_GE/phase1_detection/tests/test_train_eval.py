@@ -163,6 +163,54 @@ def test_truncated_predictions_are_rejected(training_fixture):
         trainer.predict_frames(model, images, labels, 64, 2, "cpu")
 
 
+def test_list_source_cannot_turn_full_validation_set_into_one_gpu_batch(monkeypatch):
+    images = [Path(f"52_{i:08d}.png") for i in range(1025)]
+    calls = []
+
+    def predict(**kwargs):
+        # Emulate the Ultralytics list loader: its actual batch is len(source),
+        # not the caller's batch option. Empty detections still count as frames.
+        source = kwargs["source"]
+        assert len(source) <= 2
+        assert kwargs["conf"] == .001 and kwargs["iou"] == .7
+        assert kwargs["max_det"] == 100 and kwargs["imgsz"] == 960
+        calls.append(source)
+        return iter(types.SimpleNamespace(path=p, orig_shape=(720, 1280)) for p in source)
+
+    monkeypatch.setattr(trainer, "read_targets", lambda *a: {"boxes": [], "labels": []})
+    monkeypatch.setattr(trainer, "yolo11_frame", lambda **kw: {"sample_id": kw["sample_id"],
+                         "target": kw["target"], "prediction": {"boxes": [], "labels": [], "scores": []}})
+    frames = trainer.predict_frames(types.SimpleNamespace(predict=predict), images, Path("labels"), 960, 2, "0")
+    assert [f["sample_id"] for f in frames] == [p.stem for p in images]
+    assert len(calls) == 513 and len(calls[-1]) == 1
+    assert [p for call in calls for p in call] == [str(p) for p in images]
+
+
+@pytest.mark.parametrize("failure", ["missing", "extra", "wrong_order"])
+def test_chunk_predictions_fail_on_missing_extra_or_wrong_identity(monkeypatch, failure):
+    images = [Path(f"52_{i:08d}.png") for i in range(5)]
+    calls = []
+
+    def predict(**kwargs):
+        paths = kwargs["source"][:]
+        calls.append(paths[:])
+        if len(calls) == 2:
+            paths = paths[:-1] if failure == "missing" else paths + paths[:1] if failure == "extra" else paths[::-1]
+        return iter(types.SimpleNamespace(path=p, orig_shape=(720, 1280)) for p in paths)
+
+    monkeypatch.setattr(trainer, "read_targets", lambda *a: {})
+    monkeypatch.setattr(trainer, "yolo11_frame", lambda **kw: {})
+    with pytest.raises(ValueError, match={"missing": "fewer", "extra": "extra", "wrong_order": "order"}[failure]):
+        trainer.predict_frames(types.SimpleNamespace(predict=predict), images, Path("labels"), 960, 2, "0")
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("batch", [0, -1, True, 1.5])
+def test_invalid_prediction_batch_is_rejected(batch):
+    with pytest.raises(ValueError, match="positive integer"):
+        trainer.predict_frames(None, [], Path("labels"), 960, batch, "0")
+
+
 def test_run_loop_recognizes_failed_trainer_sentinel():
     source = (Path(__file__).resolve().parents[4] / "run_improved.py").read_text()
     node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)

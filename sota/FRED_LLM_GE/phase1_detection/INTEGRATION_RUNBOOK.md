@@ -539,6 +539,77 @@ produces `summary.json`, source-byte hashes, combined/per-scene metrics, saved
 predictions and both scene previews. Run history/checkpoints remain in the
 YOLO11 seed's standard `runs/`, `results/`, and `trained_models/` directories.
 
+## Recover the completed 960px training after prediction OOM
+
+Job **6153942** ran all 50 epochs and saved identical-sized copies of the best
+checkpoint, then failed in `train_eval.predict_frames` during prediction warmup.
+It did not create a shared evaluation report or resolution completion summary.
+The supplied Slurm status is FAILED / 1:0, elapsed 32m51s. Its final epoch's
+Ultralytics metrics (.86503 / .44550) are training diagnostics, not the missing
+shared COCO result, and cannot establish a resolution improvement.
+
+The Python list passed to Ultralytics contained all 1,024 validation images.
+For that input type `batch=2` does not subdivide the list; `stream=True` streams
+results but does not bound the forward-pass batch. The repaired helper explicitly
+splits the source into lists of at most two images, checks order/coverage within
+each list, and retains empty-detection frames. Thresholds, image size, NMS,
+training protocol and shared COCO metric definitions are unchanged.
+
+`checkpoint_code` permits only this documented helper-body change against the
+known original trainer SHA-256
+`2a2f494f5d2025c58f4a5b56b9455485f447d1dc8b6fafbd8112b2a5e51112e5`.
+It reads the frozen source at commit
+`f2980bf092279082f6dc929d24f3e887b21b8999`, verifies its hash, and compares the
+complete executable syntax outside that function body. Other model, training,
+label, postprocessing constant or metric changes fail the original code checks.
+Allowed original/current hashes are recorded rather than treating them as
+identical. Old reports and the failed job's files are preserved.
+
+`recover_scene_resolution` **never calls training**. Before submission and again
+on the allocated GPU it requires the original job to be finished FAILED / 1:0,
+the known original receipt/revision, the prediction OOM log, 50 finite epochs,
+matching saved training settings, equal hashes of both checkpoint copies, and
+all 5,120 image/label bytes matching the original pre-training snapshot.
+It evaluates the saved best checkpoint at 960px, computes combined and per-scene
+COCO metrics, and creates the scene previews. One GPU is reserved for at most
+15 minutes (0.25 GPU-hours), with the same 32 GPU-hour / 50-job queue checks and
+existing-GPU dependencies. Active resolution/recovery jobs block duplicates.
+
+Each attempt receives a fresh `data/fred_resolution_recoveries/` directory.
+Recovered evaluation JSON and CSV live under that directory's `results/`, not
+the seed/search results folder. Its summary records `training_repeated=false`,
+the original FAILED status, original training revision, new evaluation revision,
+checkpoint hash and source provenance. Checkpoint identity was first captured
+after failure; matching the two saved copies does not retrospectively prove
+their historical bytes. No recovery summary is published on failed checks,
+incomplete predictions or OOM. This remains an engineering diagnostic.
+
+After manually committing/pushing these changes **on the Mac**, run **in the
+PACE ICE terminal**:
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+cd /storage/ice1/7/6/bnguyen367/llm-guided-evolution-object-detection
+test "$(git branch --show-current)" = fred-yolo11-infrastructure
+git diff --quiet
+git diff --cached --quiet
+test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
+git fetch origin fred-yolo11-infrastructure
+git merge --ff-only origin/fred-yolo11-infrastructure
+data/.venv-yolo11/bin/python -m sota.FRED_LLM_GE.phase1_detection.recover_scene_resolution \
+  --failed-output data/fred_resolution_checks/img960_trilk8st
+BASH
+```
+
+Save its printed job ID, fresh output path and
+`data/logs/fred-resolution-recovery-JOBID.out`. Inspect `sacct` and that log after
+completion. Success prints `RESOLUTION RECOVERY COMPLETE; saved checkpoint
+evaluated; original job remains FAILED` and creates a new `summary.json` with
+`per_scene_validation`. The old `img960_trilk8st/summary.json` and standard seed
+evaluation report remain absent. Do not resubmit the 50-epoch resolution trainer
+to recover this finished training run.
+
 ## Research boundary
 
 The prepared-data exporter is `sota.FRED_LLM_GE.data.yolo_export`, using
