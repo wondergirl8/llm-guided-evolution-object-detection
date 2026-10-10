@@ -52,15 +52,17 @@ from coco_adapter import parse_fred_annotation
 # about 0.65 (spread 0.015 over 3 runs) at 80; the extra epochs add only a
 # few seconds per candidate.
 PROXY_EPOCHS = 80
-FRAME_STEP = 5
+FRAME_STEP = 10
 
 # Sequences from FRED's Hugging Face train/ folder. Validation sequences are
 # held out of training so every candidate is scored on the same unseen frames.
 # Provisional until DG-P0-02: all are in both the canonical and challenging
 # train splits (P0-D10/D11), spread across the ID range, with no val sequence
 # next to a train one. (The old train sequence 36 is in challenging test.)
-TRAIN_SEQUENCES = "18,42,57,96,120,157,205,225"
-VAL_SEQUENCES = "1,72,183"
+# Only sequences 0-106 for now: from 116 on, event frames are named
+# Video_<id>_<timestamp>.png, which fred_stream.py does not parse yet.
+TRAIN_SEQUENCES = "5,18,30,42,57,66,96,104"
+VAL_SEQUENCES = "1,50,72"
 
 # Detections below this confidence are dropped before NMS and scoring.
 EVAL_CONF = 0.05
