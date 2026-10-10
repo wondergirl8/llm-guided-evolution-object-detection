@@ -48,8 +48,10 @@ from fred_stream import REVISION, STEP_US, stream_event_frames
 from coco_adapter import parse_fred_annotation
 
 # Provisional proxy budget; must match the values the seed baseline uses
-# (to be agreed with Member 3).
-PROXY_EPOCHS = 3
+# (to be agreed with Member 3). The seed scores mAP50 0.0 at 3 epochs and
+# about 0.65 (spread 0.015 over 3 runs) at 80; the extra epochs add only a
+# few seconds per candidate.
+PROXY_EPOCHS = 80
 FRAME_STEP = 10
 
 # Sequences from FRED's Hugging Face train/ folder. Validation sequences are
