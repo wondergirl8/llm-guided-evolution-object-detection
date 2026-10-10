@@ -23,6 +23,7 @@ output/
 **/models/
 **/weights/
 **/results/
+**/data_cache/
 **/llmge_models/
 slurm-*.out
 *.pkl
