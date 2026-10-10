@@ -39,7 +39,7 @@ def fake_yolo11_config():
 
 class Yolo11InterfaceTest(unittest.TestCase):
     def test_llm_ge_configuration_and_command_construction(self):
-        from src.cfg import constants
+        from src.cfg import constants_fred_yolo11 as constants
 
         self.assertEqual(constants.FITNESS_WEIGHTS, (1.0, 1.0, -1.0))
         self.assertEqual(constants.num_generations, 2)

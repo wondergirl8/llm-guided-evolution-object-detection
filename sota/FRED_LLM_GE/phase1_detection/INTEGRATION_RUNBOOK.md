@@ -6,6 +6,46 @@ committed by the user after incorporating `MosesTheRedSea-main` at
 workflow is obsolete: use a reviewed commit on your branch and pull that branch
 on ICE. Do not apply `fred-integration.patch` again.
 
+## Explicit configuration selection
+
+`src/cfg/constants.py` defaults to FRED YOLO11 on this branch, as requested.
+Set `LLMGE_CONFIG=mujoco` **before starting Python** to select the team's
+unchanged MuJoCo profile. Explicit `LLMGE_CONFIG=fred-yolo11` also works.
+The selection applies to both `cfg.constants`
+and `src.cfg.constants`, and is inherited by child processes. Unknown or empty
+profile names fail immediately. Do not replace the shared file with a FRED
+symlink. This selects configuration only; it does not complete the evolution
+bridge or authorize a research generation.
+
+The default is encoded in the shared file, not inferred from the Git branch.
+Merging this file into another branch would also make FRED its default; review
+that choice with the team as part of any future merge.
+
+The standalone YOLO11 seed/trainer and existing diagnostic jobs are independent
+of this selector and keep their explicit training arguments.
+
+After manually committing/pushing this change, paste the following in the ICE
+checkout. This is a CPU configuration check; it submits no GPU job and does not
+repeat completed training.
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+test "$(git branch --show-current)" = fred-yolo11-infrastructure
+git diff --quiet
+git diff --cached --quiet
+test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
+git fetch origin fred-yolo11-infrastructure
+git merge --ff-only origin/fred-yolo11-infrastructure
+CHECK=sota/FRED_LLM_GE/phase1_detection/jobs/check_yolo11_configuration.sh
+test -s "$CHECK"
+bash "$CHECK"
+BASH
+```
+
+Success prints `PROFILE OK: mujoco`, `PROFILE OK: fred-yolo11`,
+`DEFAULT OK: fred-yolo11`, and `CONFIGURATION CHECK COMPLETE`.
+
 ## Existing engineering evidence
 
 - Preparation job 6132562 installed the bounded dependencies and reused the export.
@@ -20,9 +60,17 @@ on ICE. Do not apply `fred-integration.patch` again.
   loss spiked to 460,444,000 early in training. Finite status alone does not resolve
   the remaining instability. Its actual auto-selected optimizer was AdamW at
   LR 0.002, not the unused `lr0: 0.01` shown in `args.yaml`.
+- Explicit-AdamW job 6135264 used LR 0.0002, beta1 0.9, bias warmup LR 0,
+  and AMP disabled. All 50 epochs had finite losses; maximum validation
+  classification loss was 10.7165. The downloaded CSV's SHA-256 matched the
+  evaluation report (`e80f2eb1c085bff2e4a94b5737071f4d9ca28184478750e90b9922f39080a638`).
+  Shared validation mAP50 was 0.63880 and mAP50:95 was 0.25940; training scores
+  were 1.00000 and 0.66215. This resolved the observed loss blowup in this run.
+  Validation metrics peaked before epoch 50 while training losses kept falling,
+  so preserve the best checkpoint rather than treating the last epoch as best.
 
 These are engineering diagnostics. Do not repeat the preparation or one-epoch
-integration job just to test the precision change.
+integration job, or rerun the completed tiny-data checks without a new question.
 
 ## Loss-history and precision controls
 
@@ -154,3 +202,10 @@ The bounded 32/32 export must not supply research selection fitness. The frozen
 split/leakage gate, controlled training/fitness protocol, validated baseline, and
 complete evolution bridge/pilot still precede a research generation. Do not
 start `run_improved.py` with this smoke dataset.
+
+The next data expansion needs explicit sequence membership and a leakage audit;
+the existing DG-P0-02 bring-up exception covers the bounded subset, not a formal
+larger-data protocol. Treat LR 0.0002 and full precision as the working engineering
+settings supported by job 6135264, not a frozen DG-P1-04 decision. DG-P1-04/05/06
+still precede formal baseline execution. Configuration-check success alone is
+not evidence that the entire branch is ready to merge or that evolution works.
