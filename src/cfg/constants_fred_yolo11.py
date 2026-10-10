@@ -1,8 +1,9 @@
 """LLM-GE configuration for the project-owned FRED YOLO11 seed.
 
 Paths are derived from this checkout so the same configuration can be used on
-a laptop or on PACE ICE. The Phase 1 seed, trainer, and prompts must be filled
-and validated before starting an evolution run.
+a laptop or on PACE ICE. The seed is Ruhi's event-only DroneDetector
+(sota/FRED_LLM_GE/seeds/seed_yolo11.py); candidates are trained and scored by
+train_eval.py, which writes SOTA_ROOT/results/<gene_id>_results.csv.
 """
 
 import math
@@ -15,10 +16,10 @@ SOTA_ROOT = os.path.join(
     ROOT_DIR, "sota", "FRED_LLM_GE", "phase1_detection", "seeds", "yolo11"
 )
 DATA_PATH = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "phase0_data")
-SEED_NETWORK = os.path.join(SOTA_ROOT, "network.py")
+SEED_NETWORK = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_yolo11.py")
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
-TRAIN_FILE = os.path.join(SOTA_ROOT, "train.py")
+TRAIN_FILE = os.path.join(SOTA_ROOT, "train_eval.py")
 
 # run_improved.py resolves the prompt glob against ROOT_DIR and loads the
 # domain rules separately. Keep rules outside the selectable prompt glob.
@@ -37,7 +38,11 @@ ENVIRONMENT_DIR = os.path.join(ROOT_DIR, ".venv")
 
 CLUSTER = os.getenv("LLMGE_CLUSTER", "pace-ice")
 PORT = int(os.getenv("LLMGE_PORT", "8137"))
-MODEL_PATH = os.getenv("LLMGE_MODEL_PATH", "")
+# Same shared Llama 3.3 70B the MuJoCo runs serve through server.sh.
+MODEL_PATH = os.getenv(
+    "LLMGE_MODEL_PATH",
+    "/storage/ice-shared/vip-vvk/llm_storage/meta-llama/Llama-3.3-70B-Instruct/",
+)
 LLM_MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "1648"))
 LLM_MODEL = os.getenv("LLMGE_LLM_MODEL", "mixtral")
 LLM_QWEN = "qwen25"
@@ -50,7 +55,8 @@ LLM_GEMINI = "gemini"
 # run_improved.py defaults to LLM_MIXTRAL when that identifier is present.
 ISLAND_LLMS = list(dict.fromkeys((LLM_MIXTRAL, LLM_MODEL)))
 MAX_ISLANDS = len(ISLAND_LLMS)
-LOCAL_LLM = os.getenv("LOCAL_LLM", "false").lower() in ("true", "1", "yes")
+# Generate code through the uvicorn LLM server started by server.sh.
+LOCAL_LLM = os.getenv("LOCAL_LLM", "true").lower() in ("true", "1", "yes")
 INFERENCE_SUBMISSION = os.getenv("INFERENCE_SUBMISSION", "false").lower() in (
     "true", "1", "yes"
 )
@@ -93,10 +99,14 @@ FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
-num_generations = 1
+# run_improved.py loops range(1, num_generations), so 2 runs one generation
+# after the initial population.
+num_generations = 2
 start_population_size = 4
 population_size = 4
-crossover_probability = 0.35
+# llm_crossover.py writes the crossed chunk over the protected preamble
+# (parts_x[augment_idx] is off by one), so crossover stays off for now.
+crossover_probability = 0.0
 mutation_probability = 0.8
 num_elites = 1
 hof_size = 4
