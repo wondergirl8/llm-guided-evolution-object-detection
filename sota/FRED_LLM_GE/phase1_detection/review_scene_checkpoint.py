@@ -97,7 +97,7 @@ def preview(images, frames, destination):
             ax.set_title(f"{image.stem}: {field}")
             ax.axis("off")
     fig.suptitle(f"Labels and predictions; display confidence >= {PREVIEW_CONF}; AP uses conf=0.001")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(destination, dpi=120)
     plt.close(fig)
 

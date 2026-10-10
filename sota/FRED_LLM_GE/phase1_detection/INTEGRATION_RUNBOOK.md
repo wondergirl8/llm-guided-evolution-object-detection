@@ -464,6 +464,81 @@ Save the printed job ID and output path. Inspect its Slurm state and
 If a source/code/reproduction check fails, inspect the preserved failure output
 before changing the dataset or requesting another training run.
 
+## Controlled higher-resolution engineering check
+
+Review job 6150182 completed in 3m53s and reproduced job 6141846's combined
+shared COCO scores exactly. Its sequence 52 skyline scores were mAP50
+0.7877788753524169 / mAP50:95 0.37469764190577426; sequence 180 hall scores were
+0.957833584207617 / 0.5740154675370839, with 512 annotated frames each.
+The downloaded archive SHA-256 is
+`437153bec79266ae5ca1e9d0adaa229cff972c14413fe88e9633fe1fa0d2e469`.
+The embedded original report matches the previous archive byte hash.
+Offline evaluation of the 1,024 saved predictions reproduced the per-scene AP.
+
+At 640-pixel input size, 94 skyline ground-truth boxes have maximum side <=16
+pixels after letterbox scaling, versus one hall box. Their skyline-only AP50 is
+0.568435343637429 / AP50:95 0.25237714113722837. At confidence >=0.5 and IoU >=0.5,
+388/512 skyline targets match a prediction; 49 frames have predictions but no
+adequate match and 75 have no prediction at that display threshold. Lowering the
+threshold to 0.1 recovers 27 of the 124 unmatched targets; it does not repair all
+misses or localization errors. These counts describe an annotated diagnostic
+sample, not deployment false-positive rates or a frozen threshold decision.
+
+`scene_resolution_check` tests **960-pixel training and inference** on the same
+existing export, holding 50 epochs, batch 2, seed 0, AdamW LR 0.0002, AMP off,
+architecture, default training augmentation and evaluation postprocessing fixed.
+It starts a fresh seed from the same existing pretrained weights path rather
+than continuing the reference trained checkpoint. The old report did not hash
+initial weight bytes; this new workflow snapshots their current hash and checks
+it again before and after execution. Thus historical byte identity of the
+starting weights is not retrospectively proven.
+The old run also did not retain the initial one-class head state. Keeping the
+training seed setting at 0 does not prove identical initialization to that run;
+this single comparison checks feasibility and behavior rather than establishing
+a causal or multi-seed improvement from resolution alone.
+
+The job checks the completed original run's report/checkpoint/history/source
+identities, approved scene manifest, original model/evaluator code and pinned
+Ultralytics version. It records every current exported image/label byte hash and
+requires them unchanged through the new run. No source archive download or new
+export is requested. Training uses a fresh `resolution_960_JOBID` run ID; the
+original source directory's summary and checkpoints are preserved. After
+training, a second prediction pass on the new best checkpoint creates per-scene
+AP and six label/prediction preview pairs for each validation scene. Combined AP
+must reproduce the new run report before success is published.
+
+One GPU is requested for **at most two hours**, with eight CPUs and 24 GiB RAM.
+The shared 32 GPU-hour / 50-job checks count one new job and two GPU-hours, wait
+for existing GPU jobs and reject a duplicate active resolution job. A timeout,
+OOM, numerical error, changed input or incomplete history cannot publish a
+completed summary. A speedup or score improvement is not assumed. This remains
+an engineering resource/metric check, not a frozen baseline or evolution fitness.
+
+After manually committing/pushing the resolution tools on the Mac, run **on
+PACE ICE in the repository directory**:
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+test "$(git branch --show-current)" = fred-yolo11-infrastructure
+git diff --quiet
+git diff --cached --quiet
+test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
+git fetch origin fred-yolo11-infrastructure
+git merge --ff-only origin/fred-yolo11-infrastructure
+data/.venv-yolo11/bin/python -m sota.FRED_LLM_GE.phase1_detection.scene_resolution_check \
+  --directory data/fred_overnight/scene_zeqt5oqs \
+  --reference-run scene_check_6141846
+BASH
+```
+
+Save the printed job ID and unique `data/fred_resolution_checks/img960_*/`
+output path. The log is `data/logs/fred-resolution-JOBID.out`. Successful
+completion prints `RESOLUTION CHECK COMPLETE; engineering diagnostic only` and
+produces `summary.json`, source-byte hashes, combined/per-scene metrics, saved
+predictions and both scene previews. Run history/checkpoints remain in the
+YOLO11 seed's standard `runs/`, `results/`, and `trained_models/` directories.
+
 ## Research boundary
 
 The prepared-data exporter is `sota.FRED_LLM_GE.data.yolo_export`, using
