@@ -313,6 +313,98 @@ split labels and producing contexts. It never rewrites them to match the new
 membership. Missing or changed evidence fails visibly. Keep this result with the
 completed audit before preparing a fresh larger-data export.
 
+## Bounded overnight scene diagnostic
+
+The user's 2026-10-10 request authorizes an unattended infrastructure diagnostic,
+not formal baseline/evolution execution. The supplied `Object Detection VIP
+(5).pdf`, page 3, September 28 notes, states a 32 GPU-hour volume across jobs and
+a maximum queue of 50 jobs. Its SHA-256 is
+`b460cff1e8cc3e9ae77c690780d06a0b10a7180366337751bf27e43dea591a14`.
+The submission helper conservatively sums **full requested time limits times
+total GPUs** for all the user's existing queued/running jobs, including dependency
+jobs. Generic and model-specific GPU TRES are counted once. CPU jobs count toward
+the queue envelope but consume zero GPU-hours. An unknown/unbounded GPU request,
+an existing array that cannot be counted safely, or insufficient headroom stops
+submission visibly. This is a queue-reservation check, not a historical usage or
+team-wide allocation report. Slurm remains authoritative for live QOS/account rules.
+
+The workflow adds exactly two jobs:
+
+- CPU preparation: at most 2 hours, 4 CPUs, 48 GiB, `pace-cpu`; no GPU request.
+- GPU training/evaluation: at most 2 hours, 8 CPUs, 24 GiB, one GPU, `coe-gpu`.
+
+Both use the `isye` account and `coe-ice` QOS seen in completed user jobs. Both
+requests must pass `sbatch --test-only` before either is submitted. Thus new
+GPU reservation is only **2 GPU-hours**, and new requested runtime is at most
+4 hours serially; queue waiting can extend elapsed time. This is a maximum,
+not a prediction or an instruction to keep GPUs idle until the cap.
+
+GPU execution requires CPU success (`afterok`) and waits for existing GPU jobs
+to finish (`afterany`). An invalid dependency cancels the GPU job; a GPU
+submission rejection cancels the just-submitted CPU job. No job array, LLM
+server, evolutionary population or automatic retry/resubmission is launched.
+An already queued/running overnight workflow is rejected to avoid duplicates.
+Keep the repository at the submitted revision overnight: each job refuses
+different HEAD, tracked changes, another branch or a merge in progress.
+
+Preparation checks the completed scene evidence, then considers at most three
+sequences per group in numeric order (courtyard prefers previously validated
+sequence 3). It preserves each new inspection report and any rejected source
+findings. Transport/incomplete/unexpected failures stop rather than being
+silently skipped. Exactly one valid representative is required per group; no
+held-out test archive is inspected. This bounded expansion covers the five
+reviewed scenes, **not all 172 development sequences**.
+
+Using the existing prepared-data compatibility backend, it builds a separate
+manifest and validation report, then exports exactly 512 evenly spaced
+annotated frames per representative. This produces 1,536 training images
+(three training groups) and 1,024 validation images (two validation groups).
+Frame eligibility remains annotation-only and is not a balanced background
+sampling protocol. Insufficient eligible frames stop instead of reducing the
+budget. Approved DG-P0-04 conversions preserve raw-box lineage. Old manifests,
+exports, reports and training runs are preserved. The existing bounded source
+cache may download/evict pinned source objects while preparing new sequences;
+it is not a full 205 GB dataset download. Shared-filesystem free space does not
+establish the user's personal quota; `pace-quota` remains the relevant check.
+
+Training uses the protected YOLO11m seed, existing pretrained weights and pinned
+Ultralytics 8.4.165 environment: 50 epochs, batch 2, image size 640, seed 0,
+fraction 1, explicit AdamW LR 0.0002, AMP disabled. It verifies the seed against
+job 6135264's receipt, checks all losses, preserves best/last checkpoints and
+requires the full epoch history before publishing a success summary. The
+existing evaluator records validation mAP50/mAP50:95 and parameter count. These
+are engineering results on a new dataset, not directly comparable scores to
+the old 32/32 run and not evolutionary selection fitness. A Slurm timeout leaves
+partial logs/run artifacts for diagnosis; it cannot produce a success summary.
+
+After manually committing/pushing this change on the Mac, paste into ICE:
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+test "$(git branch --show-current)" = fred-yolo11-infrastructure
+git diff --quiet
+git diff --cached --quiet
+test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
+git fetch origin fred-yolo11-infrastructure
+git merge --ff-only origin/fred-yolo11-infrastructure
+if command -v pace-quota >/dev/null 2>&1; then pace-quota; fi
+data/.venv-yolo11/bin/python -m sota.FRED_LLM_GE.phase1_detection.submit_scene_overnight
+BASH
+```
+
+Save the printed two job IDs and output directory. Outputs are in a fresh
+`data/fred_overnight/scene_*/` directory, including `submission.json`, `jobs.json`,
+new inspection records, `manifest_validation.json`, `manifest.sqlite`, `export/`
+and (only after success) `summary.json`. GPU run artifacts remain under
+`phase1_detection/seeds/yolo11/runs/scene_check_JOBID`, `results/` and
+`trained_models/`. Logs are `data/logs/fred-night-data-CPU_JOBID.out` and
+`data/logs/fred-night-gpu-GPU_JOBID.out`. You may disconnect after the submission
+receipt; Slurm executes independently of the terminal. In the morning inspect
+`sacct -j CPU_JOBID,GPU_JOBID --format=JobID,State,ExitCode,Elapsed,AllocTRES`,
+the two logs and the summary. Complete success prints
+`OVERNIGHT SCENE CHECK COMPLETE; engineering diagnostic only`.
+
 ## Research boundary
 
 The prepared-data exporter is `sota.FRED_LLM_GE.data.yolo_export`, using

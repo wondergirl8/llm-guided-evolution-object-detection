@@ -14,8 +14,9 @@ class FailingSource:
         raise RuntimeError("representative fetch failure")
 
 
+@pytest.mark.parametrize("isolated_report", [False, True])
 def test_failed_manifest_fetch_writes_failed_incomplete_report(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, isolated_report
 ):
     config_path = tmp_path / "config.yaml"
     config_path.write_text("test: config\n", encoding="utf-8")
@@ -54,11 +55,18 @@ def test_failed_manifest_fetch_writes_failed_incomplete_report(
         sequence=["0"],
         output=tmp_path / "manifest.sqlite",
     )
+    if isolated_report:
+        args.validation_report = tmp_path / "night" / "manifest_validation.json"
+        config.validation_root.mkdir()
+        (config.validation_root / "manifest_build_validation.json").write_text("previous evidence")
 
     with pytest.raises(RuntimeError, match="representative fetch failure"):
         cli.command_build_manifest(args)
 
-    report_path = tmp_path / "validation" / "manifest_build_validation.json"
+    report_path = (args.validation_report if isolated_report else
+                   tmp_path / "validation" / "manifest_build_validation.json")
+    if isolated_report:
+        assert (config.validation_root / "manifest_build_validation.json").read_text() == "previous evidence"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["valid"] is False
     assert report["status"] == "failed"

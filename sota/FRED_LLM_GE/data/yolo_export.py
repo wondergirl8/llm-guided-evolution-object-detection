@@ -71,7 +71,9 @@ def selected_indices(manifest_path: Path, split: str, limit: int,
 
 
 def export_subset(manifest_path: Path, inventory_path: Path, output: Path,
-                  train_limit: int, val_limit: int) -> Path:
+                  train_limit: int, val_limit: int, *, selector=selected_indices,
+                  selection_policy: str | None = None,
+                  purpose: str = "bounded bring-up only; not a formal FRED baseline") -> Path:
     """Export an explicit small project-train/validation subset, atomically."""
     from sota.FRED_LLM_GE.archive.phase0_data_old.config import load_config
     from sota.FRED_LLM_GE.archive.phase0_data_old.dataset import FREDDataset
@@ -110,7 +112,7 @@ def export_subset(manifest_path: Path, inventory_path: Path, output: Path,
         lineage = []
         for split, limit, mode in (("train", train_limit, AccessMode.TRAIN),
                                    ("validation", val_limit, AccessMode.TRUSTED_EVALUATOR)):
-            indices_by_sequence = selected_indices(manifest_path, split, limit, annotation_policy)
+            indices_by_sequence = selector(manifest_path, split, limit, annotation_policy)
             dataset = FREDDataset(
                 manifest_path=manifest_path, inventory=inventory, source=source,
                 project_split=ProjectSplit(split), modality=Modality.EVENT,
@@ -154,15 +156,17 @@ def export_subset(manifest_path: Path, inventory_path: Path, output: Path,
             "inventory_hash": inventory.inventory_hash,
             "dataset_revision": inventory.dataset_revision,
             "project_split_approval_reference": metadata["project_split_approval_reference"],
+            "project_split_content_hash": metadata.get("project_split_content_hash"),
+            "project_split_version": metadata.get("project_split_version"),
             "annotation_policy": metadata["annotation_policy"],
-            "selection_policy": ("first_annotated_frames_approved_bounds_per_split_v1"
+            "selection_policy": selection_policy or ("first_annotated_frames_approved_bounds_per_split_v1"
                                  if annotation_policy else "first_in_bounds_annotated_frames_per_split_v1"),
             "annotation_policy_approval_reference": metadata.get("annotation_policy_approval_reference"),
             "label_counts": label_counts,
             "clipped_label_counts": clipped_counts,
             "unpaired_source_annotation_count": metadata.get("unpaired_annotation_count", 0),
             "counts": counts,
-            "purpose": "bounded bring-up only; not a formal FRED baseline",
+            "purpose": purpose,
         }, indent=2) + "\n", encoding="utf-8")
         (temp / "label_provenance.jsonl").write_text(
             "".join(json.dumps(row, sort_keys=True) + "\n" for row in lineage), encoding="utf-8")

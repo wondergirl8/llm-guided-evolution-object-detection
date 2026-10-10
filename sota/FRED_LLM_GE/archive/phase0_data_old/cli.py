@@ -179,7 +179,8 @@ def command_build_manifest(args: argparse.Namespace) -> int:
         raise ValueError("provide --sequence at least once, or explicitly request --all-sequences")
 
     destination = Path(args.output) if args.output else config.manifest_root / "canonical.sqlite"
-    report_path = config.validation_root / "manifest_build_validation.json"
+    report_path = (getattr(args, "validation_report", None)
+                   or config.validation_root / "manifest_build_validation.json")
     inspections = []
     source = _source(config)
     metadata = {
@@ -388,6 +389,8 @@ def build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("--all-sequences", action="store_true")
     manifest.add_argument("--confirm-full-scan", action="store_true")
     manifest.add_argument("--output", type=Path)
+    manifest.add_argument("--validation-report", type=Path,
+                          help="separate report path for an isolated manifest build")
     manifest.add_argument("--allow-partial-out-of-bounds", action="store_true")
     manifest.add_argument("--annotation-policy", choices=[POLICY_VERSION])
     manifest.set_defaults(handler=command_build_manifest)

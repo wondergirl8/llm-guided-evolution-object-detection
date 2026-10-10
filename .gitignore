@@ -17,6 +17,7 @@ data/
 !/sota/FRED_LLM_GE/data/__init__.py
 !/sota/FRED_LLM_GE/data/fred_stream.py
 !/sota/FRED_LLM_GE/data/yolo_export.py
+!/sota/FRED_LLM_GE/data/scene_diagnostic_export.py
 /sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/failures/
 .DS_Store
 mistralai
