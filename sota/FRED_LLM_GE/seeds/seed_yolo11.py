@@ -29,15 +29,16 @@ class ConvBlock(nn.Module):
     that is commonly used in YOLO-family networks.
     """
 
-    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1,
+                 kernel_size: int = 3):
         super().__init__()
         self.block = nn.Sequential(
             nn.Conv2d(
                 in_channels,
                 out_channels,
-                kernel_size=3,
+                kernel_size=kernel_size,
                 stride=stride,
-                padding=1,
+                padding=kernel_size // 2,
                 bias=False,
             ),
             nn.BatchNorm2d(out_channels),

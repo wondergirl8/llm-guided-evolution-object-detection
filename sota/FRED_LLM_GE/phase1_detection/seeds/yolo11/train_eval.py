@@ -157,7 +157,8 @@ def load_sequence(split, sequence_id, frame_step, img_width):
         "sample_ids": sample_ids,
         "orig_size": (width, height),
     }
-    temp_path = cache_path.with_suffix(".tmp")
+    # Per-process temp name: parallel candidates may build the same cache.
+    temp_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
     torch.save(data, temp_path)
     os.replace(temp_path, cache_path)
     return data
