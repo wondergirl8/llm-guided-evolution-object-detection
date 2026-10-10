@@ -84,12 +84,14 @@ def test_seed_training_reaches_shared_evaluator_and_refuses_rerun(training_fixtu
     assert "job done" in capsys.readouterr().out
     assert calls[0]["fraction"] == 1 and calls[0]["exist_ok"] is False
     assert calls[0]["amp"] is True
+    assert not {"optimizer", "lr0", "momentum", "warmup_bias_lr"} & calls[0].keys()
     report = json.loads((output / "results" / "seed_check_evaluation.json").read_text())
     assert report["metadata"]["modality"] == "event"
     assert report["metadata"]["experiment_purpose"] == "synthetic offline integration fixture"
     assert report["metadata"]["candidate_gene_id"] == "seed"
     assert report["metadata"]["code_files_sha256"]
     assert report["metadata"]["training_config"]["amp"] is True
+    assert report["metadata"]["training_config"]["optimizer"] == "auto"
     history = output / "runs" / "seed_check" / "results.csv"
     assert report["metadata"]["training_history"]["sha256"] == trainer.sha256_file(history)
     assert report["metadata"]["training_history"]["epochs_completed"] == 1
@@ -226,3 +228,28 @@ def test_missing_or_malformed_training_history_is_rejected(tmp_path, contents):
         history.write_text(contents)
     with pytest.raises(trainer.TrainingHistoryError):
         trainer.validate_training_history(history)
+
+
+def test_explicit_adamw_rate_preserves_auto_beta_and_bias_warmup(training_fixture):
+    data, output, calls, _ = training_fixture
+    assert trainer.main(["--data", str(data), "--device", "cpu", "--epochs", "2",
+                         "--run-id", "lr_check", "--no-amp", "--adamw-lr", "0.0002"]) == 0
+    expected = {"optimizer": "AdamW", "lr0": 0.0002,
+                "momentum": 0.9, "warmup_bias_lr": 0.0}
+    for key, value in expected.items():
+        assert calls[0][key] == value
+    report = json.loads((output / "results" / "lr_check_evaluation.json").read_text())
+    for key, value in expected.items():
+        assert report["metadata"]["training_config"][key] == value
+    assert calls[0]["amp"] is False
+
+
+@pytest.mark.parametrize("rate", ["0", "-0.002", "nan", "inf", "-inf"])
+def test_invalid_adamw_rate_fails_before_training(training_fixture, rate):
+    data, output, calls, _ = training_fixture
+    assert trainer.main(["--data", str(data), "--device", "cpu", "--run-id", "bad_lr",
+                         f"--adamw-lr={rate}"]) == 1
+    assert not calls
+    assert not (output / "results" / "bad_lr_results.csv").exists()
+    failure = json.loads((output / "failures" / "bad_lr_failure.json").read_text())
+    assert "positive and finite" in failure["message"]

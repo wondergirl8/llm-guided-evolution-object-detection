@@ -87,6 +87,17 @@ def check_epoch_losses(training):
     validate_training_history(training.csv)
 
 
+def adamw_options(learning_rate):
+    """Make LR explicit without changing the pinned small-run auto AdamW settings."""
+    if learning_rate is None:
+        return {}
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError("AdamW learning rate must be positive and finite")
+    # v8.4.165 auto selects beta1=0.9 and resets bias warmup to zero.
+    return {"optimizer": "AdamW", "lr0": learning_rate,
+            "momentum": 0.9, "warmup_bias_lr": 0.0}
+
+
 def sha256_file(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -279,9 +290,10 @@ def report_metadata(data, variant_path, model_path, train_config):
 
 
 def run(model_name, variant_dir, data, weights, epochs, batch, imgsz, device,
-        preflight_only=False, run_id=None, fraction=1.0, amp=True):
+        preflight_only=False, run_id=None, fraction=1.0, amp=True, adamw_lr=None):
     if min(epochs, batch, imgsz) <= 0 or not 0 < fraction <= 1:
         raise ValueError("invalid training budget")
+    optimizer_options = adamw_options(adamw_lr)
     module = load_model_module(model_name, Path(variant_dir))
     gene_id = "seed" if model_name == "network" else model_name.removeprefix("network_")
     output_id = validate_gene_id(run_id or gene_id)
@@ -295,7 +307,8 @@ def run(model_name, variant_dir, data, weights, epochs, batch, imgsz, device,
     train_config = {"data": str(Path(data).resolve()), "weights": weights,
                     "epochs": epochs, "fraction": fraction, "batch": batch,
                     "imgsz": imgsz, "seed": 0, "device": str(device),
-                    "deterministic": True, "gene_id": gene_id, "amp": amp}
+                    "deterministic": True, "gene_id": gene_id, "amp": amp,
+                    "optimizer": "auto", **optimizer_options}
     with tempfile.TemporaryDirectory(prefix="fred-yolo11-config-") as config_dir:
         model = build_candidate(module, weights, config_dir)
         params = sum(p.numel() for p in model.model.parameters())
@@ -307,7 +320,8 @@ def run(model_name, variant_dir, data, weights, epochs, batch, imgsz, device,
         model.train(data=str(data), epochs=epochs, fraction=fraction, batch=batch,
                     imgsz=imgsz, device=device, seed=0, deterministic=True,
                     amp=amp,
-                    project=str(SCRIPT_DIR / "runs"), name=output_id, exist_ok=False, save=True)
+                    project=str(SCRIPT_DIR / "runs"), name=output_id, exist_ok=False,
+                    save=True, **optimizer_options)
         history = validate_training_history(model.trainer.csv)
         best = Path(model.trainer.best)
         if not best.is_file():
@@ -346,6 +360,8 @@ def main(argv=None):
     parser.add_argument("--run-id")
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True,
                         help="mixed precision (default enabled); --no-amp uses full precision")
+    parser.add_argument("--adamw-lr", type=float,
+                        help="explicit AdamW LR, beta1=0.9, bias warmup=0; default keeps optimizer=auto")
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args(argv)
     output_id = args.run_id or ("seed" if args.model == "network" else args.model.removeprefix("network_"))
@@ -356,7 +372,8 @@ def main(argv=None):
     try:
         started = time.time()
         run(args.model, args.variant_dir, args.data, args.weights, args.epochs,
-            args.batch, args.imgsz, args.device, args.preflight_only, args.run_id, args.fraction, args.amp)
+            args.batch, args.imgsz, args.device, args.preflight_only, args.run_id,
+            args.fraction, args.amp, args.adamw_lr)
     except Exception as error:
         category = ("training_history" if isinstance(error, TrainingHistoryError) else
                     "existing_run" if isinstance(error, FileExistsError) else "training_or_evaluation")

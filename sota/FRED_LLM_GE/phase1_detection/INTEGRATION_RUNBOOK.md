@@ -15,6 +15,11 @@ on ICE. Do not apply `fred-integration.patch` again.
   images. It fitted the training subset but validation stayed weak. Its CSV
   contains NaN validation losses in epochs 21, 22, and 25–32, so its successful
   process exit is not evidence of stable training.
+- Full-precision job 6134619 completed all 50 epochs with finite losses. Shared
+  validation mAP50 improved to 0.59250 and mAP50:95 to 0.18361, but classification
+  loss spiked to 460,444,000 early in training. Finite status alone does not resolve
+  the remaining instability. Its actual auto-selected optimizer was AdamW at
+  LR 0.002, not the unused `lr0: 0.01` shown in `args.yaml`.
 
 These are engineering diagnostics. Do not repeat the preparation or one-epoch
 integration job just to test the precision change.
@@ -93,7 +98,40 @@ compare the loss maxima too: eliminating NaN does not establish healthy learning
 or generalization. If this run still fails, inspect its first invalid epoch and
 failure JSON before changing another training variable.
 
-Artifacts use `stability_check_JOB_ID` to avoid overwriting prior runs:
+## Controlled learning-rate diagnostic
+
+Supply one positive finite learning rate to the same job to repeat the
+full-precision run with explicit AdamW. The initial trial is `0.0002`, ten times
+lower than the actual rate used in job 6134619. This is a diagnostic hypothesis,
+not a frozen formal training protocol or a guarantee of improved accuracy.
+
+The trainer's optional `--adamw-lr` sets AdamW, its initial learning rate,
+`momentum=0.9` (AdamW beta1), and `warmup_bias_lr=0.0`. Those latter settings
+preserve the pinned automatic AdamW behavior; explicitly selecting AdamW without
+them would also change beta1 and bias warmup. The schedule, other warmup settings,
+data, batch size, seed, augmentations, and evaluation stay as in the previous run.
+Without the option, the trainer retains `optimizer=auto` behavior.
+The [pinned optimizer implementation](https://github.com/ultralytics/ultralytics/blob/v8.4.165/ultralytics/engine/trainer.py#L1080-L1089)
+documents why changing `lr0` alone while keeping `auto` would be ignored.
+
+After manually committing/pushing on your branch and pulling it on ICE, submit:
+
+```bash
+mkdir -p data/logs
+sbatch --parsable --job-name=fred-lr-check \
+  sota/FRED_LLM_GE/phase1_detection/jobs/check_yolo11_stability.sbatch 0.0002
+```
+
+This mode compares against `stability_check_6134619_evaluation.json` and uses
+`learning_rate_check_JOB_ID` for every run artifact. Logs still use
+`data/logs/fred-stability-JOB_ID.out`. No argument retains the original
+full-precision diagnostic mode and `stability_check_JOB_ID` names.
+Each diagnostic report records its comparison run, requested change, optimizer
+settings, loss maxima, and separate training/validation scores. Inspect both
+early loss behavior and final scores before adopting a larger-data run.
+
+Artifacts below use `stability_check_JOB_ID` for the original no-argument mode;
+substitute `learning_rate_check_JOB_ID` for the lower-LR mode:
 
 - `seeds/yolo11/runs/stability_check_JOB_ID/`: raw history, plots, and checkpoints.
 - `seeds/yolo11/trained_models/stability_check_JOB_ID.pt`: accepted checkpoint.
