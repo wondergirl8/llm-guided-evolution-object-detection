@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=llm_opt
-#SBATCH -t 8:00:00
+#SBATCH -t 7:45:00
 #SBATCH --mem 16G
 #SBATCH -c 4
 #SBATCH -N 1
