@@ -37,7 +37,8 @@ HOSTNAME_DIR = os.path.join(ROOT_DIR, "hostname.log")
 ENVIRONMENT_DIR = os.path.join(ROOT_DIR, ".venv")
 
 CLUSTER = os.getenv("LLMGE_CLUSTER", "pace-ice")
-PORT = int(os.getenv("LLMGE_PORT", "8137"))
+# Not 8137: other LLM-GE servers on shared GPU nodes use that default.
+PORT = int(os.getenv("LLMGE_PORT", "8293"))
 # Same shared Llama 3.3 70B the MuJoCo runs serve through server.sh.
 MODEL_PATH = os.getenv(
     "LLMGE_MODEL_PATH",
@@ -107,7 +108,10 @@ start_population_size = 4
 population_size = 4
 crossover_probability = 0.5
 mutation_probability = 0.8
-num_elites = 1
+num_elites = 2
+# Reserve one elite slot for the highest-mAP50 model; SPEA2 alone kept the
+# smallest model and dropped the most accurate ones.
+KEEP_BEST_ELITE = True
 hof_size = 4
 max_gen_attempts = 5
 migration_gen = 0

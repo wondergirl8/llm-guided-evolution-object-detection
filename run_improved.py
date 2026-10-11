@@ -996,6 +996,20 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
 
     return population_data, start_gen, global_data
 
+def select_elites(pop, k):
+    """SPEA2 elites, optionally reserving one slot for the most accurate individual.
+
+    SPEA2's density step uses raw objective values, so a large-valued objective
+    such as parameter count decides it and the most accurate model can be lost.
+    With KEEP_BEST_ELITE, the best individual by the first objective (ties broken
+    by the next ones) is always kept and SPEA2 picks the remaining k - 1.
+    """
+    if not globals().get("KEEP_BEST_ELITE", False) or k < 1 or not pop:
+        return tools.selSPEA2(pop, k)
+    best = tools.selBest(pop, 1)[0]
+    rest = [ind for ind in pop if ind[0] != best[0]]
+    return [best] + tools.selSPEA2(rest, min(k - 1, len(rest)))
+
 def true_nsga2(pop, k):
     pop = tools.selNSGA2(pop, len(pop)) # 10 diff
     # selTournamentDCD needs a multiple of 4, so round up and trim back to k
@@ -1119,8 +1133,8 @@ if __name__ == "__main__":
         box_print(f"Selection", print_bbox_len=60, new_line_end=False)
         # These bypass the mutation and cross-over so we dont lose them
 
-        elites = tools.selSPEA2(population, num_elites)
-        
+        elites = select_elites(population, num_elites)
+
         # Select the next generation's parents
         if len(population) < population_size:
             print(f"Selecting {len(population)} offspring")
