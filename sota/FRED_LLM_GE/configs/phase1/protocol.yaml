@@ -21,7 +21,7 @@ proxy:
   val_sequences: [1, 50, 72]
   frame_step: 10
   img_width: 1280
-  epochs: 20
+  epochs: 80
   batch_size: 16
   seed: 0
   # Detections below this confidence are dropped before NMS and scoring.
