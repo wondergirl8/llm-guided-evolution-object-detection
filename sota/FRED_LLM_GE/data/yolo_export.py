@@ -73,6 +73,7 @@ def selected_indices(manifest_path: Path, split: str, limit: int,
 def export_subset(manifest_path: Path, inventory_path: Path, output: Path,
                   train_limit: int, val_limit: int, *, selector=selected_indices,
                   selection_policy: str | None = None,
+                  cached_only: bool = False,
                   purpose: str = "bounded bring-up only; not a formal FRED baseline") -> Path:
     """Export an explicit small project-train/validation subset, atomically."""
     from sota.FRED_LLM_GE.archive.phase0_data_old.config import load_config
@@ -102,7 +103,11 @@ def export_subset(manifest_path: Path, inventory_path: Path, output: Path,
         raise ValueError("manifest has no approved project split reference")
     if metadata.get("dataset_revision") != inventory.dataset_revision:
         raise ValueError("manifest and inventory revisions differ")
-    source = HFFredSource(config)
+    if cached_only:
+        from .cached_source import CachedOnlyFredSource
+        source = CachedOnlyFredSource(config)
+    else:
+        source = HFFredSource(config)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fred-yolo11-", dir=output.parent) as temp_name:
         temp = Path(temp_name)
@@ -167,6 +172,7 @@ def export_subset(manifest_path: Path, inventory_path: Path, output: Path,
             "unpaired_source_annotation_count": metadata.get("unpaired_annotation_count", 0),
             "counts": counts,
             "purpose": purpose,
+            **({"cached_only": True} if cached_only else {}),
         }, indent=2) + "\n", encoding="utf-8")
         (temp / "label_provenance.jsonl").write_text(
             "".join(json.dumps(row, sort_keys=True) + "\n" for row in lineage), encoding="utf-8")

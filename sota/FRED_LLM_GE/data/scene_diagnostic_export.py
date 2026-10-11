@@ -78,16 +78,17 @@ def export(manifest: Path, inventory: Path, output: Path) -> Path:
                          purpose=PURPOSE)
 
 
-def verify_export(directory: Path) -> dict:
+def verify_export(directory: Path, *, manifest_validator=validate_manifest,
+                  purpose: str = PURPOSE) -> dict:
     manifest = directory / "manifest.sqlite"
-    selected = validate_manifest(manifest)
+    selected = manifest_validator(manifest)
     source = json.loads((directory / "export/source.json").read_text())
     project = load_project_split_manifest(DEFAULT_PROJECT)
     counts = {side: FRAMES_PER_SEQUENCE * list(selected.values()).count(side)
               for side in ("train", "validation")}
     if (source.get("manifest_sha256") != sha256_file(manifest)
             or source.get("project_split_content_hash") != project.content_hash
-            or source.get("purpose") != PURPOSE or source.get("counts") != counts):
+            or source.get("purpose") != purpose or source.get("counts") != counts):
         raise ValueError("diagnostic export provenance or counts changed")
     expected = {}
     for side, image_side in (("train", "train"), ("validation", "val")):
@@ -107,7 +108,7 @@ def verify_export(directory: Path) -> dict:
         expected[side] = stems
     if expected["train"] & expected["validation"]:
         raise ValueError("diagnostic split overlap")
-    return {"selected_sequences": selected, "counts": counts, "purpose": PURPOSE}
+    return {"selected_sequences": selected, "counts": counts, "purpose": purpose}
 
 
 def main(argv=None):

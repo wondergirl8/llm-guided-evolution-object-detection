@@ -122,7 +122,11 @@ def command_inspect_sequence(args: argparse.Namespace) -> int:
     if allow_partial_out_of_bounds and "BRINGUP" not in project.approval_reference:
         raise ValueError("partial bounds policy requires a BRINGUP approval reference")
     record = _record(inventory, args.sequence)
-    source = _source(config)
+    if getattr(args, "cached_only", False):
+        from sota.FRED_LLM_GE.data.cached_source import CachedOnlyFredSource
+        source = CachedOnlyFredSource(config)
+    else:
+        source = _source(config)
     inspection = _inspect_prepared_sequence(
         source=source,
         config=config,
@@ -182,7 +186,11 @@ def command_build_manifest(args: argparse.Namespace) -> int:
     report_path = (getattr(args, "validation_report", None)
                    or config.validation_root / "manifest_build_validation.json")
     inspections = []
-    source = _source(config)
+    if getattr(args, "cached_only", False):
+        from sota.FRED_LLM_GE.data.cached_source import CachedOnlyFredSource
+        source = CachedOnlyFredSource(config)
+    else:
+        source = _source(config)
     metadata = {
         "manifest_version": config.manifest_version,
         "schema_version": config.schema_version,
@@ -381,6 +389,8 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--output", type=Path)
     inspect.add_argument("--allow-partial-out-of-bounds", action="store_true")
     inspect.add_argument("--annotation-policy", choices=[POLICY_VERSION])
+    inspect.add_argument("--cached-only", action="store_true",
+                         help="require existing prepared entries; no downloads or eviction")
     inspect.set_defaults(handler=command_inspect_sequence)
 
     manifest = commands.add_parser("build-manifest")
@@ -393,6 +403,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="separate report path for an isolated manifest build")
     manifest.add_argument("--allow-partial-out-of-bounds", action="store_true")
     manifest.add_argument("--annotation-policy", choices=[POLICY_VERSION])
+    manifest.add_argument("--cached-only", action="store_true",
+                          help="require existing prepared entries; no downloads or eviction")
     manifest.set_defaults(handler=command_build_manifest)
 
     smoke = commands.add_parser("smoke")

@@ -610,6 +610,114 @@ evaluated; original job remains FAILED` and creates a new `summary.json` with
 evaluation report remain absent. Do not resubmit the 50-epoch resolution trainer
 to recover this finished training run.
 
+## Completed 960px recovery and next cached recording check
+
+ICE recovery job **6154968** completed in 2m38s without repeating training.
+Shared COCO mAP50 / mAP50:95 on the same 1,024 validation frames:
+
+| Validation recording(s) | 640px original | 960px recovered |
+| --- | --- | --- |
+| Combined | 0.87982 / 0.47970 | 0.86471 / 0.46371 |
+| City skyline 52 | 0.78778 / 0.37470 | 0.76696 / 0.35486 |
+| Arched hall 180 | 0.95783 / 0.57402 | 0.95206 / 0.55779 |
+
+The recovered checkpoint SHA256 is
+`6c0f06e7ed0ed06fe2d76fc0fe48e8c172394554035056be8ca74a97e40209ec`.
+Downloaded review archive SHA256:
+`07eea8a7c3211f7c6cc652498d01ff023d4ba638f3803a1e86f7adb944d2b33a`.
+Offline COCO recomputation reproduced all three recovered scores. Original
+Slurm job 6153942 remains FAILED: training completed, then prediction ran out
+of memory. This single comparison supports keeping 640px for the next
+engineering check; it does not establish a general causal resolution result.
+
+`cached_coverage_check` expands recording coverage using prepared cache entries
+only. It keeps the approved infrastructure scene split, event representation,
+annotation policy and protected YOLO11 seed. The fixed cohort is:
+
+| Group | Split | Recording IDs | Frames |
+| --- | --- | --- | --- |
+| Courtyard | Train | 3, 199, 200 | 1,536 |
+| Outdoor gardens | Train | 25, 203, 204 | 1,536 |
+| Utility corridor | Train | 168 | 512 |
+| City skyline | Validation | 52 | 512 |
+| Arched hall | Validation | 180, 186, 187 | 1,536 |
+
+Each recording contributes 512 evenly spaced annotated frames. Totals are
+3,584 train / 2,048 validation. This deliberately bounded cohort is unbalanced
+and does not cover all 172 development recordings. Frames from one recording
+are correlated; they are not independent validation trials. New aggregate AP
+uses a changed cohort and cannot be presented as a paired resolution gain.
+
+Preparation checks pinned cache/inventory identities, then fully inspects all
+selected recordings and builds a fresh non-freeze manifest and derived PNG/YOLO
+export. Missing, corrupt or invalid sources, or too few eligible frames, stop
+preparation. There is no fallback selection, download, eviction, retry or cache
+limit increase. `CachedOnlyFredSource` uses prepared read-only handles;
+`--cached-only` on the compatibility inspection/manifest CLI is opt-in. Existing
+five-recording and tiny bring-up defaults retain their contracts.
+
+The Oct-10 readiness output reported 98.4 GB / 300 GB scratch usage,
+560,148 / 1,000,000 files, and a 49.3 GiB / 50 GiB FRED cache. These are a
+dated quota snapshot, not a live guarantee. Derived exports add about 11,300
+image/label files plus manifests/logs. They do not enlarge the prepared cache.
+
+The submitter reserves two jobs: CPU preparation (4 CPUs, 48G, maximum 2h),
+then one GPU (8 CPUs, 24G, maximum 2h). GPU depends on CPU success and waits
+for existing GPU jobs. Full requested GPU walltimes are counted against the
+PDF's 32 GPU-hour / 50-job envelope; live Slurm account/QOS rules also apply.
+Do not run another process that downloads or evicts shared cache entries during
+CPU preparation. No automatic resubmission occurs after timeout/failure.
+
+In the **PACE ICE terminal**, after committing/pushing this change on Mac and
+fast-forwarding the infrastructure branch:
+
+```bash
+cd /storage/ice1/7/6/bnguyen367/llm-guided-evolution-object-detection
+data/.venv-yolo11/bin/python \
+  -m sota.FRED_LLM_GE.phase1_detection.cached_coverage_check \
+  --directory data/fred_overnight/scene_zeqt5oqs \
+  --reference-run scene_check_6141846
+```
+
+Save the printed CPU/GPU IDs and unique output path under
+`data/fred_coverage_checks/cached640_*/`. Logs are
+`data/logs/fred-coverage-data-CPU_JOBID.out` and
+`data/logs/fred-coverage-gpu-GPU_JOBID.out`. The GPU trains a **fresh pretrained**
+seed for 50 epochs at 640px, batch 2, AMP disabled, AdamW LR 0.0002.
+Training/evaluation uses the existing explicit prediction chunking fix.
+Success requires 50 finite epochs, all 2,048 prediction records including
+no-detection frames, reproduced shared COCO AP and unchanged input/checkpoint
+hashes. It writes per-recording and per-scene metrics plus four label/prediction
+preview grids. Display confidence 0.5 does not alter AP confidence 0.001.
+
+No `summary.json` is published on failed gates. Keep partial artifacts and logs
+for diagnosis. After the printed GPU job finishes, use its saved receipt (insert
+the exact printed output path):
+
+```bash
+data/.venv-yolo11/bin/python - <<'PY'
+import json, subprocess
+from pathlib import Path
+output = Path("data/fred_coverage_checks/REPLACE_WITH_PRINTED_DIRECTORY")
+jobs = json.loads((output / "jobs.json").read_text())
+subprocess.run(["sacct", "-j", f"{jobs['cpu_job']},{jobs['gpu_job']}",
+                "--format=JobID,State,ExitCode,Elapsed"], check=True)
+for kind, prefix in (("cpu_job", "fred-coverage-data"), ("gpu_job", "fred-coverage-gpu")):
+    log = Path(f"data/logs/{prefix}-{jobs[kind]}.out")
+    if log.is_file():
+        print("\nLOG:", log)
+        print("\n".join(log.read_text().splitlines()[-40:]))
+summary = output / "summary.json"
+if summary.is_file():
+    report = json.loads(summary.read_text())
+    print("Status:", report["status"])
+    for name, metrics in report["per_recording_validation"].items():
+        print(name, metrics)
+else:
+    print("No completion summary; inspect job states and logs.")
+PY
+```
+
 ## Research boundary
 
 The prepared-data exporter is `sota.FRED_LLM_GE.data.yolo_export`, using
