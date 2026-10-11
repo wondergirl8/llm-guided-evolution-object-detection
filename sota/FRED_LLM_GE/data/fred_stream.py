@@ -41,7 +41,9 @@ def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step
             continue
         if "/Event/Frames/" not in path:
             continue
-        pattern = rf"/Event/Frames/Video_{sequence_id}_frame_(\d+)\.png::"
+        # Sequences 0-106 name frames Video_<id>_frame_<counter>.png; from 116 on
+        # they are Video_<id>_<counter>.png. The counter is the same in both.
+        pattern = rf"/Event/Frames/Video_{sequence_id}_(?:frame_)?(\d+)\.png::"
         match = re.search(pattern, path)
         counter = int(match[1]) if match else None
         if counter is None or counter < STEP_US or counter % STEP_US:
