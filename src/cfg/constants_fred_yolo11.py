@@ -1,9 +1,8 @@
-"""LLM-GE configuration for the project-owned FRED YOLO11 seed.
+"""Option-2 LLM-GE configuration: actual Ultralytics YOLO11 from scratch.
 
 Paths are derived from this checkout so the same configuration can be used on
-a laptop or on PACE ICE. The seed is Ruhi's event-only DroneDetector
-(sota/FRED_LLM_GE/seeds/seed_yolo11.py); candidates are trained and scored by
-train_eval.py, which writes SOTA_ROOT/results/<gene_id>_results.csv.
+a laptop or on PACE ICE. The official YOLO11 backbone/neck are editable Python
+classes; the head/loss and training protocol are protected. No COCO weights.
 """
 
 import math
@@ -16,19 +15,19 @@ SOTA_ROOT = os.path.join(
     ROOT_DIR, "sota", "FRED_LLM_GE", "phase1_detection", "seeds", "yolo11"
 )
 DATA_PATH = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "phase0_data")
-SEED_NETWORK = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_yolo11.py")
+SEED_NETWORK = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_ultralytics_yolo11.py")
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
-TRAIN_FILE = os.path.join(SOTA_ROOT, "train_eval.py")
+TRAIN_FILE = os.path.join(SOTA_ROOT, "train_ultralytics.py")
 
 # run_improved.py resolves the prompt glob against ROOT_DIR and loads the
 # domain rules separately. Keep rules outside the selectable prompt glob.
-DEFAULT_PROMPT_GROUP = "FRED/Normal"
+DEFAULT_PROMPT_GROUP = "FRED/Ultralytics"
 PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
-CONSTANT_RULES_PATH = "templates/FRED/ConstantRules.txt"
+CONSTANT_RULES_PATH = "templates/FRED/UltralyticsRules.txt"
 
-OUTPUT_DIR = os.path.join(ROOT_DIR, "fred_yolo11_output")
+OUTPUT_DIR = os.getenv("LLMGE_OUTPUT_DIR", os.path.join(ROOT_DIR, "fred_ultralytics_yolo11_output"))
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
 SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
@@ -100,12 +99,13 @@ FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
-# run_improved.py loops range(1, num_generations). This is set high so a run
-# keeps evolving until its Slurm time limit; resubmitting resumes from the
-# latest checkpoint in fred_yolo11_checkpoints.
-num_generations = 1000
-start_population_size = 4
-population_size = 4
+# range(1, num_generations): default 3 runs two generations after initialization.
+# Use fresh checkpoints for this scratch experiment; never resume the small seed.
+num_generations = int(os.getenv("LLMGE_GENERATIONS", "3"))
+start_population_size = int(os.getenv("LLMGE_POPULATION", "4"))
+population_size = start_population_size
+if num_generations < 2 or population_size < 4:
+    raise ValueError("Scratch pilot needs LLMGE_GENERATIONS >= 2 and LLMGE_POPULATION >= 4")
 crossover_probability = 0.5
 mutation_probability = 0.8
 num_elites = 2
@@ -115,5 +115,5 @@ KEEP_BEST_ELITE = True
 hof_size = 4
 max_gen_attempts = 5
 migration_gen = 0
-DNA_TXT = "FRED YOLO11"
+DNA_TXT = "FRED actual Ultralytics YOLO11 / random weights / architecture evolution"
 FORBIDDEN_PATTERNS = []

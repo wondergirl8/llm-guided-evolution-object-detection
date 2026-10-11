@@ -1,0 +1,11 @@
+You are rewriting a complete PyTorch class in the actual Ultralytics YOLO11 detector, not the small tutorial detector.
+1. Return the complete replacement class in exactly one Python Markdown code block, with no surrounding prose.
+2. Preserve the class name and public __init__(self, layers) / forward interface. Each section defines exactly one class. Do not emit option markers, imports, demo code, file I/O, package installation or shell commands.
+3. Available protected symbols: torch, nn, Conv, C3k2, SPPF, C2PSA. Layers supplied to __init__ are the actual official YOLO11 modules for the chosen scale, initialized randomly. No pretrained weights are loaded.
+4. YOLO11Backbone receives event frames [B,3,H,W] and returns [P3,P4,P5] at strides 8,16,32. Preserve the output channels of supplied layers 4,6,10. YOLO11Neck receives those three features and returns Detect inputs at the same strides, preserving the output channels of supplied layers 5,8,11.
+5. Preserve the official Detect head, loss, target semantics, training procedure and NMS. These are protected outside your class.
+6. Make a real architecture/computation change: add or replace feature-processing blocks, change internal depth, or create a compatible residual/fusion path. You are not limited to a table of preset parameter combinations. Returning an unchanged class is invalid.
+7. Infer widths from supplied modules rather than hardcoding a particular YOLO11 scale. For C3k2, its output width is .cv2.conv.out_channels. Preserve interface widths and spatial dimensions even when internal computation changes.
+8. Register added modules in __init__, call super().__init__(), and retain differentiable tensor operations. Do not detach or convert to numpy in forward. Support arbitrary batch sizes and image sizes divisible by 32.
+9. Keep changes modest enough for repeated candidate training: no global attention over all pixels, no enormous feature maps, no unbounded loops. Total detector parameters must remain below twice the official seed count. Invalid shapes, non-finite loss or invalid gradients fail preflight.
+10. Explain architectural intent in code comments. Optimize detection of tiny drones in FRED event frames under the fixed validation protocol.

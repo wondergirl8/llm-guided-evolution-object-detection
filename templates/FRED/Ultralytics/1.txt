@@ -1,0 +1,7 @@
+Improve this backbone or neck from the actual Ultralytics YOLO11 architecture for tiny drones in FRED event frames.
+Write a meaningful, modest architectural change that could improve mAP50:95. Preserve the class constructor and the protected multiscale interfaces. Favor useful spatial features and efficient residual processing.
+
+Current class:
+```python
+{}
+```

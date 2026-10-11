@@ -74,3 +74,5 @@ hostname.log
 fred_yolo11_checkpoints/
 fred_yolo11_output/
 run_job_outputs/
+fred_ultralytics_yolo11_output/
+fred_ultralytics_yolo11_checkpoints/

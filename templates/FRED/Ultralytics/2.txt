@@ -1,0 +1,6 @@
+Propose an alternative feature-processing architecture inside this actual YOLO11 class. You may add or replace PyTorch blocks and compatible feature fusion. Preserve all input/output contracts and aim for a useful accuracy/parameter tradeoff on small event-camera drones.
+
+Current class:
+```python
+{}
+```
