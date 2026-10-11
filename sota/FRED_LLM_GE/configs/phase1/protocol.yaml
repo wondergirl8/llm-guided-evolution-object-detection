@@ -1,0 +1,38 @@
+# Shared proxy protocol for scoring Phase 1 candidates during LLM-GE search.
+#
+# Every model family is trained and scored by phase1_detection/candidate_runner.py
+# with these values, so candidates from different seeds see the same frames,
+# budget and scoring. Only how a model is built and trained is family-specific
+# (phase1_detection/adapters/). Values match the provisional proxy budget in
+# seeds/yolo11/train_eval.py and are still to be agreed with Member 3.
+
+proxy:
+  modality: event
+  # map_reporter only accepts validation reports from FRED's challenging-train
+  # split. All sequences below come from the Hugging Face train/ folder.
+  benchmark_split: challenging
+  official_split: challenging_train
+  hf_split: train
+  # Provisional until DG-P0-02: all are in both the canonical and challenging
+  # train splits (P0-D10/D11), with no val sequence next to a train one.
+  # Only sequences 0-106 for now: from 116 on, event frames are named
+  # Video_<id>_<timestamp>.png, which fred_stream.py does not parse yet.
+  train_sequences: [5, 18, 30, 42, 57, 66, 96, 104]
+  val_sequences: [1, 50, 72]
+  frame_step: 10
+  img_width: 1280
+  epochs: 20
+  batch_size: 16
+  seed: 0
+  # Detections below this confidence are dropped before NMS and scoring.
+  eval_conf: 0.05
+  nms_iou: 0.5
+  # Relative to sota/FRED_LLM_GE. Shared with train_eval.py so cached frames
+  # are reused rather than streamed again.
+  cache_dir: phase1_detection/seeds/yolo11/data_cache
+
+families:
+  tiny_yolo11:
+    # Relative to sota/FRED_LLM_GE; used when --model is "network".
+    seed_file: seeds/seed_yolo11.py
+    lr: 0.001
