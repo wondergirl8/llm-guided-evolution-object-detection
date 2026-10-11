@@ -21,6 +21,7 @@ challenging_test is never exported; final_eval.py reads it from the downloads.
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 
 import yaml
@@ -94,6 +95,20 @@ def export_sequence(sequence, folder, frame_step, root):
     return len(records)
 
 
+def warm_label_cache(data_yaml):
+    """Build Ultralytics' labels.cache for train and val once, before any training.
+
+    Every training job would otherwise scan the labels and rewrite the shared
+    cache file, and concurrent rewrites race (FileNotFoundError on rename).
+    """
+    from ultralytics.data.dataset import YOLODataset
+    from ultralytics.data.utils import check_det_dataset
+
+    data = check_det_dataset(str(data_yaml))
+    for split in ("train", "val"):
+        YOLODataset(img_path=data[split], data=data, task="detect", augment=False)
+
+
 def finalize(sequences, root, val_frames):
     missing = [s for s, _ in sequences if not (root / "done" / f"{s}.json").is_file()]
     if missing:
@@ -105,12 +120,23 @@ def finalize(sequences, root, val_frames):
         raise SystemExit(f"found {len(names)} images but done markers record {expected}")
     images = [str(root / "images" / f"{n}.png") for n in names]
     (root / "train.txt").write_text("\n".join(images) + "\n")
-    # Evenly spaced frames for Ultralytics' end-of-training check only.
-    step = max(1, len(images) // val_frames)
-    (root / "val.txt").write_text("\n".join(images[::step][:val_frames]) + "\n")
-    (root / "data.yaml").write_text(yaml.safe_dump(
-        {"path": str(root), "train": "train.txt", "val": "val.txt",
+    # Evenly spaced frames for Ultralytics' end-of-training check only. They are
+    # copied to their own folder: Ultralytics keys its label cache on the labels
+    # folder, so a val list sharing train's folder would keep overwriting it.
+    check = root / "trainer_val"
+    shutil.rmtree(check, ignore_errors=True)
+    for sub in ("images", "labels"):
+        (check / sub).mkdir(parents=True)
+    step = max(1, len(names) // val_frames)
+    for name in names[::step][:val_frames]:
+        shutil.copy2(root / "images" / f"{name}.png", check / "images")
+        shutil.copy2(root / "labels" / f"{name}.txt", check / "labels")
+    temp = root / f"data.yaml.{os.getpid()}.tmp"
+    temp.write_text(yaml.safe_dump(
+        {"path": str(root), "train": "train.txt", "val": "trainer_val/images",
          "names": {0: "drone"}}, sort_keys=False))
+    os.replace(temp, root / "data.yaml")
+    warm_label_cache(root / "data.yaml")
     print(f"{root.name}: {len(sequences)} sequences, {len(images)} frames -> {root / 'data.yaml'}")
 
 

@@ -76,7 +76,11 @@ def test_export_sequence_writes_frames_then_marks_done(tmp_path, monkeypatch):
     data = yaml.safe_load((root / "data.yaml").read_text())
     assert data["train"] == "train.txt" and data["names"] == {0: "drone"}
     assert len((root / "train.txt").read_text().split()) == 3
-    assert len((root / "val.txt").read_text().split()) == 2
+    assert data["val"] == "trainer_val/images"
+    assert len(list((root / "trainer_val" / "images").glob("*.png"))) == 2
+    assert len(list((root / "trainer_val" / "labels").glob("*.txt"))) == 2
+    # Label caches are built once here, separately for train and the check frames.
+    assert (root / "labels.cache").is_file() and (root / "trainer_val" / "labels.cache").is_file()
     with pytest.raises(SystemExit, match="not exported"):
         export_split.finalize([("120", "test"), ("121", "train")], root, val_frames=2)
 
