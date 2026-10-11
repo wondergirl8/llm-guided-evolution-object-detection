@@ -109,7 +109,10 @@ class UltralyticsYolo11Adapter(FamilyAdapter):
         return YOLO(str(model_yaml), task="detect")
 
     def train(self, model, data, proxy, device):
-        data_yaml = export_dataset(data, proxy, self.fred_dir / proxy["cache_dir"])
+        # Disk datasets (export_split.py) come as {"data_yaml": ...}; in-memory
+        # proxy frames are exported once on first use.
+        data_yaml = data.get("data_yaml") or export_dataset(
+            data, proxy, self.fred_dir / proxy["cache_dir"])
         model.train(
             data=str(data_yaml),
             epochs=proxy["epochs"],

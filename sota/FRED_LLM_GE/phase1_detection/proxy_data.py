@@ -94,3 +94,52 @@ def load_split(cache_dir, split, sequences, frame_step, img_width):
         "sample_ids": [i for p in parts for i in p["sample_ids"]],
         "orig_size": parts[0]["orig_size"],
     }
+
+
+class LazyImages:
+    """uint8 [N, 3, H, W] frames read from PNG files only when sliced."""
+
+    def __init__(self, paths, size):
+        self.paths = list(paths)
+        width, height = size
+        self.shape = (len(self.paths), 3, height, width)
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, index):
+        from PIL import Image
+
+        if not isinstance(index, slice):
+            raise TypeError("LazyImages supports slicing only")
+        return torch.stack([
+            torch.from_numpy(np.asarray(Image.open(p).convert("RGB")).copy()).permute(2, 0, 1)
+            for p in self.paths[index]])
+
+
+def load_exported_split(root, sequences):
+    """Frames written by export_split.py for these sequences, in the load_split format.
+
+    Images stay on disk (LazyImages); boxes are the exact pixel boxes recorded
+    at export. Frames are kept at their native size, so boxes and orig_boxes match.
+    """
+    import json
+
+    root = Path(root)
+    paths, boxes, sample_ids, size = [], [], [], None
+    for sequence, folder in sequences:
+        done = root / "done" / f"{sequence}.json"
+        if not done.is_file():
+            raise FileNotFoundError(f"{done} missing: run export_split.py --set search")
+        marker = json.loads(done.read_text())
+        size = size or tuple(marker["size"])
+        if tuple(marker["size"]) != size:
+            raise ValueError(f"sequence {sequence} has frame size {marker['size']}, not {size}")
+        for record in marker["records"]:
+            paths.append(root / "images" / f"{record['name']}.png")
+            boxes.append(torch.tensor(record["boxes"], dtype=torch.float32).reshape(-1, 4))
+            sample_ids.append(f"{folder}/{sequence}:{record['frame_index']}")
+    if not paths:
+        raise ValueError(f"no exported frames under {root}")
+    return {"images": LazyImages(paths, size), "boxes": boxes, "orig_boxes": boxes,
+            "sample_ids": sample_ids, "orig_size": size}

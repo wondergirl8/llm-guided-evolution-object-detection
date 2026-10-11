@@ -27,13 +27,15 @@ try:
     from . import map_reporter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
-    from .proxy_data import REVISION, load_split
+    from .export_split import dataset_parts
+    from .proxy_data import REVISION, load_exported_split, load_split
     from .result_contract import DetectionResult, write_results
 except ImportError:
     import map_reporter
     from adapters.tiny_yolo11 import TinyYolo11Adapter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
-    from proxy_data import REVISION, load_split
+    from export_split import dataset_parts
+    from proxy_data import REVISION, load_exported_split, load_split
     from result_contract import DetectionResult, write_results
 
 FRED_DIR = Path(__file__).resolve().parents[1]
@@ -129,11 +131,45 @@ def report_metadata(adapter, proxy, config, variant_path, model_path):
     }
 
 
+def proxy_data(proxy):
+    """Train/val data for the 8-sequence proxy: cached frames held in memory."""
+    cache_dir = FRED_DIR / proxy["cache_dir"]
+    split, step, width = proxy["hf_split"], proxy["frame_step"], proxy["img_width"]
+    return (load_split(cache_dir, split, proxy["train_sequences"], step, width),
+            load_split(cache_dir, split, proxy["val_sequences"], step, width))
+
+
+def challenging_search(protocol):
+    """Settings and data for the challenging search split (export_split.py --set search).
+
+    Candidates train on challenging_train minus the held-out val_sequences
+    (an Ultralytics dataset on disk) and are scored on the val_sequences.
+    """
+    challenging = protocol["challenging"]
+    data_root = FRED_DIR / challenging["data_root"]
+    (train_root, train, train_step), (val_root, val, val_step) = dataset_parts(
+        challenging, data_root, "search")
+    data_yaml = train_root / "data.yaml"
+    if not data_yaml.is_file():
+        raise FileNotFoundError(f"{data_yaml} missing: run export_split.py --set search "
+                                "(all shards, then --finalize)")
+    proxy = dict(protocol["proxy"], train_sequences=[s for s, _ in train],
+                 val_sequences=[s for s, _ in val], frame_step=train_step,
+                 val_frame_step=val_step, epochs=challenging["search"]["epochs"])
+    frames = len((train_root / "train.txt").read_text().split())
+    return proxy, {"data_yaml": data_yaml, "frames": frames}, lambda: load_exported_split(
+        val_root, val)
+
+
 def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
     start_time = time.time()
-    proxy = protocol["proxy"]
-    torch.manual_seed(proxy["seed"])
     adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
+    if adapter.settings.get("data") == "challenging_search":
+        proxy, train_data, load_val = challenging_search(protocol)
+    else:
+        proxy = protocol["proxy"]
+        train_data = load_val = None
+    torch.manual_seed(proxy["seed"])
     config = {"family": family, "proxy": proxy, "family_settings": adapter.settings}
 
     # This is LLM Guided Code
@@ -147,11 +183,12 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
 
     param_count = adapter.param_count(model)
 
-    cache_dir = FRED_DIR / proxy["cache_dir"]
-    split, step, width = proxy["hf_split"], proxy["frame_step"], proxy["img_width"]
-    train_data = load_split(cache_dir, split, proxy["train_sequences"], step, width)
-    val_data = load_split(cache_dir, split, proxy["val_sequences"], step, width)
-    print(f"family: {family}, train frames: {len(train_data['images'])}, "
+    if load_val is None:
+        train_data, val_data = proxy_data(proxy)
+    else:
+        val_data = load_val()
+    train_frames = train_data.get("frames") or len(train_data["images"])
+    print(f"family: {family}, train frames: {train_frames}, "
           f"val frames: {len(val_data['images'])}, params: {param_count}, device: {device}",
           flush=True)
 
