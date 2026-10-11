@@ -1,4 +1,4 @@
-"""Tutorial-sized YOLO11-inspired seed for the FRED RGB-event MVP.
+"""Tutorial-sized YOLO11-inspired seed for the FRED event-only MVP.
 
 This is deliberately a small, self-contained detector rather than a faithful
 reproduction of every production YOLO11 block.  The purpose of this seed is to
@@ -8,9 +8,11 @@ Tensor convention used throughout the file:
     image tensor: [batch, channels, height, width]
     raw head output: [batch, 5 + num_classes, grid_height, grid_width]
 
-The two pairs of option-marker lines delimit the only mutable regions.
-They are at top-level indentation on purpose: the evolutionary code can
-replace each complete class without accidentally breaking a method or loop.
+LLM-GE splits this file at every option-marker line and may rewrite any
+chunk after the first marker, so each marker starts exactly one mutable class
+(the backbone, then the neck).  Everything above the first marker, including
+DroneDetector, is protected.  DroneDetector is defined before the classes it
+uses; Python looks them up only when the model is built.
 """
 
 from typing import Dict, List
@@ -27,15 +29,16 @@ class ConvBlock(nn.Module):
     that is commonly used in YOLO-family networks.
     """
 
-    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1,
+                 kernel_size: int = 3):
         super().__init__()
         self.block = nn.Sequential(
             nn.Conv2d(
                 in_channels,
                 out_channels,
-                kernel_size=3,
+                kernel_size=kernel_size,
                 stride=stride,
-                padding=1,
+                padding=kernel_size // 2,
                 bias=False,
             ),
             nn.BatchNorm2d(out_channels),
@@ -46,70 +49,6 @@ class ConvBlock(nn.Module):
         return self.block(x)
 
 
-# --OPTION--
-class SensorFusionBackbone(nn.Module):
-    """Merge RGB and event data, then extract a high-resolution feature map.
-
-    RGB and event frames each have three channels.  Concatenating them along
-    the channel axis creates [B, 6, H, W].  The first convolution learns how
-    color, brightness, motion, and event polarity should interact; this is
-    early feature fusion rather than merely adding the two modalities.
-
-    Two stride-2 convolutions reduce H,W to H/4,W/4.  Keeping this output much
-    larger than a classification feature map matters for tiny drones: a small
-    object can disappear if it is downsampled too aggressively.
-    """
-
-    def __init__(self, in_channels: int = 6, out_channels: int = 64):
-        super().__init__()
-        if in_channels != 6:
-            raise ValueError("FRED fusion expects exactly 6 input channels")
-        self.features = nn.Sequential(
-            ConvBlock(6, 32, stride=2),
-            ConvBlock(32, 48, stride=2),
-            ConvBlock(48, out_channels, stride=1),
-        )
-
-    def forward(self, rgb: Tensor, event: Tensor) -> Tensor:
-        if rgb.ndim != 4 or event.ndim != 4:
-            raise ValueError("rgb and event must both have shape [B, 3, H, W]")
-        if rgb.shape[1] != 3 or event.shape[1] != 3:
-            raise ValueError("rgb and event must each contain exactly 3 channels")
-        if rgb.shape[0] != event.shape[0] or rgb.shape[2:] != event.shape[2:]:
-            raise ValueError("rgb and event must have matching batch and spatial dimensions")
-        fused = torch.cat((rgb, event), dim=1)  # [B, 6, H, W]
-        return self.features(fused)  # [B, 64, H/4, W/4]
-
-
-# --OPTION--
-
-
-# --OPTION--
-class ContextNeck(nn.Module):
-    """SPPF-style context aggregator that preserves the feature-map size.
-
-    A 5x5 max-pool with stride 1 sees a local neighborhood without changing
-    the [H/4, W/4] grid.  Applying it three times gives progressively larger
-    effective receptive fields.  Concatenating the original map and all three
-    pooled maps lets the head use both sharp local evidence and wider context.
-    """
-
-    def __init__(self, channels: int = 64):
-        super().__init__()
-        hidden = max(channels // 2, 16)
-        self.reduce = ConvBlock(channels, hidden, stride=1)
-        self.pool = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
-        self.fuse = ConvBlock(hidden * 4, channels, stride=1)
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.reduce(x)
-        p1 = self.pool(x)
-        p2 = self.pool(p1)
-        p3 = self.pool(p2)
-        return self.fuse(torch.cat((x, p1, p2, p3), dim=1))
-
-
-# --OPTION--
 class DroneDetector(nn.Module):
     """Protected model wrapper shared by the FRED seed-model pool.
 
@@ -125,6 +64,9 @@ class DroneDetector(nn.Module):
             raise ValueError("num_classes must be positive")
         self.num_classes = num_classes
         self.confidence_threshold = confidence_threshold
+        # Highest-scoring boxes kept per image before NMS; bounds the NMS loop
+        # when a weakly trained model scores many grid cells above threshold.
+        self.max_candidates = 300
         self.backbone = SensorFusionBackbone()
         self.neck = ContextNeck(channels=64)
         self.head = nn.Sequential(
@@ -133,8 +75,8 @@ class DroneDetector(nn.Module):
         )
         self.output_stride = 4
 
-    def forward(self, rgb: Tensor, event: Tensor) -> Tensor:
-        features = self.backbone(rgb, event)
+    def forward(self, event: Tensor) -> Tensor:
+        features = self.backbone(event)
         context = self.neck(features)
         return self.head(context)
 
@@ -162,7 +104,7 @@ class DroneDetector(nn.Module):
             order = candidate[iou <= iou_threshold]
         return torch.stack(keep) if keep else boxes.new_empty((0,), dtype=torch.long)
 
-    def predict(self, rgb: Tensor, event: Tensor) -> List[Dict[str, Tensor]]:
+    def predict(self, event: Tensor) -> List[Dict[str, Tensor]]:
         """Decode one dense grid prediction per image into detection dictionaries.
 
         At each grid cell, the head emits (tx, ty, tw, th, objectness, class
@@ -170,7 +112,7 @@ class DroneDetector(nn.Module):
         and height to positive pixel sizes.  The cell coordinates and the
         output stride then convert those values to image-space xyxy boxes.
         """
-        logits = self.forward(rgb, event)
+        logits = self.forward(event)
         batch, _, grid_h, grid_w = logits.shape
         raw = logits.view(batch, 5 + self.num_classes, grid_h, grid_w).permute(0, 2, 3, 1)
         device = logits.device
@@ -194,6 +136,9 @@ class DroneDetector(nn.Module):
             boxes = torch.cat((centers - sizes / 2, centers + sizes / 2), dim=-1)
             mask = scores >= self.confidence_threshold
             boxes, scores, labels = boxes[mask], scores[mask], labels[mask]
+            if scores.numel() > self.max_candidates:
+                top = scores.topk(self.max_candidates).indices
+                boxes, scores, labels = boxes[top], scores[top], labels[top]
             if boxes.numel():
                 keep = []
                 for class_id in labels.unique():
@@ -206,11 +151,54 @@ class DroneDetector(nn.Module):
         return results
 
 
-if __name__ == "__main__":
-    # A tiny smoke test for local development; the evolutionary runner imports
-    # DroneDetector and does not execute this demonstration block.
-    model = DroneDetector(num_classes=1)
-    rgb = torch.randn(2, 3, 128, 128)
-    event = torch.randn(2, 3, 128, 128)
-    print(model(rgb, event).shape)
-    print({key: value.shape for key, value in model.predict(rgb, event)[0].items()})
+# --OPTION--
+class SensorFusionBackbone(nn.Module):
+    """Extract a high-resolution feature map from one event frame.
+
+    The event frame has three channels, [B, 3, H, W].  The first convolution
+    learns how motion and event polarity patterns indicate a drone.
+
+    Two stride-2 convolutions reduce H,W to H/4,W/4.  Keeping this output much
+    larger than a classification feature map matters for tiny drones: a small
+    object can disappear if it is downsampled too aggressively.
+    """
+
+    def __init__(self, in_channels: int = 3, out_channels: int = 64):
+        super().__init__()
+        if in_channels != 3:
+            raise ValueError("FRED event frames have exactly 3 input channels")
+        self.features = nn.Sequential(
+            ConvBlock(3, 32, stride=2),
+            ConvBlock(32, 48, stride=2),
+            ConvBlock(48, out_channels, stride=1),
+        )
+
+    def forward(self, event: Tensor) -> Tensor:
+        if event.ndim != 4 or event.shape[1] != 3:
+            raise ValueError("event must have shape [B, 3, H, W]")
+        return self.features(event)  # [B, 64, H/4, W/4]
+
+
+# --OPTION--
+class ContextNeck(nn.Module):
+    """SPPF-style context aggregator that preserves the feature-map size.
+
+    A 5x5 max-pool with stride 1 sees a local neighborhood without changing
+    the [H/4, W/4] grid.  Applying it three times gives progressively larger
+    effective receptive fields.  Concatenating the original map and all three
+    pooled maps lets the head use both sharp local evidence and wider context.
+    """
+
+    def __init__(self, channels: int = 64):
+        super().__init__()
+        hidden = max(channels // 2, 16)
+        self.reduce = ConvBlock(channels, hidden, stride=1)
+        self.pool = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
+        self.fuse = ConvBlock(hidden * 4, channels, stride=1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.reduce(x)
+        p1 = self.pool(x)
+        p2 = self.pool(p1)
+        p3 = self.pool(p2)
+        return self.fuse(torch.cat((x, p1, p2, p3), dim=1))

@@ -10,7 +10,7 @@ REVISION = "980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd"
 STEP_US = 33_333
 
 
-def stream_event_frames(split, sequence_id, bad_timestamps_path=None):
+def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step=1):
     sequence_id = int(sequence_id)
     archive = (
         f"hf://datasets/GabrieleMagrini/FRED@{REVISION}/"
@@ -75,7 +75,9 @@ def stream_event_frames(split, sequence_id, bad_timestamps_path=None):
             "expected", "observed",
         ))
         writer.writerows((split, sequence_id, *finding) for finding in bad)
-    for counter, path in frames:
+    # frame_step > 1 decodes only every Nth valid frame (timestamp checks above
+    # still cover the whole sequence).
+    for counter, path in frames[::frame_step]:
         image = Image().decode_example({"path": path, "bytes": None})
         yield image, counter / 1_000_000
 

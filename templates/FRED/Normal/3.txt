@@ -1,0 +1,8 @@
+Make this detector class more parameter-efficient while keeping or improving its ability to find small drones in event-camera frames.
+
+Fewer parameters is part of the fitness score, so prefer changes that do more with the same or fewer weights.
+
+The current code block:
+```python
+{}
+```

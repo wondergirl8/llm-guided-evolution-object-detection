@@ -23,6 +23,7 @@ output/
 **/models/
 **/weights/
 **/results/
+**/data_cache/
 **/llmge_models/
 slurm-*.out
 *.pkl
@@ -68,3 +69,8 @@ island_controller.sbatch
 templates/**/mutant*.sh
 src/mixt.sh 
 hostname.log
+
+# FRED YOLO11 LLM-GE run outputs
+fred_yolo11_checkpoints/
+fred_yolo11_output/
+run_job_outputs/

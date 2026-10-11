@@ -1,0 +1,8 @@
+Improve this class from a small YOLO-style drone detector that sees FRED event-camera frames.
+
+Drones in these frames are tiny and fast, so the goal is a higher mAP50:95 on small objects without a large increase in parameter count.
+
+The current code block:
+```python
+{}
+```

@@ -43,4 +43,7 @@ else
     echo "Skipping island controller submission (SUBMIT_ISLAND_CONTROLLER=${SUBMIT_ISLAND_CONTROLLER})"
 fi
 
-uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port 8137 --workers 1
+# Use the project's configured port so the run's LLM jobs find this server.
+PORT=$(uv run python -c "from src.cfg.constants import PORT; print(PORT)")
+echo "Serving on port $PORT"
+uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port $PORT --workers 1
