@@ -49,6 +49,8 @@ def test_option_b_cli_defaults_and_stale_a_settings(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["trainer", "--data_profile", "b"])
     args = runner.parse_args()
     assert len(args.train_sequences) == 152 and len(args.val_sequences) == 20 and args.frame_step == 50
+    assert args.val_frame_step == 10
+    assert (args.scale, args.epochs, args.img_width, args.batch_size) == ("n", 20, 1280, 16)
     monkeypatch.setenv("FRED_TRAIN_SEQUENCES", "5,18,30,42,57,66,96,104")
     with pytest.raises(SystemExit):
         runner.parse_args()
@@ -85,22 +87,24 @@ def test_option_b_training_records_frozen_manifest_and_source_mapping(tmp_path, 
     monkeypatch.setattr(runner, "SCRIPT_DIR", tmp_path)
     calls = []
 
-    def fake_load(split, sequences, frame_step, width, **options):
-        calls.append((list(sequences), frame_step, options))
-        return synthetic_data(sequences)
+    def fake_load(manifest, width):
+        calls.append((manifest["train_sequences"], manifest["frame_step"], manifest["val_frame_step"]))
+        return synthetic_data(manifest["train_sequences"]), synthetic_data(manifest["val_sequences"])
 
-    monkeypatch.setattr(runner.shared, "load_split", fake_load)
+    monkeypatch.setattr(runner.option_b, "load_exported_data", fake_load)
     previous = torch.get_num_threads()
     torch.set_num_threads(2)
     try:
         runner.main(args)
     finally:
         torch.set_num_threads(previous)
-    assert [len(c[0]) for c in calls] == [152, 20]
-    assert all(c[1] == 50 and c[2]["use_archive_index"] for c in calls)
+    assert len(calls) == 1 and len(calls[0][0]) == 152
+    assert calls[0][1:] == (50, 10)
     metadata = json.loads((tmp_path / "results/seed_evaluation.json").read_text())["metadata"]
     config = metadata["training_config"]
     assert config["data_profile"] == "b"
+    assert config["val_frame_step"] == 10
+    assert config["loader"] == "team-exported-native-png-lazy-batches"
     assert config["option_b_manifest_sha256"] == option_b.load_manifest()["sha256"]
     assert metadata["manifest_identity"] == config["option_b_manifest_sha256"]
     assert config["archive_sources"]["8"] == "test"

@@ -1,0 +1,83 @@
+# Shared protocol for scoring Phase 1 candidates during LLM-GE search.
+#
+# Every model family is trained and scored by phase1_detection/candidate_runner.py
+# with these values, so candidates from different seeds see the same frames,
+# budget and scoring. Only how a model is built and trained is family-specific
+# (phase1_detection/adapters/). Values match the provisional proxy budget in
+# seeds/yolo11/train_eval.py and are still to be agreed with Member 3.
+
+proxy:
+  modality: event
+  # map_reporter only accepts validation reports from FRED's challenging-train
+  # split. All sequences below come from the Hugging Face train/ folder.
+  benchmark_split: challenging
+  official_split: challenging_train
+  hf_split: train
+  # Provisional until DG-P0-02: all are in both the canonical and challenging
+  # train splits (P0-D10/D11), with no val sequence next to a train one.
+  # Only sequences 0-106 for now: from 116 on, event frames are named
+  # Video_<id>_<timestamp>.png, which fred_stream.py does not parse yet.
+  train_sequences: [5, 18, 30, 42, 57, 66, 96, 104]
+  val_sequences: [1, 50, 72]
+  frame_step: 10
+  img_width: 1280
+  epochs: 80
+  batch_size: 16
+  seed: 0
+  # Detections below this confidence are dropped before NMS and scoring.
+  eval_conf: 0.05
+  nms_iou: 0.5
+  # Relative to sota/FRED_LLM_GE. Shared with train_eval.py so cached frames
+  # are reused rather than streamed again.
+  cache_dir: phase1_detection/seeds/yolo11/data_cache
+
+# FRED's official challenging split (fred_splits.py). export_split.py writes
+# the data below to <data_root>; never use challenging_test results to steer
+# the search.
+challenging:
+  # Relative to sota/FRED_LLM_GE. Split lists, exported datasets and
+  # held-out reports go here.
+  data_root: phase1_detection/seeds/yolo11/data_cache/challenging
+  # LLM-GE search for families with `data: challenging_search`: candidates
+  # train on challenging_train minus val_sequences and are scored on
+  # val_sequences. Image size, batch, seed and postprocessing come from proxy.
+  search:
+    # 20 of the 172 challenging_train sequences, evenly spaced by ID
+    # (P0-D10: search validation comes only from challenging_train).
+    # Provisional until DG-P0-02.
+    val_sequences: [4, 14, 31, 44, 52, 61, 72, 95, 117, 125, 134, 145, 154,
+                    163, 171, 184, 200, 209, 218, 226]
+    # Every 50th frame of the other 152 sequences (~10k frames): about the
+    # same training cost per candidate as the 8-sequence proxy, but far more
+    # flights. Neighbouring frames are 1/30 s apart and nearly identical.
+    train_frame_step: 50
+    val_frame_step: 10
+    # Provisional; agree with the team.
+    epochs: 20
+  # Final evaluation (final_eval.py): train on all of challenging_train and
+  # score once on every challenging_test frame.
+  final:
+    # Every 5th training frame: all frames would be ~1.2M files, over the
+    # 1M-file storage quota. Provisional; agree with the team.
+    train_frame_step: 5
+    # Test frames are read straight from the downloads, so every frame is scored.
+    test_frame_step: 1
+    # Provisional training budget; agree with the team.
+    epochs: 50
+    batch_size: 16
+    img_width: 1280
+  # Training frames Ultralytics validates on after its last epoch; not used
+  # for any reported score.
+  trainer_val_frames: 256
+
+families:
+  tiny_yolo11:
+    # Relative to sota/FRED_LLM_GE; used when --model is "network".
+    seed_file: seeds/seed_yolo11.py
+    lr: 0.001
+  yolo11:
+    # Ultralytics YOLO11n, trained from scratch with the Ultralytics trainer.
+    seed_file: seeds/seed_yolo11n.yaml
+    # Train and score candidates on the challenging search split above.
+    data: challenging_search
+    workers: 8

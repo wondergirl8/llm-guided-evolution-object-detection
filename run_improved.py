@@ -237,7 +237,7 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
 
     if not LOCAL_LLM:
         return True
-    if LLM_SERVER_READY:
+    if LLM_SERVER_READY and os.getenv("FRED_DATA_PROFILE") != "b":
         return True
 
     env_timeout = os.getenv("LLM_SERVER_READY_TIMEOUT")
@@ -291,6 +291,8 @@ def submit_bash(file_path, **kwargs):
         job_id
     """
     if not wait_for_llm_server():
+        if os.getenv("FRED_DATA_PROFILE") == "b":
+            raise RuntimeError("LLM server unavailable; restart the server and resume this run from its last completed checkpoint")
         return False, None, None
 
     create_bash_file(file_path, **kwargs)
@@ -909,6 +911,16 @@ def remove_duplicates(population):
     return unique_individuals
 
 # --- Checkpoint Functions --- #
+def atomic_pickle(path, data):
+    temp = path + f".{os.getpid()}.tmp"
+    try:
+        with open(temp, "wb") as file:
+            pickle.dump(data, file)
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
 def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint_data=None):
     os.makedirs(folder_name, exist_ok=True)
 
@@ -940,8 +952,7 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                 "GLOBAL_DATA_ANCESTRY": GLOBAL_DATA_ANCESTRY
             }
 
-        with open(global_file, 'wb') as file:
-            pickle.dump(stored_global_data, file)
+        atomic_pickle(global_file, stored_global_data)
         print(f'Global data saved as {global_file}')
 
     if checkpoint_data is None:
@@ -950,8 +961,7 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
             "hof": hof, 
         }
     filename = os.path.join(folder_name, f'checkpoint_gen_{gen}.pkl')
-    with open(filename, 'wb') as file:
-        pickle.dump(checkpoint_data, file)
+    atomic_pickle(filename, checkpoint_data)
     print(f"Population data saved as {filename}")
 
 GEN_PATTERNS = {
@@ -987,7 +997,15 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
     if global_file is None:
         global_candidates = [f for f in os.listdir(global_path) if extract_generation(f, "global") is not None]
         global_files = sorted(global_candidates, key=lambda f: extract_generation(f, "global"), reverse=True)
-        global_file = global_files[0] if global_files else None
+        # A killed write can leave a newer global file without its population.
+        # Resume the matching pair rather than mixing generation identities.
+        if checkpoint_file:
+            paired = f"global_gen_{extract_generation(checkpoint_file, 'checkpoint')}.pkl"
+            if not os.path.isfile(os.path.join(global_path, paired)):
+                raise FileNotFoundError(f"Checkpoint is missing its matching global state: {paired}")
+            global_file = paired
+        else:
+            global_file = global_files[0] if global_files else None
     if global_file:
         filepath = os.path.join(global_path, global_file)
         with open(filepath, 'rb') as file:
@@ -1095,6 +1113,9 @@ if __name__ == "__main__":
         ind.fitness.values = PLACEHOLDER_FITNESS
         
     check_and_update_fitness(population)
+    if not population_data:
+        hof.update(population)
+        save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path)
     # Evolution
     for gen in range(start_gen, num_generations if migration_gen == 0 else ((start_gen + migration_gen - 1) // migration_gen) * migration_gen + 1):
         GEN_COUNT = gen

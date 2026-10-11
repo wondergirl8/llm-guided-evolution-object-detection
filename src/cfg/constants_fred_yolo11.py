@@ -67,7 +67,7 @@ DELAYED_CHECK = not LOCAL
 MACOS = platform.system() == "Darwin"
 RUNLINE_AMP = ""
 EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
-    os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(40 * 60))
+    os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(3 * 60 * 60 + 30 * 60))
 )
 
 # The generated candidate is named network_<gene_id>.py. The trainer must

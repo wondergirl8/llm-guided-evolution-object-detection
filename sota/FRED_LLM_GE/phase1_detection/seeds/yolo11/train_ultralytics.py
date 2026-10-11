@@ -168,14 +168,14 @@ def main(args):
         print(f"Preflight: {json.dumps(check)}", flush=True)
         if args.preflight_only:
             return
+        args.val_frame_step = getattr(args, "val_frame_step", args.frame_step)
         config = {key: getattr(args, key) for key in ("train_sequences", "val_sequences", "epochs",
-                  "frame_step", "img_width", "batch_size", "lr", "scale")}
+                  "frame_step", "val_frame_step", "img_width", "batch_size", "lr", "scale")}
         config.update(seed=0, initialization="random-no-pretrained-weights",
                       ultralytics="8.3.203", loss="v8DetectionLoss", padding="bottom-right-stride32-114",
                       optimizer="AdamW", weight_decay=5e-4,
                       loss_weights={k: getattr(model.detector.args, k) for k in ("box", "cls", "dfl")})
         config["data_profile"] = getattr(args, "data_profile", "a")
-        data_options = {}
         if config["data_profile"] == "b":
             manifest = option_b.load_manifest()
             if (args.train_sequences != manifest["train_sequences"] or
@@ -183,9 +183,14 @@ def main(args):
                 raise ValueError("Option B must use the frozen manifest and every 50th frame")
             config["option_b_manifest_sha256"] = manifest["sha256"]
             config["archive_sources"] = manifest["archive_sources"]
-            data_options = {"sequence_sources": manifest["archive_sources"], "use_archive_index": True}
-        train_data = shared.load_split("train", args.train_sequences, args.frame_step, args.img_width, **data_options)
-        val_data = shared.load_split("train", args.val_sequences, args.frame_step, args.img_width, **data_options)
+            if args.val_frame_step != manifest["val_frame_step"]:
+                raise ValueError("Option B validation sampling differs from the team manifest")
+            config["loader"] = "team-exported-native-png-lazy-batches"
+            config["protocol_source_commit"] = manifest["protocol_source_commit"]
+            train_data, val_data = option_b.load_exported_data(manifest, args.img_width)
+        else:
+            train_data = shared.load_split("train", args.train_sequences, args.frame_step, args.img_width)
+            val_data = shared.load_split("train", args.val_sequences, args.val_frame_step, args.img_width)
         print(f"train frames: {len(train_data['images'])}, val frames: {len(val_data['images'])}", flush=True)
         train(model, train_data, args.epochs, args.batch_size, args.lr, args.device)
         checkpoint = SCRIPT_DIR / "trained_models" / f"{gene_id}.pt"
@@ -223,18 +228,26 @@ def parse_args():
     parser.add_argument("--model", default="network")
     parser.add_argument("--variant_dir", type=Path, default=SCRIPT_DIR / "models")
     parser.add_argument("--data_profile", choices=("a", "b"), default=os.getenv("FRED_DATA_PROFILE", "a"))
-    parser.add_argument("--scale", choices=list("nsmlx"), default=os.getenv("FRED_YOLO_SCALE", "m"))
+    parser.add_argument("--scale", choices=list("nsmlx"), default=os.getenv("FRED_YOLO_SCALE"))
     parser.add_argument("--train_sequences", default=os.getenv("FRED_TRAIN_SEQUENCES"))
     parser.add_argument("--val_sequences", default=os.getenv("FRED_VAL_SEQUENCES"))
-    parser.add_argument("--epochs", type=int, default=int(os.getenv("FRED_EPOCHS", "3")))
+    parser.add_argument("--epochs", type=int, default=int(os.environ["FRED_EPOCHS"]) if "FRED_EPOCHS" in os.environ else None)
     parser.add_argument("--frame_step", type=int, default=int(os.environ["FRED_FRAME_STEP"]) if "FRED_FRAME_STEP" in os.environ else None)
-    parser.add_argument("--img_width", type=int, default=int(os.getenv("FRED_IMG_WIDTH", "640")))
-    parser.add_argument("--batch_size", type=int, default=int(os.getenv("FRED_BATCH", "4")))
+    parser.add_argument("--val_frame_step", type=int, default=int(os.environ["FRED_VAL_FRAME_STEP"]) if "FRED_VAL_FRAME_STEP" in os.environ else None)
+    parser.add_argument("--img_width", type=int, default=int(os.environ["FRED_IMG_WIDTH"]) if "FRED_IMG_WIDTH" in os.environ else None)
+    parser.add_argument("--batch_size", type=int, default=int(os.environ["FRED_BATCH"]) if "FRED_BATCH" in os.environ else None)
     parser.add_argument("--lr", type=float, default=float(os.getenv("FRED_LR", "1e-3")))
     parser.add_argument("--device", default=os.getenv("FRED_DEVICE", "cuda" if torch.cuda.is_available() else "cpu"))
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
     manifest = option_b.load_manifest() if args.data_profile == "b" else None
+    args.scale = args.scale or ("n" if manifest else "m")
+    args.epochs = args.epochs if args.epochs is not None else (20 if manifest else 3)
+    args.img_width = args.img_width if args.img_width is not None else (1280 if manifest else 640)
+    args.batch_size = args.batch_size if args.batch_size is not None else (16 if manifest else 4)
+    args.val_frame_step = args.val_frame_step if args.val_frame_step is not None else (manifest["val_frame_step"] if manifest else args.frame_step or shared.FRAME_STEP)
+    if manifest and args.val_frame_step != manifest["val_frame_step"]:
+        parser.error("Option B requires --val_frame_step 10")
     args.frame_step = args.frame_step if args.frame_step is not None else (50 if manifest else shared.FRAME_STEP)
     if manifest and args.frame_step != 50:
         parser.error("Option B requires --frame_step 50")
@@ -250,7 +263,7 @@ def parse_args():
         setattr(args, key, values)
     if set(args.train_sequences) & set(args.val_sequences):
         parser.error("train and val sequences must not overlap")
-    if min(args.epochs, args.frame_step, args.batch_size) <= 0 or args.img_width < 32 or args.lr <= 0:
+    if min(args.epochs, args.frame_step, args.val_frame_step, args.batch_size) <= 0 or args.img_width < 32 or args.lr <= 0:
         parser.error("epochs/frame_step/batch_size/lr must be positive; img_width >= 32")
     return args
 

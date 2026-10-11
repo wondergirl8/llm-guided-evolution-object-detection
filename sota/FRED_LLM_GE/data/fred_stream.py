@@ -53,6 +53,19 @@ def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step
                                     lambda path: Image().decode_example({"path": path, "bytes": None}))
 
 
+
+def zip_event_frames(zip_path, split, sequence_id, bad_timestamps_path=None, frame_step=1):
+    """Reuse timestamp checks for the team's temporary whole-ZIP CPU export."""
+    sequence_id = int(sequence_id)
+    with zipfile.ZipFile(zip_path) as archive:
+        def decode(path):
+            member = path.split("::", 1)[0].removeprefix("zip://")
+            with archive.open(member) as file:
+                with PILImage.open(file) as image:
+                    return image.copy()
+        yield from checked_event_frames(split, sequence_id, bad_timestamps_path, frame_step,
+                                        indexed_archive_paths(str(zip_path), archive), decode)
+
 def checked_event_frames(split, sequence_id, bad_timestamps_path, frame_step, paths, decode):
     candidates, rgb, bad = [], [], []
     for path in paths:

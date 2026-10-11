@@ -10,17 +10,17 @@ It does not change the older primary-study pretraining recommendations.
 ## What changed
 
 - `seeds/seed_ultralytics_yolo11.py` constructs pinned Ultralytics 8.3.203 YOLO11.
-  Default scale is **m**, matching the project's recommended starting scale;
-  **n** is available for cheap plumbing checks. The unchanged seed executes the
+  The standalone seed defaults to **m**; the option-B launcher selects **n**
+  to match the team's current search setup. The unchanged seed executes the
   official graph exactly, including its Detect head and P3/P4/P5 outputs.
 - Two mutable Python classes contain the actual backbone and neck. They may
   add/replace PyTorch blocks, not merely choose among preset parameter values.
   The protected wrapper, Detect head, detection loss and NMS remain fixed.
 - `seeds/yolo11/train_ultralytics.py` uses official `v8DetectionLoss` with the
-  team's AdamW loop, cached FRED event frames, annotation handling and COCO
-  evaluator. It pads cached tensors on the bottom/right to multiples of 32;
+  existing AdamW loop, FRED event frames, annotation handling and COCO
+  evaluator. Option B reuses the team's native PNG export and lazy disk loader. It pads cached tensors on the bottom/right to multiples of 32;
   labels and predictions retain their original coordinate meaning. It does
-  not change raw data or create another FRED loader.
+  not change raw data or the protected evaluator.
 - Configuration selects the new seed, trainer and `FRED/Ultralytics` prompts.
   The existing LLM-GE mutation/crossover/selection/checkpoint code is reused.
   New run output directories prevent resuming the small-seed population.
@@ -53,48 +53,89 @@ pilot cannot establish accuracy improvement or superiority to the FRED paper.
 
 ## Run on ICE
 
-### Option B: all challenging-training sequences, sparse frames
+### Option B: team protocol and long runs
 
-Run `bash scripts/run_yolo11_option_b.sh` from this branch on ICE after `uv sync`
-and after the LLM server has completed startup. Keep the existing server running;
-this launcher does not start another one. It uses actual YOLO11m, random weights,
-width 640, batch 4, and three epochs by default. `FRED_EPOCHS` can set another
-fixed budget before launch, applied identically to baseline and candidates.
-Population defaults to 4 and `LLMGE_GENERATIONS=3` runs two generations after
-initialization. Use new outputs/checkpoints for B; do not resume A results.
+This adopts the provisional search setup from `fred-run-setup` at
+`664b67fe7f5e62329db7710b7634b3c6e960906c`: YOLO11n, random weights, width 1280,
+batch 16, 20 epochs; 152 training sequences sampled every 50th valid event frame
+and 20 validation sequences sampled every 10th. The exact team validation IDs
+are frozen in `configs/phase1/yolo11_option_b.json` (profile v2); results from the
+older v1 random partition cannot be resumed into this workload. All 59 official
+challenging-test sequences remain excluded from search. Archive folder names
+are storage locations; 33 challenging-training sequences live in HF `test/`.
 
-The committed `configs/phase1/yolo11_option_b.json` partitions all **172** official
-challenging-training sequences into **152 training / 20 validation**, using
-`random.Random(0).sample(official_train, 20)` to select the validation sequences.
-Every 50th valid event frame is decoded. The **59 official challenging-test**
-sequences are excluded from search. This is a task-approved sequence-level
-engineering split; stronger recording/session grouping remains unverified and
-it does not replace the formal project's pending grouping decision.
+The team code supplies `export_split.py`, `fred_splits.py`, `proxy_data.py` and
+`protocol.yaml`. The existing timestamp checker is reused for downloaded ZIPs.
+CPU jobs download one archive per sequence, export sampled native event PNGs,
+YOLO labels and exact pixel-box records, then remove the temporary archive.
+Markers include the pinned dataset revision and are checked on reruns. A final
+CPU job checks completeness. Images stay on disk until a training or validation
+batch needs them, including shuffled training batches. No full-cohort tensor
+allocation is required.
 
-Official membership comes from the pinned FRED GitHub split files, verified
-against the existing Phase 0 SHA-256 values. **Hugging Face `train/` and `test/`
-folders are canonical storage locations, not challenging-split membership.**
-33 of the 172 challenging-training sequences reside in its `test/` folder.
-The manifest maps each sequence to its verified archive at the pinned HF
-revision, so these sequences are included without using challenging-test data.
+**Training distinction:** we preserve our protected AdamW loop (lr 0.001,
+weight decay 0.0005), v8DetectionLoss, stride-32 padding and NMS. We reuse their
+data and search budget; this is not identical to their full Ultralytics `.train`
+recipe with its optimizer/augmentation defaults. This keeps arbitrary Python
+backbone/neck edits executable instead of reconstructing a YAML model and
+losing those edits. Baseline and evolved candidates use the same loop.
 
-Option B reads remote ZIP directory metadata rather than iterating every image's
-bytes, then decodes only sampled event frames. It supports both
-`Video_<id>_frame_<counter>.png` and `Video_<id>_<counter>.png`; counters retain
-the same annotation-time interpretation. RGB metadata checks do not decode RGB.
-Sparse caches have a separate `_indexed_v1` namespace. The existing annotation
-parser, clipping, resizing and evaluator are reused unchanged.
+On ICE, from this branch after `uv sync`, authenticate Hugging Face if needed
+and prepare the data:
 
-The launcher submits a standalone **baseline** first. This builds the full B
-cache once and saves seed metrics/checkpoint into the run folder. On successful
-completion, the dependent **evolution** controller generates and evaluates
-candidates with the same manifest and workload. Candidate and baseline jobs
-request 32 GB host RAM to accommodate the larger cached tensor cohort. The
-launcher prints both job IDs and the run folder. Each run saves the split
-manifest/configuration; candidate reports retain the manifest SHA and archive
-mapping. The first baseline includes cache preparation, so its wall time is not
-a warmed-cache candidate timing. Neither the table's 20-minute estimate nor an
-accuracy improvement has been measured for this implementation.
+```bash
+uv run python -c "from huggingface_hub import login; login()"
+bash scripts/prepare_yolo11_option_b.sh
+```
+
+The script prints an eight-shard CPU array (at most four active shards), dependent
+finalization job, log folder and status command. Preparation is idempotent;
+rerun failed shards or rerun the launcher. Export completion and frame totals
+must come from ICE logs, not a timing estimate. The CPU jobs have four-hour
+limits; no GPU is requested for data preparation.
+
+After preparation succeeds, check that the LLM server is still running and
+ready at the configured port (8293). Start a fresh server with the existing
+`SUBMIT_ISLAND_CONTROLLER=0 sbatch --parsable server.sh` if needed. Then:
+
+```bash
+bash scripts/run_yolo11_option_b.sh
+```
+
+The launcher validates complete export markers and server readiness, then
+submits a four-hour GPU seed baseline. Evolution runs only after baseline
+success. The CPU controller has a 7h45m allocation and submits GPU candidate
+jobs through the existing four-hour/32GB scheduler configuration. Population
+is 4 and the default target is **1,000 generations** (`LLMGE_GENERATIONS=1001`);
+this is a stopping target across resumed allocations, not a throughput promise.
+Queue delays, candidate cost and invalid candidates determine actual progress.
+The current server also has an eight-hour limit and may end before the controller.
+The controller stops when the server becomes unavailable rather than repeatedly
+creating failed jobs. Interrupted work resumes from the last *completed*
+population checkpoint; an unfinished generation may be repeated.
+
+The launcher prints its exact run folder and resume command. After the
+controller ends, with a ready server:
+
+```bash
+bash scripts/run_yolo11_option_b.sh --resume /absolute/path/to/the/run-folder
+```
+
+Resume restores the saved settings, skips the completed baseline, and verifies
+seed/trainer/protocol/manifest identities. A live controller for the same run
+blocks duplicate submission; a file lock also protects execution. Checkpoints
+are written atomically, including generation 0 after initialization. Resume
+pairs the population with the same generation's global state. If initialization
+was interrupted before generation 0 completed, it restarts initialization while
+reusing the completed baseline. Keep the same
+checkout, generated model files, CSVs, checkpoints and global lineage directory.
+Already submitted child jobs may outlive the controller; inspect the queue
+before starting another allocation.
+
+Each run saves its manifest, protocol, settings and baseline evidence. Candidate
+reports include source revisions, manifest identity and trainer/seed hashes.
+The metadata, clipping and split remain an engineering workload pending the
+formal grouping/protocol gates. Full ICE throughput and accuracy are unverified.
 
 ### Optional small setup pilot
 
@@ -138,7 +179,7 @@ PYTHONPATH=. OMP_NUM_THREADS=2 .venv/bin/python -m pytest \
 
 OMP_NUM_THREADS=2 .venv/bin/python \
   sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/train_ultralytics.py \
-  --preflight-only --scale m
+  --preflight-only --scale n
 ```
 
 The integration test uses **synthetic frames and deterministic mocked LLM

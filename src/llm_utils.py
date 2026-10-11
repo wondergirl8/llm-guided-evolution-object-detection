@@ -518,9 +518,11 @@ def get_llm_server_hostname():
         hostname = f.readline().strip() 
     return hostname
 
-def submit_mixtral_local(prompt, max_new_tokens=850, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
+def submit_mixtral_local(prompt, max_new_tokens=None, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
+    if max_new_tokens is None:
+        max_new_tokens = globals().get("LLM_MAX_NEW_TOKENS", 850)
     if server_url is None:
-        server_url = f"http://{os.getenv('SERVER_HOSTNAME', 'localhost')}:{PORT}/generate"
+        server_url = f"http://{get_llm_server_hostname()}:{PORT}/generate"
     payload = {
         "prompt": prompt,
         "max_new_tokens": max_new_tokens, # can change to random between 800 - 1000 if needed
@@ -530,14 +532,9 @@ def submit_mixtral_local(prompt, max_new_tokens=850, temperature=0.2, top_p=0.15
 
     headers = {"Content-Type": "application/json"}
 
-    llm_hostname = get_llm_server_hostname()
-    
-    print(llm_hostname)
-
-    server_url = f"http://{llm_hostname}:{PORT}/generate"
-    
     try:
-        response = requests.post(server_url, headers=headers, json=payload)
+        response = requests.post(server_url, headers=headers, json=payload,
+                                 timeout=(10, int(os.getenv("LLMGE_LLM_REQUEST_TIMEOUT_SECONDS", "1800"))))
         
         if response.status_code == 200:
             output_txt = response.json().get("generated_text", "No output received.")
