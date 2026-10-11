@@ -26,18 +26,20 @@ import yaml
 try:
     from . import map_reporter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
+    from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from .proxy_data import REVISION, load_split
     from .result_contract import DetectionResult, write_results
 except ImportError:
     import map_reporter
     from adapters.tiny_yolo11 import TinyYolo11Adapter
+    from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from proxy_data import REVISION, load_split
     from result_contract import DetectionResult, write_results
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
-ADAPTERS = {adapter.name: adapter for adapter in (TinyYolo11Adapter,)}
+ADAPTERS = {adapter.name: adapter for adapter in (TinyYolo11Adapter, UltralyticsYolo11Adapter)}
 
 # Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
 FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)

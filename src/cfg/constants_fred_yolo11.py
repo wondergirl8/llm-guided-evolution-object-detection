@@ -1,9 +1,12 @@
-"""LLM-GE configuration for the project-owned FRED YOLO11 seed.
+"""LLM-GE configuration for the FRED event-only drone detector seeds.
 
 Paths are derived from this checkout so the same configuration can be used on
-a laptop or on PACE ICE. The seed is Ruhi's event-only DroneDetector
-(sota/FRED_LLM_GE/seeds/seed_yolo11.py); candidates are trained and scored by
-train_eval.py, which writes SOTA_ROOT/results/<gene_id>_results.csv.
+a laptop or on PACE ICE. SEED_FAMILY picks the seed: "yolo11" evolves the
+Ultralytics YOLO11n model YAML (sota/FRED_LLM_GE/seeds/seed_yolo11n.yaml);
+"tiny_yolo11" evolves Ruhi's tutorial-sized DroneDetector
+(sota/FRED_LLM_GE/seeds/seed_yolo11.py). Either way candidates are trained and
+scored by phase1_detection/candidate_runner.py under
+configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.csv.
 """
 
 import math
@@ -12,21 +15,41 @@ import platform
 
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-SOTA_ROOT = os.path.join(
-    ROOT_DIR, "sota", "FRED_LLM_GE", "phase1_detection", "seeds", "yolo11"
-)
-DATA_PATH = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "phase0_data")
-SEED_NETWORK = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_yolo11.py")
+FRED_DIR = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE")
+SEED_FAMILY = os.getenv("FRED_SEED_FAMILY", "yolo11")
+_FAMILIES = {
+    # SOTA_ROOT holds models/, results/ and trained_models/ for the family.
+    "yolo11": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ultralytics_yolo11"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11n.yaml"),
+        "prompt_group": "FRED_YOLO11/Normal",
+        "rules": "templates/FRED_YOLO11/ConstantRules.txt",
+        # 80 epochs of YOLO11n at 1280 can outlast the 40 min default; the
+        # evaluation job itself is limited to 4 h.
+        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+    },
+    "tiny_yolo11": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo11"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11.py"),
+        "prompt_group": "FRED/Normal",
+        "rules": "templates/FRED/ConstantRules.txt",
+        "eval_timeout": 40 * 60,
+    },
+}
+_FAMILY = _FAMILIES[SEED_FAMILY]
+SOTA_ROOT = _FAMILY["sota_root"]
+DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
+SEED_NETWORK = _FAMILY["seed"]
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
-TRAIN_FILE = os.path.join(SOTA_ROOT, "train_eval.py")
+TRAIN_FILE = os.path.join(FRED_DIR, "phase1_detection", "candidate_runner.py")
 
 # run_improved.py resolves the prompt glob against ROOT_DIR and loads the
 # domain rules separately. Keep rules outside the selectable prompt glob.
-DEFAULT_PROMPT_GROUP = "FRED/Normal"
+DEFAULT_PROMPT_GROUP = _FAMILY["prompt_group"]
 PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
-CONSTANT_RULES_PATH = "templates/FRED/ConstantRules.txt"
+CONSTANT_RULES_PATH = _FAMILY["rules"]
 
 OUTPUT_DIR = os.path.join(ROOT_DIR, "fred_yolo11_output")
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
@@ -68,13 +91,14 @@ DELAYED_CHECK = not LOCAL
 MACOS = platform.system() == "Darwin"
 RUNLINE_AMP = ""
 EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
-    os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(40 * 60))
+    os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(_FAMILY["eval_timeout"]))
 )
 
-# The generated candidate is named network_<gene_id>.py. The trainer must
-# accept --model and --variant_dir and write results/<gene_id>_results.csv.
+# The generated candidate is named network_<gene_id>.py. The runner trains
+# and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
-EVAL_RUNLINE = "uv run python {} --model {} --variant_dir {VARIANT_DIR}"
+EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
+                "--model {} --variant_dir {VARIANT_DIR}")
 
 SLURM_MIXT_INPUT_X = SEED_NETWORK
 SLURM_MIXT_INPUT_Y = os.path.join(VARIANT_DIR, "network_x.py")

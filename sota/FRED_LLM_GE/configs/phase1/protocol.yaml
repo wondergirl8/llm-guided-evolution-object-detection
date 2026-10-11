@@ -36,3 +36,7 @@ families:
     # Relative to sota/FRED_LLM_GE; used when --model is "network".
     seed_file: seeds/seed_yolo11.py
     lr: 0.001
+  yolo11:
+    # Ultralytics YOLO11n, trained from scratch with the Ultralytics trainer.
+    seed_file: seeds/seed_yolo11n.yaml
+    workers: 8

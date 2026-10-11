@@ -180,6 +180,8 @@ def main():
                         help="Folder to write plots and CSVs to")
     parser.add_argument("--seed_results", default=os.path.join(YOLO11_DIR, "results", "seed_results.csv"),
                         help="Seed score CSV (mAP50,mAP50:95,params); skipped if missing")
+    parser.add_argument("--models_dir", default=os.path.join(YOLO11_DIR, "models"),
+                        help="Where the run's network_<id> files are (for pareto_models.csv)")
     parser.add_argument("--no_gif", action="store_true", help="Skip the animated GIF")
     args = parser.parse_args()
 
@@ -231,7 +233,7 @@ def main():
     models = final[final["pareto_front"]].sort_values("params").copy()
     seed_file = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_yolo11.py")
     models["model_file"] = [seed_file if g == "seed"
-                            else os.path.join(YOLO11_DIR, "models", f"network_{g}.py")
+                            else os.path.join(args.models_dir, f"network_{g}.py")
                             for g in models["gene_id"]]
     models.to_csv(os.path.join(args.output, "pareto_models.csv"), index=False)
 

@@ -1,0 +1,8 @@
+Improve this section of a YOLO11n model YAML for detecting tiny, fast drones in FRED event-camera frames.
+
+The goal is a higher mAP50:95 on small objects without a large increase in parameter count.
+
+The current section:
+```yaml
+{}
+```

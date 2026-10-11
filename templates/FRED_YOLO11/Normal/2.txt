@@ -1,0 +1,8 @@
+Make one focused architectural change to this section of a YOLO11n model YAML that should help localize tiny drones in event-camera frames, such as a different block type, more repeats where small-object features are computed, or a different kernel size.
+
+Keep the number of layers, the layer indices, and the strides unchanged.
+
+The current section:
+```yaml
+{}
+```

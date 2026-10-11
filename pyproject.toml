@@ -40,6 +40,7 @@ dependencies = [
     # Streams FRED event frames from Hugging Face (data/fred_stream.py).
     "datasets",
     "certifi>=2024.2.2",
+    "ultralytics==8.4.175",
 ]
 
 [tool.pytest.ini_options]
