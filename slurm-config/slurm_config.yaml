@@ -81,7 +81,7 @@ python_bash_script: '#!/bin/bash
 
     #SBATCH -G 1
 
-    #SBATCH --mem 16G
+    #SBATCH --mem 32G
 
     #SBATCH -c 12
 

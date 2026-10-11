@@ -3,27 +3,59 @@
 import csv
 import re
 from pathlib import Path
+import zipfile
 
 from datasets import Image, load_dataset
+from huggingface_hub import HfFileSystem
+from PIL import Image as PILImage
 
 REVISION = "980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd"
 STEP_US = 33_333
 
 
-def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step=1):
+def indexed_archive_paths(archive, source=None):
+    """Read the remote ZIP directory, without reading every RGB/event image."""
+    if source is not None:
+        for member in source.namelist():
+            if member.endswith((".png", ".jpg")):
+                yield f"zip://{member}::{archive}"
+        return
+    with HfFileSystem().open(archive.removeprefix("hf://"), "rb", block_size=65536) as handle:
+        with zipfile.ZipFile(handle) as source:
+            yield from indexed_archive_paths(archive, source)
+
+
+def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step=1,
+                        *, use_archive_index=False):
     sequence_id = int(sequence_id)
     archive = (
         f"hf://datasets/GabrieleMagrini/FRED@{REVISION}/"
         f"{split}/{sequence_id}.zip"
     )
+    if use_archive_index:
+        with HfFileSystem().open(archive.removeprefix("hf://"), "rb", block_size=65536) as handle:
+            with zipfile.ZipFile(handle) as source:
+                def decode(path):
+                    member = path.split("::", 1)[0].removeprefix("zip://")
+                    with source.open(member) as file:
+                        with PILImage.open(file) as image:
+                            return image.copy()
+                yield from checked_event_frames(split, sequence_id, bad_timestamps_path, frame_step,
+                                                indexed_archive_paths(archive, source), decode)
+        return
     rows = load_dataset(
         "imagefolder", data_files={split: archive}, split=split,
         streaming=True, drop_labels=True, drop_metadata=True,
     )
     rows = rows.cast_column("image", Image(decode=False))
+    paths = (row["image"]["path"] or "" for row in rows)
+    yield from checked_event_frames(split, sequence_id, bad_timestamps_path, frame_step, paths,
+                                    lambda path: Image().decode_example({"path": path, "bytes": None}))
+
+
+def checked_event_frames(split, sequence_id, bad_timestamps_path, frame_step, paths, decode):
     candidates, rgb, bad = [], [], []
-    for row in rows:
-        path = row["image"]["path"] or ""
+    for path in paths:
         if "/RGB/" in path:
             match = re.search(
                 rf"/RGB/Video_{sequence_id}_(\d{{2}})_(\d{{2}})_(\d{{2}})\.(\d{{6}})\.jpg::",
@@ -41,7 +73,7 @@ def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step
             continue
         if "/Event/Frames/" not in path:
             continue
-        pattern = rf"/Event/Frames/Video_{sequence_id}_frame_(\d+)\.png::"
+        pattern = rf"/Event/Frames/Video_{sequence_id}_(?:frame_)?(\d+)\.png::"
         match = re.search(pattern, path)
         counter = int(match[1]) if match else None
         if counter is None or counter < STEP_US or counter % STEP_US:
@@ -78,7 +110,7 @@ def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step
     # frame_step > 1 decodes only every Nth valid frame (timestamp checks above
     # still cover the whole sequence).
     for counter, path in frames[::frame_step]:
-        image = Image().decode_example({"path": path, "bytes": None})
+        image = decode(path)
         yield image, counter / 1_000_000
 
 

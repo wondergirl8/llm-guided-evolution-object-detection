@@ -3,8 +3,8 @@
 This branch starts from `MosesTheRedSea-main` at `0c4e892b0`. The user requested
 the team's option 2: actual Ultralytics YOLO11 as generation-zero architecture,
 LLM-written backbone/neck mutations and crossovers, every individual initialized
-randomly. No COCO checkpoint or parent checkpoint is loaded. This is a bounded
-engineering pilot, not a finalized research protocol or FRED paper reproduction.
+randomly. No COCO checkpoint or parent checkpoint is loaded. This is an
+engineering experiment, not a finalized research protocol or FRED paper reproduction.
 It does not change the older primary-study pretraining recommendations.
 
 ## What changed
@@ -52,6 +52,51 @@ does not establish that they constitute a frozen formal benchmark. The tiny
 pilot cannot establish accuracy improvement or superiority to the FRED paper.
 
 ## Run on ICE
+
+### Option B: all challenging-training sequences, sparse frames
+
+Run `bash scripts/run_yolo11_option_b.sh` from this branch on ICE after `uv sync`
+and after the LLM server has completed startup. Keep the existing server running;
+this launcher does not start another one. It uses actual YOLO11m, random weights,
+width 640, batch 4, and three epochs by default. `FRED_EPOCHS` can set another
+fixed budget before launch, applied identically to baseline and candidates.
+Population defaults to 4 and `LLMGE_GENERATIONS=3` runs two generations after
+initialization. Use new outputs/checkpoints for B; do not resume A results.
+
+The committed `configs/phase1/yolo11_option_b.json` partitions all **172** official
+challenging-training sequences into **152 training / 20 validation**, using
+`random.Random(0).sample(official_train, 20)` to select the validation sequences.
+Every 50th valid event frame is decoded. The **59 official challenging-test**
+sequences are excluded from search. This is a task-approved sequence-level
+engineering split; stronger recording/session grouping remains unverified and
+it does not replace the formal project's pending grouping decision.
+
+Official membership comes from the pinned FRED GitHub split files, verified
+against the existing Phase 0 SHA-256 values. **Hugging Face `train/` and `test/`
+folders are canonical storage locations, not challenging-split membership.**
+33 of the 172 challenging-training sequences reside in its `test/` folder.
+The manifest maps each sequence to its verified archive at the pinned HF
+revision, so these sequences are included without using challenging-test data.
+
+Option B reads remote ZIP directory metadata rather than iterating every image's
+bytes, then decodes only sampled event frames. It supports both
+`Video_<id>_frame_<counter>.png` and `Video_<id>_<counter>.png`; counters retain
+the same annotation-time interpretation. RGB metadata checks do not decode RGB.
+Sparse caches have a separate `_indexed_v1` namespace. The existing annotation
+parser, clipping, resizing and evaluator are reused unchanged.
+
+The launcher submits a standalone **baseline** first. This builds the full B
+cache once and saves seed metrics/checkpoint into the run folder. On successful
+completion, the dependent **evolution** controller generates and evaluates
+candidates with the same manifest and workload. Candidate and baseline jobs
+request 32 GB host RAM to accommodate the larger cached tensor cohort. The
+launcher prints both job IDs and the run folder. Each run saves the split
+manifest/configuration; candidate reports retain the manifest SHA and archive
+mapping. The first baseline includes cache preparation, so its wall time is not
+a warmed-cache candidate timing. Neither the table's 20-minute estimate nor an
+accuracy improvement has been measured for this implementation.
+
+### Optional small setup pilot
 
 Use a **fresh checkout of this branch** so old small-seed results/checkpoints do
 not mix with this attempt. Run from the repository root, using the team's normal

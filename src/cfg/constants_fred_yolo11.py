@@ -105,7 +105,7 @@ num_generations = int(os.getenv("LLMGE_GENERATIONS", "3"))
 start_population_size = int(os.getenv("LLMGE_POPULATION", "4"))
 population_size = start_population_size
 if num_generations < 2 or population_size < 4:
-    raise ValueError("Scratch pilot needs LLMGE_GENERATIONS >= 2 and LLMGE_POPULATION >= 4")
+    raise ValueError("Scratch evolution needs LLMGE_GENERATIONS >= 2 and LLMGE_POPULATION >= 4")
 crossover_probability = 0.5
 mutation_probability = 0.8
 num_elites = 2

@@ -129,21 +129,25 @@ def load_annotations(split, sequence_id, width, height):
     return boxes
 
 
-def load_sequence(split, sequence_id, frame_step, img_width):
+def load_sequence(split, sequence_id, frame_step, img_width, *, use_archive_index=False):
     """Return cached event frames, resized to img_width, with their boxes.
 
     images: uint8 [N, 3, H, W]; boxes: list of [K, 4] tensors in resized
     pixels; orig_boxes: the same boxes in original 1280x720 pixels.
     """
     cache_dir = SCRIPT_DIR / "data_cache"
-    cache_path = cache_dir / f"{split}_{sequence_id}_step{frame_step}_w{img_width}.pt"
+    suffix = "_indexed_v1" if use_archive_index else ""
+    cache_path = cache_dir / f"{split}_{sequence_id}_step{frame_step}_w{img_width}{suffix}.pt"
     if cache_path.is_file():
         return torch.load(cache_path)
 
     images, sample_ids, frame_indices = [], [], []
     report = cache_dir / f"bad_timestamps_{split}_{sequence_id}.csv"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    for image, timestamp in stream_event_frames(split, sequence_id, report, frame_step):
+    options = {"use_archive_index": True} if use_archive_index else {}
+    if use_archive_index:
+        print(f"Preparing sparse cache: {split}/{sequence_id}", flush=True)
+    for image, timestamp in stream_event_frames(split, sequence_id, report, frame_step, **options):
         width, height = image.size
         img_height = round(height * img_width / width / 4) * 4
         image = image.convert("RGB").resize((img_width, img_height))
@@ -168,11 +172,16 @@ def load_sequence(split, sequence_id, frame_step, img_width):
     temp_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
     torch.save(data, temp_path)
     os.replace(temp_path, cache_path)
+    if use_archive_index:
+        print(f"Cached {split}/{sequence_id}: {len(images)} frames", flush=True)
     return data
 
 
-def load_split(split, sequences, frame_step, img_width):
-    parts = [load_sequence(split, s, frame_step, img_width) for s in sequences]
+def load_split(split, sequences, frame_step, img_width, *, sequence_sources=None,
+               use_archive_index=False):
+    options = {"use_archive_index": True} if use_archive_index else {}
+    parts = [load_sequence(sequence_sources[s] if sequence_sources else split,
+                           s, frame_step, img_width, **options) for s in sequences]
     return {
         "images": torch.cat([p["images"] for p in parts]),
         "boxes": [b for p in parts for b in p["boxes"]],

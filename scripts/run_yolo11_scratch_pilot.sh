@@ -14,6 +14,7 @@ assert constants.TRAIN_FILE.endswith('train_ultralytics.py')
 PY
 
 # Fixed low-cost engineering workload, identical for the seed and candidates.
+export FRED_DATA_PROFILE=a
 export FRED_YOLO_SCALE=m FRED_TRAIN_SEQUENCES=5 FRED_VAL_SEQUENCES=1
 export FRED_EPOCHS=1 FRED_FRAME_STEP=200 FRED_IMG_WIDTH=320 FRED_BATCH=2 FRED_DEVICE=cuda
 export LLMGE_GENERATIONS=3 LLMGE_POPULATION=4

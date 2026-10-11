@@ -19,6 +19,7 @@ from torch import nn
 from torch.nn import functional as F
 
 import train_eval as shared
+import option_b
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SEED_FILE = shared.FRED_DIR / "seeds" / "seed_ultralytics_yolo11.py"
@@ -173,8 +174,18 @@ def main(args):
                       ultralytics="8.3.203", loss="v8DetectionLoss", padding="bottom-right-stride32-114",
                       optimizer="AdamW", weight_decay=5e-4,
                       loss_weights={k: getattr(model.detector.args, k) for k in ("box", "cls", "dfl")})
-        train_data = shared.load_split("train", args.train_sequences, args.frame_step, args.img_width)
-        val_data = shared.load_split("train", args.val_sequences, args.frame_step, args.img_width)
+        config["data_profile"] = getattr(args, "data_profile", "a")
+        data_options = {}
+        if config["data_profile"] == "b":
+            manifest = option_b.load_manifest()
+            if (args.train_sequences != manifest["train_sequences"] or
+                    args.val_sequences != manifest["val_sequences"] or args.frame_step != 50):
+                raise ValueError("Option B must use the frozen manifest and every 50th frame")
+            config["option_b_manifest_sha256"] = manifest["sha256"]
+            config["archive_sources"] = manifest["archive_sources"]
+            data_options = {"sequence_sources": manifest["archive_sources"], "use_archive_index": True}
+        train_data = shared.load_split("train", args.train_sequences, args.frame_step, args.img_width, **data_options)
+        val_data = shared.load_split("train", args.val_sequences, args.frame_step, args.img_width, **data_options)
         print(f"train frames: {len(train_data['images'])}, val frames: {len(val_data['images'])}", flush=True)
         train(model, train_data, args.epochs, args.batch_size, args.lr, args.device)
         checkpoint = SCRIPT_DIR / "trained_models" / f"{gene_id}.pt"
@@ -183,6 +194,9 @@ def main(args):
                     "model_sha256": shared.sha256_file(variant_path)}, checkpoint)
         frames = predict_frames(model, val_data, args.batch_size, args.device)
         metadata = shared.report_metadata(variant_path, checkpoint, config)
+        if config["data_profile"] == "b":
+            metadata["manifest_identity"] = config["option_b_manifest_sha256"]
+            metadata["split_identity"] = manifest["profile"] + ":" + manifest["sha256"]
         metadata.update(postprocessing=f"Ultralytics NMS conf={shared.EVAL_CONF} iou=0.5 max_det=100 timeout=disabled",
                         experiment="option2-ultralytics-scratch-engineering", training_config=config,
                         trainer_sha256=shared.sha256_file(Path(__file__)),
@@ -208,23 +222,31 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="network")
     parser.add_argument("--variant_dir", type=Path, default=SCRIPT_DIR / "models")
+    parser.add_argument("--data_profile", choices=("a", "b"), default=os.getenv("FRED_DATA_PROFILE", "a"))
     parser.add_argument("--scale", choices=list("nsmlx"), default=os.getenv("FRED_YOLO_SCALE", "m"))
-    parser.add_argument("--train_sequences", default=os.getenv("FRED_TRAIN_SEQUENCES", shared.TRAIN_SEQUENCES))
-    parser.add_argument("--val_sequences", default=os.getenv("FRED_VAL_SEQUENCES", shared.VAL_SEQUENCES))
+    parser.add_argument("--train_sequences", default=os.getenv("FRED_TRAIN_SEQUENCES"))
+    parser.add_argument("--val_sequences", default=os.getenv("FRED_VAL_SEQUENCES"))
     parser.add_argument("--epochs", type=int, default=int(os.getenv("FRED_EPOCHS", "3")))
-    parser.add_argument("--frame_step", type=int, default=int(os.getenv("FRED_FRAME_STEP", str(shared.FRAME_STEP))))
+    parser.add_argument("--frame_step", type=int, default=int(os.environ["FRED_FRAME_STEP"]) if "FRED_FRAME_STEP" in os.environ else None)
     parser.add_argument("--img_width", type=int, default=int(os.getenv("FRED_IMG_WIDTH", "640")))
     parser.add_argument("--batch_size", type=int, default=int(os.getenv("FRED_BATCH", "4")))
     parser.add_argument("--lr", type=float, default=float(os.getenv("FRED_LR", "1e-3")))
     parser.add_argument("--device", default=os.getenv("FRED_DEVICE", "cuda" if torch.cuda.is_available() else "cpu"))
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
+    manifest = option_b.load_manifest() if args.data_profile == "b" else None
+    args.frame_step = args.frame_step if args.frame_step is not None else (50 if manifest else shared.FRAME_STEP)
+    if manifest and args.frame_step != 50:
+        parser.error("Option B requires --frame_step 50")
     for key in ("train_sequences", "val_sequences"):
-        cohort = shared.TRAIN_SEQUENCES if key == "train_sequences" else shared.VAL_SEQUENCES
-        allowed = set(cohort.split(","))
-        values = [s.strip() for s in getattr(args, key).split(",") if s.strip()]
-        if not values or not set(values) <= allowed or len(values) != len(set(values)):
-            parser.error(f"{key} must be a nonempty unique subset of the team's existing cohort: {cohort}")
+        cohort = manifest[key] if manifest else (shared.TRAIN_SEQUENCES if key == "train_sequences" else shared.VAL_SEQUENCES).split(",")
+        raw = getattr(args, key)
+        values = [s.strip() for s in raw.split(",") if s.strip()] if raw is not None else list(cohort)
+        if manifest:
+            if values != cohort:
+                parser.error(f"Option B {key} must match the frozen manifest; remove old sequence overrides")
+        elif not values or not set(values) <= set(cohort) or len(values) != len(set(values)):
+            parser.error(f"{key} must be a nonempty unique subset of the team's existing cohort: {','.join(cohort)}")
         setattr(args, key, values)
     if set(args.train_sequences) & set(args.val_sequences):
         parser.error("train and val sequences must not overlap")
