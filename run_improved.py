@@ -326,7 +326,7 @@ def check_contents_for_error(contents):
     """
     contents_lower = contents.lower()
     # Check for explicit error indicators
-    if "traceback" in contents_lower or "slurmstepd: error" in contents_lower:
+    if re.search(r'^\s*traceback \(most recent call last\):', contents_lower, re.MULTILINE) or "slurmstepd: error" in contents_lower:
         print("\t☠ Error Found in LLM Job Output.", flush=True)
         return False
     # Check for Slurm time-limit or cancellation
@@ -334,7 +334,7 @@ def check_contents_for_error(contents):
         print("\t☠ Job was cancelled (time limit or manual cancellation).", flush=True)
         return False
     # Success check
-    if "job done" in contents_lower:
+    if re.search(r'^\s*job done\s*$', contents_lower, re.MULTILINE):
         print("\t☑ LLM Job Completed Successfully.", flush=True)
         return True
     # If Slurm Epilog has been written but the job never printed "job done",
@@ -719,7 +719,10 @@ def delayed_creation_check(offspring):
                     job_id = GLOBAL_DATA[k]["job_id"]
                     print(f'Checking for Job Completion: {job_id} for {gene_id}', flush=True)
                     job_done = check4job_completion(job_id, extension="evolution/")
-                  
+                    if not job_done:
+                        GLOBAL_DATA[k].update(sub_flag=False, status="completed",
+                                              fitness=INVALID_FITNESS_MAX)
+
     return offspring
 
 def delayed_mutate_check(offspring):
@@ -1028,6 +1031,37 @@ def select_elites(pop, k):
     rest = [ind for ind in pop if ind[0] != best[0]]
     return [best] + tools.selSPEA2(rest, min(k - 1, len(rest)))
 
+def replenish_population(population, llm_model, on_progress=None):
+    """Retain successful candidates and bound retries to create enough parents."""
+    global GEN_COUNT, TOP_N_GENES
+    survivors = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
+    limit = globals().get("MAX_INITIALIZATION_BATCHES", 3)
+    saved_generation, saved_top = GEN_COUNT, TOP_N_GENES
+    try:
+        for attempt in range(limit):
+            if len(survivors) >= num_elites:
+                return survivors
+            print(f"Replenishing population: batch {attempt + 1}/{limit}; "
+                  f"{len(survivors)} valid parents", flush=True)
+            GEN_COUNT, TOP_N_GENES = -1, None
+            batch = toolbox.population(n=start_population_size, llm_model=llm_model)
+            delayed_creation_check(batch)
+            for individual in batch:
+                individual.fitness.values = PLACEHOLDER_FITNESS
+            check_and_update_fitness(batch)
+            survivors.extend(ind for ind in batch if ind.fitness.values != INVALID_FITNESS_MAX)
+            GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
+            if on_progress:
+                on_progress(survivors)
+        if len(survivors) < num_elites:
+            raise RuntimeError(f"Population initialization stopped after {limit} retry batches: "
+                               f"{len(survivors)} valid parents, need {num_elites}. "
+                               "Inspect generation audits and LLM logs before resuming.")
+        return survivors
+    finally:
+        GEN_COUNT, TOP_N_GENES = saved_generation, saved_top
+
+
 def true_nsga2(pop, k):
     pop = tools.selNSGA2(pop, len(pop)) # 10 diff
     # selTournamentDCD needs a multiple of 4, so round up and trim back to k
@@ -1132,22 +1166,14 @@ if __name__ == "__main__":
         '''
 
         box_print("CURRENT POPULATION SIZE:", len(population))
-        while len(population) < num_elites:
-            print("MINIMUM NUMBER OF IND NOT ACHIEVED, TRYING AGAIN")
-            GEN_COUNT = -1
-            TOP_N_GENES = None
-            LINKED_GENES = {}
-            GLOBAL_DATA = {}
-            GLOBAL_DATA_HIST = {}
-            GLOBAL_DATA_ANCESTRY = {}
-            start_gen = 0
-            population = toolbox.population(n=start_population_size, llm_model=llm_model)
-            delayed_creation_check(population)
-            for ind in population:
-                ind.fitness.values = PLACEHOLDER_FITNESS
-            check_and_update_fitness(population)
-            population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
-            box_print("CURRENT POPULATION SIZE:", len(population))
+        def save_initialization_progress(parents):
+            if gen == 1:
+                hof.update(parents)
+                save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path,
+                                checkpoint_data={"population": parents, "hof": hof,
+                                                 "phase": "initializing"})
+        population = replenish_population(population, llm_model, save_initialization_progress)
+        TOP_N_GENES = tools.selSPEA2(population, NUM_EOT_ELITES)
 
         print_population(population, GLOBAL_DATA)
         # Select the next generation's parents

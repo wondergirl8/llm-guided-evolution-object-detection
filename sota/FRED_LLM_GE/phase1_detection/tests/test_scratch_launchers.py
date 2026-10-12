@@ -16,6 +16,9 @@ def test_option_b_launch_preparation_dependencies_and_resume():
                 shutil.copy2(source, target)
         for relative in ['scripts', 'src/cfg', 'sota/FRED_LLM_GE/configs', 'sota/FRED_LLM_GE/data', 'sota/FRED_LLM_GE/phase0_data', 'sota/FRED_LLM_GE/seeds/seed_ultralytics_yolo11.py']:
             copy(relative)
+        for relative in ['server.sh', 'src/llm_mutation.py', 'src/llm_crossover.py', 'src/llm_utils.py',
+                         'src/generated_class.py', 'src/candidate_preflight.py', 'templates/FRED/UltralyticsRules.txt']:
+            copy(relative)
         phase = root / 'sota/FRED_LLM_GE/phase1_detection'
         for relative in ['seeds/yolo11', 'map_reporter.py', 'fitness.py', 'result_contract.py', 'proxy_data.py']:
             copy('sota/FRED_LLM_GE/phase1_detection/' + relative)
@@ -71,6 +74,9 @@ def test_option_b_launch_preparation_dependencies_and_resume():
         config = json.loads((runroot / 'run_config.json').read_text())
         assert (config['LLMGE_GENERATIONS'], config['training_frames'], config['validation_frames']) == ('1001', 152, 20)
         assert config['FRED_LR'] == '0.001'
+        session = json.loads(next(runroot.glob('generation-session-*.json')).read_text())
+        assert session['LLM_MAX_NEW_TOKENS'] == '4096'
+        assert session['LLMGE_INITIALIZATION_BATCHES'] == '3'
         (runroot / 'baseline').mkdir()
         (runroot / 'baseline/seed_results.csv').write_text('fixture\n')
         (runroot / 'checkpoints').mkdir()
@@ -85,11 +91,19 @@ def test_option_b_launch_preparation_dependencies_and_resume():
         assert '--time=07:45:00' in calls[3]['args']
         assert not any((arg.startswith('--dependency') for arg in calls[4]['args']))
         run('run_yolo11_option_b.sh', '--resume', str(runroot), ok=False, extra={'FAKE_ACTIVE_JOB': '31004'})
+        run('resume_yolo11_option_b.sh', ok=False, extra={'FAKE_ACTIVE_JOB': '31004'})
+        run('resume_yolo11_option_b.sh')
+        calls = [json.loads(line) for line in (root / 'jobs.jsonl').read_text().splitlines()]
+        assert len(calls) == 7
+        assert calls[5]['args'] == ['--parsable', 'server.sh']
+        assert '--dependency=after:31005' in calls[6]['args']
+        assert calls[6]['args'][-4:] == ['scripts/yolo11_scratch_job.sh', 'resume-when-ready', str(runroot), '31005']
+        assert (runroot / 'resume-job.txt').read_text().strip() == '31006'
         first = manifest['train_sequences'][0]
         (data / 'search_train_step50/images' / f'{first}_000001.png').unlink()
         run('run_yolo11_option_b.sh', ok=False)
         (data / 'search_val_step10/data.yaml').unlink()
         run('run_yolo11_option_b.sh', ok=False)
-        assert len((root / 'jobs.jsonl').read_text().splitlines()) == 5
+        assert len((root / 'jobs.jsonl').read_text().splitlines()) == 7
         server.shutdown()
         print('Launcher integration passed: CPU array/finalization, baseline dependency, 1000-generation target, resume, duplicate and incomplete-export rejection (mock Slurm/server).')

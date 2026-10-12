@@ -13,10 +13,12 @@ from pathlib import Path
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+if os.path.join(REPO_ROOT, 'src') not in sys.path:
+    sys.path.insert(0, os.path.join(REPO_ROOT, 'src'))
 
 from cfg.constants import *
 from utils.print_utils import box_print
-from src.generated_class import extract_generated_class
+from src.generated_class import extract_generated_class, make_candidate_validator
 
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, generate_augmented_code, 
@@ -55,8 +57,12 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     if "{}" not in template_txt:
         raise ValueError(f"Prompt template {fname} must contain a literal {{}} code placeholder")
     txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
+    options = {}
+    if os.path.basename(SEED_NETWORK) == "seed_ultralytics_yolo11.py":
+        options = {"validator": make_candidate_validator(parts, augment_idx),
+                   "audit_path": str(Path(output_filename).with_suffix(".generation.json"))}
     code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
-                                            top_p, llm_model, temperature)
+                                            top_p, llm_model, temperature, **options)
     
     if not code_from_llm:
         raise ValueError("LLM generation failed: refusing to write the prompt into a candidate")

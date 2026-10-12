@@ -13,6 +13,7 @@ import transformers
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from src.cfg.constants import *
+from src.llm_batch import generate_batch
 
 app = FastAPI(title="LLM API", version="1.0")
 
@@ -182,54 +183,21 @@ class LLMModel:
                         flush=True,
                     )
                     
-                    prompts = [req["prompt"] for req in batch]
-                    
-                    max_new_tokens = max(req["max_new_tokens"] for req in batch)
-                    
-                    # all temps and top_p are same
-                    temperature = batch[0]["temperature"] 
-                    top_p = batch[0]["top_p"]
-                    
-                    start_time = time.time()
-                    
-                    results = await asyncio.to_thread(
-                        self.pipeline,
-                        prompts,
-                        max_new_tokens=max_new_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                    )
-                    
-                    response_time = round(time.time() - start_time, 2)
-                    print(
-                        f"Finished batch {batch_id} in {response_time}s "
-                        f"(queued after finish: {self.request_queue.qsize()})",
-                        flush=True,
-                    )
-                    
-                    # for every future, set its result
-                    for result, future in zip(results, futures):
-                        output_txt = result[0].get("generated_text", str(result))
-                        
-                        future.set_result({
-                            "generated_text": output_txt,
-                            "response_time_sec": response_time,
-                            "batch_size": batch_size
-                        })
-                        
-                        # done with task
-                        self.request_queue.task_done()
-                
+                    outputs = await generate_batch(self.pipeline, self.tokenizer, batch)
+                    print(f"Finished batch {batch_id} of {batch_size} requests", flush=True)
+                    for output, future in zip(outputs, futures):
+                        if not future.done():
+                            future.set_result(output)
                 except Exception as e:
                     print(f"Error processing batch: {str(e)}", flush=True)
                     for future in futures:
                         if not future.done():
                             future.set_exception(e)
-                    
-                    # Mark all tasks as done
-                    for _ in range(len(futures)):
+                finally:
+                    # Exactly once even if delivery fails after some futures resolve.
+                    for _ in futures:
                         self.request_queue.task_done()
-                
+
                 # Check if queue is empty, if so - sleep briefly to save resources
                 if self.request_queue.empty():
                     await asyncio.sleep(0.01)
@@ -295,7 +263,7 @@ async def generate_text(request: LLMRequest):
 
 @app.get("/")
 async def root():
-    return {"message": "LLM API is running!"}
+    return {"message": "LLM API is running!", "slurm_job_id": os.getenv("SLURM_JOB_ID")}
 
 print('Server running with server-side batching!', flush=True)
 

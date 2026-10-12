@@ -1,5 +1,8 @@
 import argparse
 import ast
+import hashlib
+import json
+from pathlib import Path
 import sys
 sys.path.append("src")
 import re
@@ -84,7 +87,8 @@ def get_llm_code_generator(llm_model):
         qc_func = llm_code_qc_hf
     return llm_code_generator, qc_func
 
-def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, llm_model, temperature):
+def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, llm_model, temperature,
+                            validator=None, audit_path=None):
     """Generates augmented code using Mixtral."""
     print("LLM being used: ", llm_model)
     box_print("PROMPT TO LLM", print_bbox_len=60, new_line_end=False)
@@ -97,22 +101,46 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
         expected_name = reference.body[0].name
         prompt = txt2llm
         attempts = max(1, max_gen_attempts)
+        audit = {"class": expected_name, "max_new_tokens": globals().get("LLM_MAX_NEW_TOKENS", 4096),
+                 "prompt_sha256": hashlib.sha256(txt2llm.encode()).hexdigest(), "attempts": []}
+        def save_audit():
+            if audit_path:
+                path = Path(audit_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_suffix(f".{os.getpid()}.tmp")
+                temporary.write_text(json.dumps(audit, indent=2))
+                os.replace(temporary, path)
+        save_audit()
         last_error = None
         for attempt in range(attempts):
             response = llm_code_generator(prompt, top_p=top_p, temperature=temperature)
             box_print("TEXT FROM LLM", print_bbox_len=60, new_line_end=False)
             print(response, flush=True)
+            record = {"attempt": attempt + 1, "status": "rejected",
+                      "response_sha256": hashlib.sha256(str(response or "").encode()).hexdigest()}
+            code = None
             try:
                 code = extract_generated_class(response, expected_name)
-            except ValueError as error:
-                last_error = error
+                check = validator(code) if validator else None
+            except Exception as error:
+                last_error = str(error)
+                record["reason"] = last_error
+                audit["attempts"].append(record)
+                save_audit()
                 print(f"Rejected LLM response {attempt + 1}/{attempts}: {error}", flush=True)
-                prompt = (txt2llm + f"\nYour previous response was rejected: {error}. "
-                          f"Return only the complete {expected_name} class in one Python code block. "
-                          "Do not copy the prompt or emit an empty block.")
+                if response is None:
+                    break  # A failed server request needs recovery, not format retries.
+                proposal = f"\nPrevious rejected proposal:\n```python\n{code}\n```" if code else ""
+                prompt = (txt2llm + proposal + f"\nValidation rejected the proposal: {last_error}. "
+                          f"Correct the error and return only the complete {expected_name} class "
+                          "in one Python code block. Keep the class concise; no prose or empty blocks.")
             else:
+                record.update(status="accepted", cpu_preflight=check,
+                              code_sha256=hashlib.sha256(code.encode()).hexdigest())
+                audit["attempts"].append(record)
+                save_audit()
                 return code
-        raise ValueError(f"No valid {expected_name} response after {attempts} attempts: {last_error}")
+        raise ValueError(f"No valid {expected_name} response after {attempt + 1} attempts: {last_error}")
 
     if apply_quality_control:
         base_code = retrieve_base_code(augment_idx)

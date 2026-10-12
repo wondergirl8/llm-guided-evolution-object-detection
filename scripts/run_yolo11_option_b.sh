@@ -7,6 +7,9 @@ test "$(git branch --show-current)" = yolo11-scratch-evolution
 test -x .venv/bin/python || { echo 'Run uv sync first.' >&2; exit 1; }
 test -s hostname.log || { echo 'The LLM server must write hostname.log first.' >&2; exit 1; }
 resume=0
+export LLM_MAX_NEW_TOKENS=${LLM_MAX_NEW_TOKENS:-4096}
+export LLMGE_INITIALIZATION_BATCHES=${LLMGE_INITIALIZATION_BATCHES:-3}
+export LLMGE_GENERATION_PREFLIGHT_TIMEOUT_SECONDS=${LLMGE_GENERATION_PREFLIGHT_TIMEOUT_SECONDS:-60}
 if [[ $# -eq 2 && $1 = --resume ]]; then
   resume=1
   export YOLO11_PILOT_ROOT="$(cd "$2" && pwd)"
@@ -69,7 +72,18 @@ else:
     (root / 'protocol.yaml').write_bytes(PROTOCOL_PATH.read_bytes())
     (root / 'run_config.json').write_text(json.dumps(config, indent=2))
 exports = {k: config[k] for k in keys}
+generation = {k: os.environ[k] for k in ('LLM_MAX_NEW_TOKENS', 'LLMGE_INITIALIZATION_BATCHES',
+              'LLMGE_GENERATION_PREFLIGHT_TIMEOUT_SECONDS')}
+if any(int(value) <= 0 for value in generation.values()):
+    raise ValueError('Generation limits must be positive')
+exports.update(generation)
 exports.update(LLMGE_OUTPUT_DIR=str(root / 'candidates'), YOLO11_PILOT_ROOT=str(root))
+import time
+(root / f'generation-session-{time.time_ns()}.json').write_text(json.dumps({
+    **generation, 'llm_server_hostname': host, 'llm_server_port': constants.PORT,
+    'generation_source_sha256': {p: sha(p) for p in ('src/llm_mutation.py', 'src/llm_crossover.py',
+        'src/llm_utils.py', 'src/generated_class.py', 'src/candidate_preflight.py',
+        'templates/FRED/UltralyticsRules.txt')}}, indent=2))
 (root / 'environment.sh').write_text('\n'.join(f'export {k}={shlex.quote(v)}' for k, v in exports.items()) + '\n')
 print(f"YOLO11n scratch: {len(train['images'])} training / {len(val['images'])} validation frames; "
       f"20 epochs; population {config['LLMGE_POPULATION']}; target {int(config['LLMGE_GENERATIONS']) - 1} generations", flush=True)

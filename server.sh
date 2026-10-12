@@ -30,6 +30,8 @@ HOSTNAME_FILE=$(pwd)"/hostname.log"
 # Write hostname to file so tests can find the server
 echo "$SERVER_HOSTNAME" > "$HOSTNAME_FILE"
 echo "Wrote hostname to $HOSTNAME_FILE"
+mkdir -p run_job_outputs/server
+printf '%s\n' "$SERVER_HOSTNAME" > "run_job_outputs/server/hostname-${SLURM_JOB_ID}.log"
 
 # Log the island controller setting for debugging
 echo "SUBMIT_ISLAND_CONTROLLER=${SUBMIT_ISLAND_CONTROLLER:-<not set>}"

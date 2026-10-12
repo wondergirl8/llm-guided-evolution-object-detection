@@ -43,7 +43,7 @@ MODEL_PATH = os.getenv(
     "LLMGE_MODEL_PATH",
     "/storage/ice-shared/vip-vvk/llm_storage/meta-llama/Llama-3.3-70B-Instruct/",
 )
-LLM_MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "1648"))
+LLM_MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "4096"))
 LLM_MODEL = os.getenv("LLMGE_LLM_MODEL", "mixtral")
 LLM_QWEN = "qwen25"
 LLM_MIXTRAL = "mixtral"
@@ -117,3 +117,8 @@ max_gen_attempts = 5
 migration_gen = 0
 DNA_TXT = "FRED actual Ultralytics YOLO11 / random weights / architecture evolution"
 FORBIDDEN_PATTERNS = []
+
+# Stop bounded initialization retries rather than spending the whole server allocation.
+MAX_INITIALIZATION_BATCHES = int(os.getenv("LLMGE_INITIALIZATION_BATCHES", "3"))
+if MAX_INITIALIZATION_BATCHES < 1:
+    raise ValueError("LLMGE_INITIALIZATION_BATCHES must be positive")

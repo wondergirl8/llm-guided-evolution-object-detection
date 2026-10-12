@@ -123,6 +123,21 @@ controller ends, with a ready server:
 bash scripts/run_yolo11_option_b.sh --resume /absolute/path/to/the/run-folder
 ```
 
+If the previous server has ended, use this single command from the checkout:
+
+```bash
+bash scripts/resume_yolo11_option_b.sh
+```
+
+It reads `latest-option-b.txt`, rejects an active controller/resume/server job,
+starts a fresh server and queues a small CPU job dependent on the server
+starting. That job waits up to 40 minutes for model loading and checks the
+server's Slurm job identity before submitting the controller. It reuses the
+saved baseline and exported data. It prints server/resume IDs and the resume
+log; the controller ID appears in that log and `controller-job.txt` after
+startup. An optional run-folder argument selects an older run. This resumes
+one allocation; it does not renew eight-hour server jobs indefinitely.
+
 Resume restores the saved settings, skips the completed baseline, and verifies
 seed/trainer/protocol/manifest identities. A live controller for the same run
 blocks duplicate submission; a file lock also protects execution. Checkpoints
@@ -133,6 +148,12 @@ reusing the completed baseline. Keep the same
 checkout, generated model files, CSVs, checkpoints and global lineage directory.
 Already submitted child jobs may outlive the controller; inspect the queue
 before starting another allocation.
+
+Initialization retains valid parents across at most three replenishment
+batches (`LLMGE_INITIALIZATION_BATCHES`). Each batch saves its valid parents
+in checkpoint 0, so partial success is available on resume. Exhausting the
+budget stops with a diagnosis instead of generating an unbounded stream of
+failed jobs. The active generation counter is restored after replenishment.
 
 Each run saves its manifest, protocol, settings and baseline evidence. Candidate
 reports include source revisions, manifest identity and trainer/seed hashes.
@@ -179,7 +200,7 @@ the scratch response parser accepts only one complete Python class with the
 expected name, constructor and forward method. Fenced and plain responses are
 supported; empty/truncated blocks, prose, wrong classes and added imports are
 rejected. The configured `max_gen_attempts` bounds retries with deterministic
-format feedback. Unchanged mutation chunks and empty crossovers fail instead
+format and model-error feedback. Unchanged mutation chunks and empty crossovers fail instead
 of appearing to produce new valid architectures. Original provider output and
 rejection reasons remain in the LLM job logs.
 
@@ -187,9 +208,29 @@ The protected training/evaluation protocol is unchanged, so the saved seed
 baseline and CPU export can be reused. Stop the old controller before updating
 code, then resume the existing run directory. Existing failure files remain
 for diagnosis. Parser checks prevent malformed Python from reaching GPU
-training; syntactically valid architectures can still fail the existing shape,
-loss and gradient preflight. Residual shape requirements are explicit in the
-prompt rules. No claim of a successful live generation is made by local tests.
+training. Before writing a mutation or crossover, generation now runs the
+assembled model in a separate CPU process with a 60-second limit. It checks
+construction, protected code, parameter count, square and rectangular
+P3/P4/P5 interfaces, finite loss and gradients. Actual errors go back to the
+LLM with its rejected proposal. GPU training retains its existing preflight;
+passing a small CPU check cannot guarantee a successful full training run.
+
+The instructions include the constructor signatures from pinned Ultralytics
+8.3.203 and require preserving stage strides and connections. Completion
+budget defaults to 4096 tokens, with concise class-only output. The Llama
+instruction server uses its tokenizer's chat template and batches requests
+only when their generation settings match. Each candidate has a
+`models/network_<gene>.generation.json` audit containing response hashes,
+rejections and accepted CPU results; full responses remain in job logs.
+Each resumed launch saves generation-code hashes and limits in a separate
+`generation-session-*.json`, leaving the training identity unchanged.
+
+The latest inspected `fred-run-setup` branch at `5072e8ef` evolves constrained
+YAML graphs and uses Ultralytics' full training recipe. Its latest runtime
+fix warms YOLO label caches; our protected custom loop does not use those
+caches. This branch adopts stronger structural guidance without merging a
+different model representation or changing the saved baseline protocol.
+No claim of a successful live generation is made by local tests.
 
 ## Local checks
 

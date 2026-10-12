@@ -49,7 +49,7 @@ def test_malformed_provider_responses_have_bounded_retries(monkeypatch):
     with pytest.raises(ValueError, match='after 2 attempts'):
         module.generate_augmented_code('rewrite class', 1, False, 0.1, 'mixtral', 0.1)
     assert len(calls) == 2
-    assert 'previous response was rejected' in calls[1]
+    assert 'Validation rejected the proposal' in calls[1]
 
 
 @pytest.mark.parametrize('response', ['', None, 'ERROR', 'Propose an alternative feature-processing architecture.'])
