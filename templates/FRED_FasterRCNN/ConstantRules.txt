@@ -1,0 +1,14 @@
+Return exactly one Python code block containing the complete replacement gene class.
+Preserve the class name and its single values dictionary. Only change literal values.
+No imports, calls, methods, decorators, inheritance, I/O, or new fields.
+Approved prototype values:
+fpn_channels: 128 or 256
+rpn_channels: 128 or 256
+rpn_convs: 1 or 2
+anchor_scales: [4] or [8]
+anchor_ratios: [0.5, 1.0, 2.0] or [1.0]
+roi_size: 7 or 14
+roi_sampling_ratio: 0 or 2
+box_fc_channels: 512 or 1024
+Keep backbone, losses, training, preprocessing, and evaluation protected.
+These are exploratory prototype settings, not frozen research ranges.

@@ -74,3 +74,13 @@ hostname.log
 fred_yolo11_checkpoints/
 fred_yolo11_output/
 run_job_outputs/
+
+# Isolated Faster R-CNN environment and pilot artifacts
+.venv-faster-rcnn/
+fred_faster_rcnn_checkpoints/
+fred_faster_rcnn_output/
+fred_faster_rcnn_global_data/
+sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn/reports/
+sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn/trained_models/
+
+.cache-faster-rcnn/

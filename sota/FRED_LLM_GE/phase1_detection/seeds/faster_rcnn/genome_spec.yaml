@@ -1,0 +1,54 @@
+{
+  "version": "prototype-v1",
+  "status": "exploratory_not_frozen",
+  "groups": {
+    "FeatureGenes": {
+      "fpn_channels": [
+        128,
+        256
+      ]
+    },
+    "ProposalGenes": {
+      "rpn_channels": [
+        128,
+        256
+      ],
+      "rpn_convs": [
+        1,
+        2
+      ],
+      "anchor_scales": [
+        [
+          4
+        ],
+        [
+          8
+        ]
+      ],
+      "anchor_ratios": [
+        [
+          0.5,
+          1.0,
+          2.0
+        ],
+        [
+          1.0
+        ]
+      ]
+    },
+    "RoIGenes": {
+      "roi_size": [
+        7,
+        14
+      ],
+      "roi_sampling_ratio": [
+        0,
+        2
+      ],
+      "box_fc_channels": [
+        512,
+        1024
+      ]
+    }
+  }
+}
