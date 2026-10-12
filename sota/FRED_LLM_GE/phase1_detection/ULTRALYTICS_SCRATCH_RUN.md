@@ -92,7 +92,9 @@ The script prints an eight-shard CPU array (at most four active shards), depende
 finalization job, log folder and status command. Preparation is idempotent;
 rerun failed shards or rerun the launcher. Export completion and frame totals
 must come from ICE logs, not a timing estimate. The CPU jobs have four-hour
-limits; no GPU is requested for data preparation.
+limits and request 16 GB RAM each; no GPU is requested for data preparation.
+The initial 8 GB request caused an observed ICE OOM kill in export shard 1;
+completed sequence markers allow retrying only the failed shard.
 
 After preparation succeeds, check that the LLM server is still running and
 ready at the configured port (8293). Start a fresh server with the existing

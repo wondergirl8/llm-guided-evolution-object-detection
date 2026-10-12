@@ -16,7 +16,7 @@ PY
 prep="$PWD/fred_ultralytics_yolo11_output/preparation-$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$prep"
 array=$(sbatch --parsable --job-name=yolo11-b-export --array=0-7%4 \
-  --cpus-per-task=4 --mem=8G --time=04:00:00 \
+  --cpus-per-task=4 --mem=16G --time=04:00:00 \
   --output="$prep/export-%A_%a.log" scripts/yolo11_scratch_job.sh prepare)
 array=${array%%;*}
 finalize=$(sbatch --parsable --job-name=yolo11-b-ready --dependency="afterok:$array" \
