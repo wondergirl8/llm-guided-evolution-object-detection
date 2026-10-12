@@ -1,4 +1,5 @@
 import os
+import ast
 import sys
 import re
 import time
@@ -15,6 +16,7 @@ if REPO_ROOT not in sys.path:
 
 from cfg.constants import *
 from utils.print_utils import box_print
+from src.generated_class import extract_generated_class
 
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, generate_augmented_code, 
@@ -57,13 +59,18 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
                                             top_p, llm_model, temperature)
     
     if not code_from_llm:
-        code_from_llm = txt2llm
+        raise ValueError("LLM generation failed: refusing to write the prompt into a candidate")
     else:
         valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
         if not valid_code:
             print(f"Rejected generated chunk: {invalid_reason}. Falling back to parent chunk.", flush=True)
             code_from_llm = code2llm.strip()
 
+    if os.path.basename(SEED_NETWORK) == "seed_ultralytics_yolo11.py":
+        expected = ast.parse(code2llm).body[0].name
+        code_from_llm = extract_generated_class(code_from_llm, expected)
+        if ast.dump(ast.parse(code_from_llm)) == ast.dump(ast.parse(code2llm)):
+            raise ValueError("LLM returned the unchanged parent class")
     note_txt = extract_note(code2llm)
     parts[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
     # prompt_log = f'# Parent Prompt: {template_path} Root Code: {input_filename}\n'

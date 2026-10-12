@@ -1,4 +1,5 @@
 import argparse
+import ast
 import sys
 sys.path.append("src")
 import re
@@ -10,6 +11,7 @@ import transformers
 from torch import bfloat16, float16
 from utils.privit import *
 from cfg.constants import *
+from src.generated_class import extract_generated_class
 from utils.print_utils import *
 
 
@@ -89,7 +91,29 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
     print(txt2llm, flush=True)
     
     llm_code_generator, qc_func = get_llm_code_generator(llm_model)
-    
+
+    if os.path.basename(SEED_NETWORK) == "seed_ultralytics_yolo11.py" and not apply_quality_control:
+        reference = ast.parse(retrieve_base_code(augment_idx))
+        expected_name = reference.body[0].name
+        prompt = txt2llm
+        attempts = max(1, max_gen_attempts)
+        last_error = None
+        for attempt in range(attempts):
+            response = llm_code_generator(prompt, top_p=top_p, temperature=temperature)
+            box_print("TEXT FROM LLM", print_bbox_len=60, new_line_end=False)
+            print(response, flush=True)
+            try:
+                code = extract_generated_class(response, expected_name)
+            except ValueError as error:
+                last_error = error
+                print(f"Rejected LLM response {attempt + 1}/{attempts}: {error}", flush=True)
+                prompt = (txt2llm + f"\nYour previous response was rejected: {error}. "
+                          f"Return only the complete {expected_name} class in one Python code block. "
+                          "Do not copy the prompt or emit an empty block.")
+            else:
+                return code
+        raise ValueError(f"No valid {expected_name} response after {attempts} attempts: {last_error}")
+
     if apply_quality_control:
         base_code = retrieve_base_code(augment_idx)
         code_from_llm, generate_text = llm_code_generator(txt2llm, return_gen=True, top_p=top_p, temperature=temperature)

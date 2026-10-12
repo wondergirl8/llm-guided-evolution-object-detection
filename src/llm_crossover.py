@@ -1,4 +1,5 @@
 import os
+import ast
 import sys
 import argparse
 import random
@@ -10,6 +11,7 @@ if REPO_ROOT not in sys.path:
 
 from cfg.constants import *
 from utils.print_utils import box_print
+from src.generated_class import extract_generated_class
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, extract_note, generate_augmented_code, 
                        clean_code_from_llm, retrieve_base_code)
@@ -68,8 +70,10 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
                                             top_p, llm_model, temperature)
     
     if not code_from_llm:
-        # Keep the first parent's chunk rather than writing the prompt into the model
-        code_from_llm = x.strip()
+        raise ValueError("LLM crossover failed: no candidate code returned")
+    if os.path.basename(SEED_NETWORK) == "seed_ultralytics_yolo11.py":
+        expected = ast.parse(x).body[0].name
+        code_from_llm = extract_generated_class(code_from_llm, expected)
     
     # Insert note if present
     temp_txt = parts_x[augment_idx]

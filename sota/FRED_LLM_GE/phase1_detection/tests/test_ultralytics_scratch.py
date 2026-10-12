@@ -76,12 +76,16 @@ def test_generated_code_training_csv_selection_and_resume(tmp_path, monkeypatch)
 
     neck = changed_neck()
     monkeypatch.setattr(llm_mutation.np.random, "randint", lambda *a, **k: 2)
-    monkeypatch.setattr(llm_mutation, "generate_augmented_code", lambda *a, **k: neck.strip())
+    # Exercise the real response parser, including an empty-block retry.
+    import importlib
+    llm_impl = importlib.import_module(llm_mutation.generate_augmented_code.__module__)
+    responses = iter(["```python\n```", f"```python\n{neck.strip()}\n```", neck.strip()])
+    monkeypatch.setattr(llm_impl, "get_llm_code_generator",
+                        lambda *a: (lambda *a, **k: next(responses), None))
     prompt = tmp_path / "prompt.txt"
     prompt.write_text((ROOT / "templates/FRED/Ultralytics/1.txt").read_text())
     child = tmp_path / "network_child.py"
     llm_mutation.augment_network(str(runner.SEED_FILE), str(child), str(prompt), llm_model="mixtral")
-    monkeypatch.setattr(llm_crossover, "generate_augmented_code", lambda *a, **k: neck.strip())
     crossed = tmp_path / "network_crossed.py"
     llm_crossover.augment_network(str(runner.SEED_FILE), str(child), str(crossed), llm_model="mixtral")
     for name in ("network_child", "network_crossed"):

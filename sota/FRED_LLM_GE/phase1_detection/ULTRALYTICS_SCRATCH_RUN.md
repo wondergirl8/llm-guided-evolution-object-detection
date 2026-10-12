@@ -170,6 +170,27 @@ proof that mutations improved accuracy or that crossover occurred; inspect the
 ancestry and generated source files. Existing Pareto plotting scripts can use
 the same three-objective CSV/checkpoint format.
 
+## Malformed LLM responses
+
+The first live scratch evolution attempt produced prompt prose in candidate
+files: an empty extracted response fell back to the entire mutation prompt.
+Mutation now raises on empty generation rather than writing a candidate, and
+the scratch response parser accepts only one complete Python class with the
+expected name, constructor and forward method. Fenced and plain responses are
+supported; empty/truncated blocks, prose, wrong classes and added imports are
+rejected. The configured `max_gen_attempts` bounds retries with deterministic
+format feedback. Unchanged mutation chunks and empty crossovers fail instead
+of appearing to produce new valid architectures. Original provider output and
+rejection reasons remain in the LLM job logs.
+
+The protected training/evaluation protocol is unchanged, so the saved seed
+baseline and CPU export can be reused. Stop the old controller before updating
+code, then resume the existing run directory. Existing failure files remain
+for diagnosis. Parser checks prevent malformed Python from reaching GPU
+training; syntactically valid architectures can still fail the existing shape,
+loss and gradient preflight. Residual shape requirements are explicit in the
+prompt rules. No claim of a successful live generation is made by local tests.
+
 ## Local checks
 
 Use the branch's Python environment with pinned Ultralytics installed:
