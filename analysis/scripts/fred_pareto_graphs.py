@@ -91,28 +91,39 @@ def load_seed(path):
 
 
 def plot_front_3d(df, title, seed, limits, path, dpi=150):
-    fig = plt.figure(figsize=(8, 7))
-    ax = fig.add_subplot(projection="3d")
+    fig = plt.figure(figsize=(11, 7))
+    # The 3D plot takes the left of the figure; the right holds the key table.
+    ax = fig.add_axes([0.0, 0.03, 0.68, 0.88], projection="3d")
     front_mask = pareto_mask(df) & (df["gene_id"] != "seed")
     others = df[(df["gene_id"] != "seed") & ~front_mask]
-    front = df[front_mask]
+    front = df[front_mask].sort_values("params").reset_index(drop=True)
     for subset, style in ((others, dict(color="lightgray", edgecolor="gray", s=25,
                                         label="Candidates", alpha=0.7)),
                           (front, dict(color="crimson", edgecolor="black", s=60,
                                        label="Pareto front"))):
         ax.scatter(subset["params"], subset["mAP50"] * 100, subset["mAP50_95"] * 100,
                    depthshade=False, **style)
-    # Drop lines to the floor make each front point's height readable, and each
-    # front point is labeled with its metrics.
-    for _, row in front.iterrows():
+    # Drop lines to the floor make each front point's height readable. Front
+    # points get a number badge (fewest params = 1) and their metrics go in the
+    # key table, since full text labels overlap where points cluster.
+    dz = 0.04 * (limits["mAP50_95"][1] - limits["mAP50_95"][0])
+    key = [f"{'#':>2}  {'mAP50':>6}  {'mAP50:95':>8}  {'params':>9}"]
+    near = 0.03 * (limits["params"][1] - limits["params"][0])
+    for i, row in front.iterrows():
         x, y, z = row["params"], row["mAP50"] * 100, row["mAP50_95"] * 100
         ax.plot([x, x], [y, y], [limits["mAP50_95"][0], z], color="crimson", lw=0.8, alpha=0.5)
-        dx = 0.03 * (limits["params"][1] - limits["params"][0])
-        dz = 0.03 * (limits["mAP50_95"][1] - limits["mAP50_95"][0])
-        ax.text(x + dx, y, z + dz, f"mAP50 {y:.1f}%\nmAP50:95 {z:.1f}%\n{int(x):,} params",
-                fontsize=8, color="darkred", zorder=10,
-                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="crimson",
-                          alpha=0.85))
+        # Stack badges of front points with nearly the same params so none hides another.
+        stacked = (abs(front["params"][:i] - x) < near).sum()
+        ax.text(x, y, z + dz * (1 + 2.2 * stacked), str(i + 1), fontsize=8, fontweight="bold", color="white",
+                ha="center", va="bottom", zorder=10,
+                bbox=dict(boxstyle="circle,pad=0.25", facecolor="crimson", edgecolor="black"))
+        key.append(f"{i + 1:>2}  {y:5.1f}%  {z:7.1f}%  {int(x):>9,}")
+    if seed:
+        key.append(f"{'x':>2}  {seed['mAP50'] * 100:5.1f}%  {seed['mAP50_95'] * 100:7.1f}%  "
+                   f"{int(seed['params']):>9,}  (seed)")
+    fig.text(0.68, 0.5, "Pareto front\n\n" + "\n".join(key), family="monospace", fontsize=9,
+             va="center", bbox=dict(boxstyle="round,pad=0.6", facecolor="white",
+                                    edgecolor="crimson"))
     if seed:
         ax.scatter(seed["params"], seed["mAP50"] * 100, seed["mAP50_95"] * 100,
                    color="black", marker="x", s=110, linewidths=2, label="Seed",
@@ -126,8 +137,7 @@ def plot_front_3d(df, title, seed, limits, path, dpi=150):
     # Viewed so the best corner (few params, high mAP50 and mAP50:95) faces the viewer.
     ax.view_init(elev=22, azim=-60)
     ax.legend(loc="upper left")
-    ax.set_title(title)
-    fig.tight_layout()
+    fig.suptitle(title)
     fig.savefig(path, dpi=dpi)
     plt.close(fig)
     return path
