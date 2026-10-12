@@ -52,6 +52,19 @@ class LLMModel:
                 "CUDA is not available to PyTorch, so the LLM server would run on CPU. "
                 "Check the Slurm GPU request, CUDA module, and uv/torch environment."
             )
+        count = torch.cuda.device_count()
+        expected = int(os.getenv('LLM_SERVER_EXPECTED_GPUS', '0'))
+        if expected and count != expected:
+            raise RuntimeError(f'Expected {expected} allocated CUDA devices, but PyTorch sees {count}. '
+                               'Check Slurm GPU visibility and any MIG restrictions.')
+        # NVML visibility alone does not prove CUDA can initialize a device.
+        for index in range(count):
+            properties = torch.cuda.get_device_properties(index)
+            print(f'CUDA device {index}: {properties.name}; '
+                  f'{properties.total_memory / 2**30:.1f} GiB', flush=True)
+            probe = torch.empty(1, device=f'cuda:{index}')
+            torch.cuda.synchronize(index)
+            del probe
     
     def __new__(cls):
         if cls._instance is None:

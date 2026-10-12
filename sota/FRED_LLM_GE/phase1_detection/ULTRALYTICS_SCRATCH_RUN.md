@@ -104,6 +104,19 @@ ready at the configured port (8293). Start a fresh server with the existing
 bash scripts/run_yolo11_option_b.sh
 ```
 
+GPU jobs preserve Slurm's assigned `CUDA_VISIBLE_DEVICES` mask, including
+nonzero IDs or UUIDs; they do not replace it with `0` or `0,1`. CPU LLM editing
+and preflight jobs explicitly hide CUDA devices. The server logs the assigned
+mask and checks that PyTorch can initialize both requested GPUs before model
+loading. This follows [Slurm's GPU management](https://slurm.schedmd.com/gres.html).
+On ICE, the first allocation completed eight hours and saved generation 5,
+but its renewed server job 6218119 failed during CUDA initialization. Its full
+log reported two devices through PyTorch/NVML, followed by a CUDA assertion
+when initializing device 1. The previous hardcoded mask was a scheduling
+defect consistent with that mismatch. The fix preserves the actual assignment,
+logs `nvidia-smi -L` when available and validates both devices; a successful
+ICE startup is still required to establish that the new allocation is usable.
+
 The launcher validates complete export markers and server readiness, then
 submits a four-hour GPU seed baseline. Evolution runs only after baseline
 success. The CPU controller has a 7h45m allocation and submits GPU candidate

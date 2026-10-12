@@ -7,6 +7,7 @@
 #SBATCH --mem 160G
 #SBATCH -c 16
 #SBATCH --output=run_job_outputs/server/slurm-%j.out
+set -euo pipefail
 echo "launching LLM Server"
 
 # Optional chained submission count to work around walltime limits
@@ -17,8 +18,16 @@ hostname
 module load cuda
 module load uv
 
-# Make sure CUDA can see all GPUs
-export CUDA_VISIBLE_DEVICES=0,1
+# Slurm selects the usable devices, which may be IDs or MIG UUIDs.
+# Preserve its mask; 0,1 may refer to GPUs outside this allocation.
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export LLM_SERVER_EXPECTED_GPUS=2
+echo "Slurm CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+echo "SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-<unset>}"
+echo "SLURM_GPUS_ON_NODE=${SLURM_GPUS_ON_NODE:-<unset>}"
+if command -v nvidia-smi >/dev/null; then
+    nvidia-smi -L || true
+fi
 export UV_CACHE_DIR="${TMPDIR:-${SLURM_TMPDIR:-/tmp}}/uv-cache-${SLURM_JOB_ID:-$$}"
 mkdir -p "$UV_CACHE_DIR"
 echo "Using UV cache: $UV_CACHE_DIR"
@@ -48,4 +57,4 @@ fi
 # Use the project's configured port so the run's LLM jobs find this server.
 PORT=$(uv run python -c "from src.cfg.constants import PORT; print(PORT)")
 echo "Serving on port $PORT"
-uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port $PORT --workers 1
+exec uv run python -m uvicorn server:app --host "$SERVER_HOSTNAME" --port "$PORT" --workers 1

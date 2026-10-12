@@ -57,7 +57,9 @@ llm_bash_script: '#!/bin/bash
 
     module load uv
 
-    export CUDA_VISIBLE_DEVICES=0
+    # LLM editing/preflight jobs use CPU only.
+
+    export CUDA_VISIBLE_DEVICES=""
 
     export UV_CACHE_DIR="${TMPDIR:-${SLURM_TMPDIR:-/tmp}}/uv-cache-${SLURM_JOB_ID:-$$}"
 
@@ -98,7 +100,11 @@ python_bash_script: '#!/bin/bash
 
     module load uv
 
-    export CUDA_VISIBLE_DEVICES=0
+    # Preserve Slurm''s assigned GPU mask; cuda:0 is the logical first device.
+
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+    echo "Slurm CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 
     unset VIRTUAL_ENV
 
