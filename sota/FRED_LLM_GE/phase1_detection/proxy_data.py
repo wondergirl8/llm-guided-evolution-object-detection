@@ -97,7 +97,7 @@ def load_split(cache_dir, split, sequences, frame_step, img_width):
 
 
 class LazyImages:
-    """uint8 [N, 3, H, W] frames read from PNG files only when sliced."""
+    """uint8 [N, 3, H, W] frames read from PNG files when requested."""
 
     def __init__(self, paths, size):
         self.paths = list(paths)
@@ -110,11 +110,19 @@ class LazyImages:
     def __getitem__(self, index):
         from PIL import Image
 
-        if not isinstance(index, slice):
-            raise TypeError("LazyImages supports slicing only")
-        return torch.stack([
-            torch.from_numpy(np.asarray(Image.open(p).convert("RGB")).copy()).permute(2, 0, 1)
-            for p in self.paths[index]])
+        if isinstance(index, slice):
+            paths = self.paths[index]
+        elif isinstance(index, torch.Tensor) and index.ndim == 1 and index.dtype in (
+                torch.int32, torch.int64):
+            paths = [self.paths[int(i)] for i in index]
+        else:
+            raise TypeError("LazyImages requires a slice or 1D integer tensor index")
+        frames = []
+        for path in paths:
+            with Image.open(path) as image:
+                pixels = np.asarray(image.convert("RGB")).copy()
+            frames.append(torch.from_numpy(pixels).permute(2, 0, 1))
+        return torch.stack(frames)
 
 
 def load_exported_split(root, sequences):

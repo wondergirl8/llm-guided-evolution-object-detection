@@ -71,6 +71,23 @@ challenging:
   trainer_val_frames: 256
 
 families:
+  dfine:
+    # Self-contained Event-frame seed, using the same challenging search split
+    # and shared evaluator as the Ultralytics family.
+    seed_file: seeds/seed_dfine.py
+    data: challenging_search
+    lr: 0.0001
+    weight_decay: 0.0001
+    grad_clip: 0.1
+    # Accumulate gradients to retain proxy.batch_size without holding all
+    # 1280-wide Event frames and their feature maps on the GPU at once.
+    microbatch_size: 1
+    model:
+      width: 32
+      d_model: 64
+      num_queries: 64
+      num_layers: 3
+      reg_max: 16
   tiny_yolo11:
     # Relative to sota/FRED_LLM_GE; used when --model is "network".
     seed_file: seeds/seed_yolo11.py

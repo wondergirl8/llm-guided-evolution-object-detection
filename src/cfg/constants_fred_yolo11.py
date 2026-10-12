@@ -4,7 +4,8 @@ Paths are derived from this checkout so the same configuration can be used on
 a laptop or on PACE ICE. SEED_FAMILY picks the seed: "yolo11" evolves the
 Ultralytics YOLO11n model YAML (sota/FRED_LLM_GE/seeds/seed_yolo11n.yaml);
 "tiny_yolo11" evolves Ruhi's tutorial-sized DroneDetector
-(sota/FRED_LLM_GE/seeds/seed_yolo11.py). Either way candidates are trained and
+(sota/FRED_LLM_GE/seeds/seed_yolo11.py); "dfine" selects the Event-only
+D-FINE-inspired seed. Every family is trained and
 scored by phase1_detection/candidate_runner.py under
 configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.csv.
 """
@@ -35,6 +36,13 @@ _FAMILIES = {
         "rules": "templates/FRED/ConstantRules.txt",
         "eval_timeout": 40 * 60,
     },
+    "dfine": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "dfine"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_dfine.py"),
+        "prompt_group": "FRED_DFINE/Normal",
+        "rules": "templates/FRED_DFINE/ConstantRules.txt",
+        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+    },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
 SOTA_ROOT = _FAMILY["sota_root"]
@@ -51,7 +59,8 @@ PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
-OUTPUT_DIR = os.path.join(ROOT_DIR, "fred_yolo11_output")
+OUTPUT_DIR = os.path.join(ROOT_DIR, "fred_dfine_output" if SEED_FAMILY == "dfine"
+                          else "fred_yolo11_output")
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
 SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
@@ -67,7 +76,8 @@ MODEL_PATH = os.getenv(
     "LLMGE_MODEL_PATH",
     "/storage/ice-shared/vip-vvk/llm_storage/meta-llama/Llama-3.3-70B-Instruct/",
 )
-LLM_MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "1648"))
+LLM_MAX_NEW_TOKENS = int(os.getenv(
+    "LLM_MAX_NEW_TOKENS", "4096" if SEED_FAMILY == "dfine" else "1648"))
 LLM_MODEL = os.getenv("LLMGE_LLM_MODEL", "mixtral")
 LLM_QWEN = "qwen25"
 LLM_MIXTRAL = "mixtral"
@@ -107,7 +117,7 @@ SLURM_MIXT_TOP_P = 0.15
 SLURM_MIXT_TEMPERATURE = 0.1
 SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
-ISLAND_CONTROLLER_RUN_NAME = "fred_yolo11_islands"
+ISLAND_CONTROLLER_RUN_NAME = "fred_dfine_islands" if SEED_FAMILY == "dfine" else "fred_yolo11_islands"
 ISLAND_CONTROLLER_NUM_ISLANDS = 1
 ISLAND_CONTROLLER_LLMS = LLM_MODEL
 ISLAND_CONTROLLER_PROMPT_GROUPS = DEFAULT_PROMPT_GROUP

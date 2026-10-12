@@ -25,6 +25,7 @@ import yaml
 
 try:
     from . import map_reporter
+    from .adapters.dfine import DFINEAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from .export_split import dataset_parts
@@ -32,6 +33,7 @@ try:
     from .result_contract import DetectionResult, write_results
 except ImportError:
     import map_reporter
+    from adapters.dfine import DFINEAdapter
     from adapters.tiny_yolo11 import TinyYolo11Adapter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from export_split import dataset_parts
@@ -41,7 +43,8 @@ except ImportError:
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
-ADAPTERS = {adapter.name: adapter for adapter in (TinyYolo11Adapter, UltralyticsYolo11Adapter)}
+ADAPTERS = {adapter.name: adapter for adapter in
+            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter)}
 
 # Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
 FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
@@ -139,11 +142,12 @@ def proxy_data(proxy):
             load_split(cache_dir, split, proxy["val_sequences"], step, width))
 
 
-def challenging_search(protocol):
+def challenging_search(protocol, family=None):
     """Settings and data for the challenging search split (export_split.py --set search).
 
     Candidates train on challenging_train minus the held-out val_sequences
-    (an Ultralytics dataset on disk) and are scored on the val_sequences.
+    and are scored on the val_sequences. D-FINE reads the exported images
+    lazily; Ultralytics consumes the export's data.yaml directly.
     """
     challenging = protocol["challenging"]
     data_root = FRED_DIR / challenging["data_root"]
@@ -156,8 +160,12 @@ def challenging_search(protocol):
     proxy = dict(protocol["proxy"], train_sequences=[s for s, _ in train],
                  val_sequences=[s for s, _ in val], frame_step=train_step,
                  val_frame_step=val_step, epochs=challenging["search"]["epochs"])
-    frames = len((train_root / "train.txt").read_text().split())
-    return proxy, {"data_yaml": data_yaml, "frames": frames}, lambda: load_exported_split(
+    if family == "dfine":
+        train_data = load_exported_split(train_root, train)
+    else:
+        frames = len((train_root / "train.txt").read_text().split())
+        train_data = {"data_yaml": data_yaml, "frames": frames}
+    return proxy, train_data, lambda: load_exported_split(
         val_root, val)
 
 
@@ -165,7 +173,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
     start_time = time.time()
     adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
     if adapter.settings.get("data") == "challenging_search":
-        proxy, train_data, load_val = challenging_search(protocol)
+        proxy, train_data, load_val = challenging_search(protocol, family)
     else:
         proxy = protocol["proxy"]
         train_data = load_val = None

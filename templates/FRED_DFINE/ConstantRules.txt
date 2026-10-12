@@ -1,0 +1,23 @@
+You are replacing one complete architecture class in the Event-only D-FINE-inspired seed.
+The surrounding preamble is protected and supplies the fixed target conversion,
+distribution decoder, Hungarian matcher, FGL/GO-LSD criterion, and predict contract.
+
+1. Output only one executable Python class in a single Markdown code block. Keep
+   the original class name, constructor signature, and forward signature.
+2. Do not add imports, file I/O, network calls, package installation, or new
+   option markers. Use the symbols imported in the protected preamble.
+3. Preserve the fixed three-stage interface: EventBackbone returns stride-4,
+   stride-8, and stride-16 feature maps with out_channels matching the maps;
+   MultiScaleEncoder returns three maps of the same sizes with d_model channels;
+   DistributionRefinementDecoder returns pred_logits [B,Q,1], pred_boxes
+   [B,Q,4], pred_corners [B,Q,4,reg_max+1], ref_points [B,Q,4], and one
+   aux_outputs entry per earlier decoder layer.
+4. The protected wrapper verifies finite, normalized, positive-size boxes and
+   the fixed four-edge distribution decode. Keep all predictions differentiable.
+5. Accept odd spatial sizes and arbitrary positive batch sizes. Do not assume
+   a fixed Event frame width or height or change the three-channel Event input.
+6. Preserve a bounded query count and bounded attention memory. Avoid changes
+   that scale quadratically with the full stride-4 feature-map token count.
+7. Favor localization of tiny drones while retaining reasonable parameter and
+   activation use. Do not edit the fixed criterion, class mapping, confidence
+   policy, NMS, or data loading through a mutable architecture class.
