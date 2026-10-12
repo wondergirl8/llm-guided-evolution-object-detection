@@ -267,6 +267,24 @@ No claim of a successful live generation is made by local tests.
 
 ## Local checks
 
+The Pareto plotting script includes Michelle's numbered point badges and
+separate metrics table from `fred-run-setup` commit `c875ec920`. Closely spaced
+points have stacked badges. Plot this run's own global snapshots and preserved
+baseline (the team's screenshot uses a different detector/training run):
+
+```bash
+root=$(cat fred_ultralytics_yolo11_output/latest-option-b.txt)
+uv run python analysis/scripts/fred_pareto_graphs.py \
+  --checkpoints "$root/global" --seed_results "$root/baseline/seed_results.csv" \
+  --models_dir sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/models \
+  --output "$root/pareto"
+```
+
+The output includes per-generation/final PNGs, a GIF when multiple generations
+exist, and candidate/Pareto-model CSVs. Model paths use this branch's actual
+Ultralytics seed. With no valid candidate scores, a saved baseline is plotted
+alone; without either, the command reports that evaluations are not ready.
+
 Use the branch's Python environment with pinned Ultralytics installed:
 
 ```bash
