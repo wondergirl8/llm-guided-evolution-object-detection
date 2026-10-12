@@ -32,7 +32,7 @@ def test_real_server_script_preserves_scheduler_mask(tmp_path, mask):
     result = subprocess.run(['bash', str(REPO / 'server.sh')], cwd=tmp_path, env=env,
                             capture_output=True, text=True, check=True)
     calls = [json.loads(row) for row in (tmp_path / 'uv.jsonl').read_text().splitlines()]
-    assert calls[-1]['args'][:4] == ['run', 'python', '-m', 'uvicorn']
+    assert calls[-1]['args'] == ['run', 'python', 'scripts/launch_yolo11_server.py']
     assert all(call['mask'] == mask for call in calls)
     assert calls[-1]['expected'] == '2' and calls[-1]['order'] == 'PCI_BUS_ID'
     assert f'Slurm CUDA_VISIBLE_DEVICES={mask}' in result.stdout

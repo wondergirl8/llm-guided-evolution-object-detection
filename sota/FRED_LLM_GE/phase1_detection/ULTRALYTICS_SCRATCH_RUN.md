@@ -114,8 +114,20 @@ but its renewed server job 6218119 failed during CUDA initialization. Its full
 log reported two devices through PyTorch/NVML, followed by a CUDA assertion
 when initializing device 1. The previous hardcoded mask was a scheduling
 defect consistent with that mismatch. The fix preserves the actual assignment,
-logs `nvidia-smi -L` when available and validates both devices; a successful
-ICE startup is still required to establish that the new allocation is usable.
+logs `nvidia-smi -L` when available and validates both devices. Renewed ICE
+job 6218368 then initialized both 139.8-GiB H200s and loaded the model, but
+failed because another process already occupied port 8293.
+
+The server now reserves its TCP socket before importing/loading the model.
+It prefers the configured port (8293 by default) and uses a free port if that
+address is occupied, keeping the socket reserved throughout startup. The
+selected host/port/job identity are saved in
+`run_job_outputs/server/connection-<job>.json` and
+`llm-server-connection.json`. Readiness checks this exact job's endpoint;
+launchers verify its identity and export `LLMGE_PORT` to the controller and
+child jobs. Existing training/run identities are preserved, while generation
+session records identify the new endpoint. Manual launchers can use the same
+connection file. Existing services on the occupied port are left running.
 
 The launcher validates complete export markers and server readiness, then
 submits a four-hour GPU seed baseline. Evolution runs only after baseline
@@ -144,12 +156,15 @@ bash scripts/resume_yolo11_option_b.sh
 
 It reads `latest-option-b.txt`, rejects an active controller/resume/server job,
 starts a fresh server and queues a small CPU job dependent on the server
-starting. That job waits up to 40 minutes for model loading and checks the
+starting. That job waits up to 60 minutes for model loading and checks the
 server's Slurm job identity before submitting the controller. It reuses the
 saved baseline and exported data. It prints server/resume IDs and the resume
 log; the controller ID appears in that log and `controller-job.txt` after
 startup. An optional run-folder argument selects an older run. This resumes
-one allocation; it does not renew eight-hour server jobs indefinitely.
+one allocation; it does not renew eight-hour server jobs indefinitely. The
+readiness allocation is 65 minutes, leaving room for the observed 37-minute
+model load and subsequent launch validation. Historical job-ID checks use
+the current user queue to avoid errors for purged IDs.
 
 For automatic renewal toward the saved generation target, use:
 

@@ -16,6 +16,10 @@ root=${1:-$(cat fred_ultralytics_yolo11_output/latest-option-b.txt)}
 root=$(cd "$root" && pwd)
 test -s "$root/run_config.json"
 test -s "$root/baseline/seed_results.csv"
+queue_ids=$(squeue -h -u "$USER" -o '%i')
+job_active() {
+  printf '%s\n' "$queue_ids" | awk -v wanted="$1" '$1 == wanted {found=1} END {exit !found}'
+}
 schedule_chain() {
   .venv/bin/python - "$root" "$1" "$2" <<'PY'
 import sys
@@ -26,7 +30,7 @@ PY
 }
 if test -s "$root/chain-job.txt"; then
   chain=$(cat "$root/chain-job.txt")
-  if [[ $chain != ${SLURM_JOB_ID:-} ]] && test -n "$(squeue -h -j "$chain" -o '%i')"; then
+  if [[ $chain != ${SLURM_JOB_ID:-} ]] && job_active "$chain"; then
     echo "Automatic continuation $chain is already queued or running; no duplicate submitted."
     exit 0
   fi
@@ -43,7 +47,7 @@ active_job=''
 for marker in controller-job.txt resume-job.txt; do
   if test -s "$root/$marker"; then
     job=$(cat "$root/$marker")
-    if test -n "$(squeue -h -j "$job" -o '%i')"; then
+    if job_active "$job"; then
       if [[ $auto -eq 0 ]]; then
         echo "Job $job is still queued or running for this run; do not start a duplicate." >&2
         exit 1
@@ -54,7 +58,7 @@ for marker in controller-job.txt resume-job.txt; do
 done
 if test -n "$active_job"; then
   server=$(cat "$root/server-job.txt")
-  test -n "$(squeue -h -j "$server" -o '%i')" || { echo 'Saved server is not active; inspect the current jobs.' >&2; exit 1; }
+  job_active "$server" || { echo 'Saved server is not active; inspect the current jobs.' >&2; exit 1; }
   touch "$root/AUTO-ENABLED"
   if ! schedule_chain "$server" "$active_job"; then
     rm -f "$root/AUTO-ENABLED"
@@ -76,7 +80,7 @@ server=${server%%;*}
 printf '%s\n' "$server" > "$root/server-job.txt"
 # 'after' releases this job when the server starts, rather than when it finishes.
 if ! resume=$(sbatch --parsable --job-name=yolo11-b-resume --dependency="after:$server" \
-  --kill-on-invalid-dep=yes --cpus-per-task=2 --mem=4G --time=00:45:00 \
+  --kill-on-invalid-dep=yes --cpus-per-task=2 --mem=4G --time=01:05:00 \
   --output="$root/resume-%j.log" scripts/yolo11_scratch_job.sh resume-when-ready "$root" "$server"); then
   scancel "$server"
   exit 1

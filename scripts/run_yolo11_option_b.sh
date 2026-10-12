@@ -16,7 +16,8 @@ if [[ $# -eq 2 && $1 = --resume ]]; then
   test -s "$YOLO11_PILOT_ROOT/baseline/seed_results.csv"
   if test -s "$YOLO11_PILOT_ROOT/controller-job.txt"; then
     previous=$(cat "$YOLO11_PILOT_ROOT/controller-job.txt")
-    if test -n "$(squeue -h -j "$previous" -o '%i')"; then
+    queue_ids=$(squeue -h -u "$USER" -o '%i')
+    if printf '%s\n' "$queue_ids" | awk -v wanted="$previous" '$1 == wanted {found=1} END {exit !found}'; then
       echo "Controller $previous is still queued or running; wait before resuming." >&2
       exit 1
     fi
@@ -36,6 +37,10 @@ export YOLO11_RESUME=$resume
 mkdir -p "$YOLO11_PILOT_ROOT" run_job_outputs/{evaluation,evolution,islands}
 .venv/bin/python - <<'PY'
 import hashlib, importlib.metadata, json, os, pathlib, shlex, sys, urllib.request
+connection_path = pathlib.Path('llm-server-connection.json')
+connection = json.loads(connection_path.read_text()) if connection_path.is_file() else None
+if connection:
+    os.environ['LLMGE_PORT'] = str(connection['port'])
 from src.cfg import constants
 sys.path.insert(0, str(pathlib.Path(constants.TRAIN_FILE).parent))
 from option_b import MANIFEST_PATH, PROTOCOL_PATH, load_manifest, load_exported_data
@@ -45,9 +50,12 @@ assert constants.TRAIN_FILE.endswith('train_ultralytics.py')
 m = load_manifest()
 # Validate both complete exports before submitting any GPU job; no image decoding.
 train, val = load_exported_data(m, 1280)
-host = pathlib.Path('hostname.log').read_text().strip()
+host = connection['hostname'] if connection else pathlib.Path('hostname.log').read_text().strip()
 with urllib.request.urlopen(f'http://{host}:{constants.PORT}/', timeout=10) as response:
     assert response.status == 200
+    if connection:
+        if str(json.load(response).get('slurm_job_id')) != str(connection['slurm_job_id']):
+            raise ValueError('Ready endpoint does not belong to the selected Slurm server job')
 root = pathlib.Path(os.environ['YOLO11_PILOT_ROOT'])
 sha = lambda p: hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 identity = dict(manifest_sha256=m['sha256'], trainer_sha256=sha(constants.TRAIN_FILE),
@@ -77,6 +85,7 @@ generation = {k: os.environ[k] for k in ('LLM_MAX_NEW_TOKENS', 'LLMGE_INITIALIZA
 if any(int(value) <= 0 for value in generation.values()):
     raise ValueError('Generation limits must be positive')
 exports.update(generation)
+exports['LLMGE_PORT'] = str(constants.PORT)
 exports.update(LLMGE_OUTPUT_DIR=str(root / 'candidates'), YOLO11_PILOT_ROOT=str(root))
 import time
 (root / f'generation-session-{time.time_ns()}.json').write_text(json.dumps({

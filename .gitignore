@@ -69,6 +69,7 @@ island_controller.sbatch
 templates/**/mutant*.sh
 src/mixt.sh 
 hostname.log
+llm-server-connection.json
 
 # FRED YOLO11 LLM-GE run outputs
 fred_yolo11_checkpoints/

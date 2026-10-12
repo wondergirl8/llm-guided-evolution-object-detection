@@ -54,7 +54,5 @@ else
     echo "Skipping island controller submission (SUBMIT_ISLAND_CONTROLLER=${SUBMIT_ISLAND_CONTROLLER})"
 fi
 
-# Use the project's configured port so the run's LLM jobs find this server.
-PORT=$(uv run python -c "from src.cfg.constants import PORT; print(PORT)")
-echo "Serving on port $PORT"
-exec uv run python -m uvicorn server:app --host "$SERVER_HOSTNAME" --port "$PORT" --workers 1
+# Reserve a usable port before model loading; readiness passes it to all clients.
+exec uv run python scripts/launch_yolo11_server.py

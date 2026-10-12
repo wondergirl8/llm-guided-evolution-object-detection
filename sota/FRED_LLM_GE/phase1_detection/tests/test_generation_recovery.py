@@ -139,15 +139,22 @@ def test_server_wait_checks_allocation_identity_and_exit(tmp_path, monkeypatch):
     marker = tmp_path / 'run_job_outputs/server/hostname-123.log'
     marker.parent.mkdir(parents=True)
     marker.write_text('127.0.0.1')
+    (marker.parent / 'connection-123.json').write_text(json.dumps({
+        'hostname': '127.0.0.1', 'port': 9017, 'slurm_job_id': '123'}))
     monkeypatch.setattr(waiter.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout='RUNNING'))
     class Response(io.BytesIO):
         status = 200
     identities = iter(['different-server', '123'])
-    monkeypatch.setattr(waiter.urllib.request, 'urlopen', lambda *a, **k:
-                        Response(json.dumps({'slurm_job_id': next(identities)}).encode()))
+    urls = []
+    def open_response(url, **kwargs):
+        urls.append(url)
+        return Response(json.dumps({'slurm_job_id': next(identities)}).encode())
+    monkeypatch.setattr(waiter.urllib.request, 'urlopen', open_response)
     monkeypatch.setattr(waiter.time, 'sleep', lambda *a: None)
     waiter.wait_for_server('123', 8293, 1)
     assert (tmp_path / 'hostname.log').read_text().strip() == '127.0.0.1'
+    assert urls == ['http://127.0.0.1:9017/'] * 2
+    assert json.loads((tmp_path / 'llm-server-connection.json').read_text())['port'] == 9017
     monkeypatch.setattr(waiter.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout=''))
     with pytest.raises(RuntimeError, match='stopped before becoming ready'):
         waiter.wait_for_server('123', 8293, 1)
