@@ -40,7 +40,7 @@ def test_option_b_launch_preparation_dependencies_and_resume():
         sbatch = bindir / 'sbatch'
         sbatch.write_text("#!/usr/bin/env python3\nimport json, os, pathlib, sys\np=pathlib.Path(os.environ['FAKE_SLURM_LOG'])\nlines=p.read_text().splitlines() if p.exists() else []\njob=31000+len(lines)\nwith p.open('a') as f:\n f.write(json.dumps({'id':job,'args':sys.argv[1:],'generations':os.getenv('LLMGE_GENERATIONS'),'profile':os.getenv('FRED_DATA_PROFILE')})+'\\n')\nprint(job)\n")
         sbatch.chmod(493)
-        (bindir / 'squeue').write_text('#!/bin/sh\nprintf "%s" "${FAKE_ACTIVE_JOB:-}"\n')
+        (bindir / 'squeue').write_text("#!/usr/bin/env python3\nimport os,sys\njobs=os.getenv('FAKE_ACTIVE_JOB','').split()\na=sys.argv[1:]\nif '-j' in a:\n jobs=[j for j in jobs if j in a[a.index('-j')+1].split(',')]\nprint('\\n'.join(jobs),end='')\n")
         (bindir / 'squeue').chmod(493)
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -99,11 +99,26 @@ def test_option_b_launch_preparation_dependencies_and_resume():
         assert '--dependency=after:31005' in calls[6]['args']
         assert calls[6]['args'][-4:] == ['scripts/yolo11_scratch_job.sh', 'resume-when-ready', str(runroot), '31005']
         assert (runroot / 'resume-job.txt').read_text().strip() == '31006'
+        # Enable automatic chaining on an already-running allocation.
+        run('resume_yolo11_option_b.sh', '--auto', extra={'FAKE_ACTIVE_JOB': '31004 31005'})
+        calls = [json.loads(line) for line in (root / 'jobs.jsonl').read_text().splitlines()]
+        assert len(calls) == 8 and '--dependency=afterany:31004' in calls[7]['args']
+        assert (runroot / 'AUTO-ENABLED').exists()
+        # A fresh automatic allocation chains after readiness, then its controller.
+        run('resume_yolo11_option_b.sh', '--auto')
+        calls = [json.loads(line) for line in (root / 'jobs.jsonl').read_text().splitlines()]
+        assert len(calls) == 11
+        assert '--dependency=after:31008' in calls[9]['args']
+        assert '--dependency=afterany:31009' in calls[10]['args']
+        assert '--time=00:15:00' in calls[10]['args']
+        run('resume_yolo11_option_b.sh', '--auto', extra={'FAKE_ACTIVE_JOB': '31010'})
+        (runroot / 'STOP-AUTO').touch()
+        run('resume_yolo11_option_b.sh', '--auto', ok=False)
         first = manifest['train_sequences'][0]
         (data / 'search_train_step50/images' / f'{first}_000001.png').unlink()
         run('run_yolo11_option_b.sh', ok=False)
         (data / 'search_val_step10/data.yaml').unlink()
         run('run_yolo11_option_b.sh', ok=False)
-        assert len((root / 'jobs.jsonl').read_text().splitlines()) == 7
+        assert len((root / 'jobs.jsonl').read_text().splitlines()) == 11
         server.shutdown()
         print('Launcher integration passed: CPU array/finalization, baseline dependency, 1000-generation target, resume, duplicate and incomplete-export rejection (mock Slurm/server).')

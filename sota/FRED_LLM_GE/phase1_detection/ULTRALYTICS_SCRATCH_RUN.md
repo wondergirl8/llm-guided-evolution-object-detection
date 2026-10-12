@@ -138,6 +138,39 @@ log; the controller ID appears in that log and `controller-job.txt` after
 startup. An optional run-folder argument selects an older run. This resumes
 one allocation; it does not renew eight-hour server jobs indefinitely.
 
+For automatic renewal toward the saved generation target, use:
+
+```bash
+bash scripts/resume_yolo11_option_b.sh --auto
+```
+
+This also attaches renewal to a saved run whose server/controller or readiness
+job is already active. It schedules a small dependent CPU continuation job;
+after an expected controller timeout or server expiration, that job resumes
+the same run with a fresh server. Any outstanding candidate jobs are tracked
+and allowed to finish before renewal, using Slurm dependencies rather than
+holding a CPU allocation while they wait. The saved baseline and exported
+dataset are reused on every allocation. Queue waits and model loading still
+create gaps between allocations.
+
+Renewal stops when the saved target checkpoint exists, on a real code failure,
+manual cancellation, or after three successive allocations without checkpoint
+progress. An unfinished generation can be repeated after a timeout; only
+completed population checkpoints and saved initialization parents are resumed.
+Current server/controller/continuation IDs remain in their run-folder marker
+files, and continuation decisions are logged in `chain-<job>.log`.
+
+To stop future renewals while allowing current jobs to finish:
+
+```bash
+touch "$(cat fred_ultralytics_yolo11_output/latest-option-b.txt)/STOP-AUTO"
+```
+
+Once current jobs end, remove that marker and run `--auto` again to re-enable
+renewal. A genuine failure disables `AUTO-ENABLED`; inspect the controller and
+chain logs before restarting it. The continuation cancels its own old server
+after target completion or a real failure so the GPU allocation does not idle.
+
 Resume restores the saved settings, skips the completed baseline, and verifies
 seed/trainer/protocol/manifest identities. A live controller for the same run
 blocks duplicate submission; a file lock also protects execution. Checkpoints

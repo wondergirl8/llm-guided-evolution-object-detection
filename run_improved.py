@@ -285,6 +285,13 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
         print(f"\t‣ Last readiness error: {last_error}", flush=True)
     return False
 
+def record_child_job(job_id):
+    """Keep submitted jobs discoverable if the controller hits its walltime."""
+    root = os.getenv('YOLO11_PILOT_ROOT')
+    if root and job_id and str(job_id).isdigit():
+        with open(os.path.join(root, 'child-jobs.txt'), 'a') as file:
+            file.write(str(job_id) + '\n')
+
 def submit_bash(file_path, **kwargs):
     """ This should be general for subbing anything and returning:
         successful_sub_flag 
@@ -308,6 +315,7 @@ def submit_bash(file_path, **kwargs):
         # print("\t‣ Script Submitted Successfully.\n\t‣ Output:", result.stdout.strip(), flush=True)
         successful_sub_flag = True
         job_id = result.stdout.split('job ')[-1].strip()
+        record_child_job(job_id)
     else:
         print("\t‣ Failed to Submit Script.\n\t‣ Error:", result.stderr.strip(), flush=True)
         successful_sub_flag = False
@@ -465,6 +473,7 @@ def submit_run(gene_id):
             print("\t‣ Script Submitted Successfully.\n\t‣ Output:", result.stdout.strip())
             successful_sub_flag = True
             job_id = result.stdout.split('job ')[-1].strip()
+            record_child_job(job_id)
         else:
             print("\t‣ Failed to Submit script.\n\t‣ Error:", result.stderr.strip())
             successful_sub_flag = False
