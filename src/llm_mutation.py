@@ -56,8 +56,9 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
                                             top_p, llm_model, temperature)
     
-    if not code_from_llm:
-        code_from_llm = txt2llm
+    if not code_from_llm or code_from_llm == "ERROR":
+        # Keep the parent's chunk rather than writing the prompt into the model
+        code_from_llm = code2llm.strip()
     else:
         valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
         if not valid_code:

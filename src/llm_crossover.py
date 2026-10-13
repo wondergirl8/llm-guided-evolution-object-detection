@@ -67,7 +67,7 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     code_from_llm = generate_augmented_code(txt2llm, augment_idx - 1, apply_quality_control,
                                             top_p, llm_model, temperature)
     
-    if not code_from_llm:
+    if not code_from_llm or code_from_llm == "ERROR":
         # Keep the first parent's chunk rather than writing the prompt into the model
         code_from_llm = x.strip()
     
