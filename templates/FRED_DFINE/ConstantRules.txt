@@ -3,7 +3,10 @@ The surrounding preamble is protected and supplies the fixed target conversion,
 distribution decoder, Hungarian matcher, FGL/GO-LSD criterion, and predict contract.
 
 1. Output only one executable Python class in a single Markdown code block. Keep
-   the original class name, constructor signature, and forward signature.
+   the original class name, constructor signature, and forward signature. The
+   block must contain nothing but that class: no helper classes, functions,
+   constants, or code outside it. Write helpers as methods or submodules of the
+   class.
 2. Do not add imports, file I/O, network calls, package installation, or new
    option markers. Use the symbols imported in the protected preamble.
 3. Preserve the fixed three-stage interface: EventBackbone returns stride-4,
@@ -21,3 +24,12 @@ distribution decoder, Hungarian matcher, FGL/GO-LSD criterion, and predict contr
 7. Favor localization of tiny drones while retaining reasonable parameter and
    activation use. Do not edit the fixed criterion, class mapping, confidence
    policy, NMS, or data loading through a mutable architecture class.
+8. The protected ConvNormAct(in_channels, out_channels, stride=1) is a fixed
+   3x3 Conv2d + GroupNorm + SiLU and takes no other arguments (no kernel_size,
+   padding, dilation, or groups). For any other convolution, build it from
+   nn.Conv2d, nn.GroupNorm, and nn.SiLU directly.
+9. DistributionRefinementDecoder must keep self.num_layers and return exactly
+   num_layers - 1 aux_outputs entries, one per decoder layer except the last.
+10. Create every new tensor on the input's device and dtype (for example
+   torch.zeros(..., device=x.device, dtype=x.dtype)). Never move tensors to
+   the CPU or create CPU tensors inside forward.
