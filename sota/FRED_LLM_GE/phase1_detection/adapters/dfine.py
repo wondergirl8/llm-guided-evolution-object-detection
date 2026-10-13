@@ -37,6 +37,20 @@ def _source_parts(path):
     return parts
 
 
+class _FrameGroups(torch.utils.data.Dataset):
+    """Each item is one optimizer step's frames, decoded in a DataLoader worker."""
+
+    def __init__(self, images, groups):
+        self.images, self.groups = images, groups
+
+    def __len__(self):
+        return len(self.groups)
+
+    def __getitem__(self, index):
+        group = self.groups[index]
+        return group, self.images[group]
+
+
 def _targets_from_pixels(image_boxes, width, height, device):
     """Convert already approved pixel xyxy boxes; never repair annotations."""
     if width <= 0 or height <= 0:
@@ -128,33 +142,41 @@ class DFINEAdapter(FamilyAdapter):
             weight_decay=self.settings.get("weight_decay", 1e-4),
         )
         generator = torch.Generator().manual_seed(proxy["seed"])
+        workers = self.settings.get("workers", 0)
         for epoch in range(epochs):
             model.train()
             order = torch.randperm(len(images), generator=generator)
+            groups = [order[start:start + batch_size] for start in range(0, len(order), batch_size)]
+            # Workers decode upcoming PNG frames while the GPU trains; the
+            # frame order and optimizer steps are the same as without them.
+            loader = torch.utils.data.DataLoader(
+                _FrameGroups(images, groups), batch_size=None, num_workers=workers,
+                pin_memory=torch.device(device).type == "cuda",
+            )
             total = 0.0
-            for start in range(0, len(order), batch_size):
-                group = order[start:start + batch_size]
+            for group, group_images in loader:
                 optimizer.zero_grad(set_to_none=True)
                 batch_loss = 0.0
                 for offset in range(0, len(group), microbatch):
                     selected = group[offset:offset + microbatch]
-                    raw = images[selected]
+                    raw = group_images[offset:offset + microbatch]
                     if not isinstance(raw, torch.Tensor) or raw.dtype != torch.uint8:
                         raise ValueError("D-FINE training images must decode to uint8 tensors")
-                    event = raw.to(device=device, dtype=torch.float32).div_(255.0)
+                    event = raw.to(device=device, non_blocking=True).float().div_(255.0)
                     targets = [_targets_from_pixels(boxes[int(i)], width, height, device)
                                for i in selected]
                     losses = self.criterion(model(event), targets)
                     weight = len(selected) / len(group)
                     (losses["loss_total"] * weight).backward()
-                    batch_loss += float(losses["loss_total"].detach()) * weight
+                    # Kept on the GPU so each microbatch does not wait for a sync.
+                    batch_loss = batch_loss + losses["loss_total"].detach() * weight
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), self.settings.get("grad_clip", 0.1),
                     error_if_nonfinite=True,
                 )
                 optimizer.step()
                 total += batch_loss * len(group)
-            print(f"epoch {epoch + 1}/{epochs}: D-FINE loss {total / len(images):.4f}", flush=True)
+            print(f"epoch {epoch + 1}/{epochs}: D-FINE loss {float(total) / len(images):.4f}", flush=True)
 
     def predict(self, model, images, proxy, device):
         if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[1] != 3:

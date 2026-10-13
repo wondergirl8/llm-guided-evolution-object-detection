@@ -38,6 +38,10 @@ def event_pil_to_tensor(image: Image.Image) -> Tensor:
     return torch.from_numpy(pixels).permute(2, 0, 1).to(torch.float32).div_(255.0)
 
 
+_MIN_BOX_SIZE = 1e-4
+_BOX_TOLERANCE = 1e-6
+
+
 def _cxcywh_to_xyxy(boxes: Tensor) -> Tensor:
     center, size = boxes[..., :2], boxes[..., 2:]
     return torch.cat((center - size / 2, center + size / 2), dim=-1)
@@ -64,13 +68,14 @@ def _decode_distributions(reference: Tensor, corner_logits: Tensor, bin_values: 
     bottom = height * (0.5 + offsets[..., 1]).clamp_min(1e-4)
     left = width * (0.5 + offsets[..., 2]).clamp_min(1e-4)
     right = width * (0.5 + offsets[..., 3]).clamp_min(1e-4)
-    xyxy = torch.stack((
-        (center[..., 0] - left).clamp(0, 1),
-        (center[..., 1] - top).clamp(0, 1),
-        (center[..., 0] + right).clamp(0, 1),
-        (center[..., 1] + bottom).clamp(0, 1),
-    ), dim=-1)
-    return _xyxy_to_cxcywh(xyxy)
+    # Keep every box at least _MIN_BOX_SIZE wide and tall inside [0,1]: near
+    # the right/bottom edge float32 cannot resolve tinier sizes, so they would
+    # collapse to zero width.
+    x0 = (center[..., 0] - left).clamp(0, 1 - _MIN_BOX_SIZE)
+    y0 = (center[..., 1] - top).clamp(0, 1 - _MIN_BOX_SIZE)
+    x1 = torch.maximum((center[..., 0] + right).clamp(0, 1), x0 + _MIN_BOX_SIZE)
+    y1 = torch.maximum((center[..., 1] + bottom).clamp(0, 1), y0 + _MIN_BOX_SIZE)
+    return _xyxy_to_cxcywh(torch.stack((x0, y0, x1, y1), dim=-1))
 
 
 def _pairwise_iou_and_giou(boxes_a: Tensor, boxes_b: Tensor) -> tuple[Tensor, Tensor]:
@@ -129,7 +134,9 @@ def _validate_prediction(prediction: dict, batch_size: int, num_queries: int, re
     for key in ("pred_boxes", "ref_points"):
         boxes = prediction[key]
         xyxy = _cxcywh_to_xyxy(boxes)
-        if (boxes[..., 2:] <= 0).any() or (xyxy < 0).any() or (xyxy > 1).any():
+        # Allow float32 rounding from the cxcywh round trip at the frame edges.
+        if ((boxes[..., 2:] <= 0).any() or (xyxy < -_BOX_TOLERANCE).any()
+                or (xyxy > 1 + _BOX_TOLERANCE).any()):
             raise ValueError(f"{key} contains an invalid normalized box")
     fixed_bins = _make_bin_values(reg_max).to(
         device=prediction["pred_corners"].device, dtype=prediction["pred_corners"].dtype
@@ -378,7 +385,7 @@ class DFINEEventDetector(nn.Module):
         outputs = self.forward(event)
         height, width = event.shape[-2:]
         scores = outputs["pred_logits"].sigmoid().squeeze(-1)
-        xyxy = _cxcywh_to_xyxy(outputs["pred_boxes"])
+        xyxy = _cxcywh_to_xyxy(outputs["pred_boxes"]).clamp(0, 1)
         scale = xyxy.new_tensor((width, height, width, height))
         results = []
         for image_boxes, image_scores in zip(xyxy, scores):
