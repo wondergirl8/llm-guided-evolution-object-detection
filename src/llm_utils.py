@@ -30,14 +30,16 @@ def retrieve_base_code(idx):
 
 def clean_code_from_llm(code_from_llm):
     """Cleans the code received from LLM."""
-    try:
-        # Extract and clean code assuming it is enclosed in triple backticks
-        return '\n'.join(code_from_llm.strip().split("```")[1].split('\n')[1:]).strip()
-    except (IndexError, AttributeError) as e:
-        # Print an error message if the code extraction fails
-        print("Runtime Error: No code was generated or the format is incorrect.")
-        return "ERROR"  # Return ERROR
-        #return ""
+    # Take the first non-empty closed ``` block. LLMs sometimes open with a stray
+    # empty fence, and a reply cut off at the token limit leaves its last block
+    # unclosed; that partial code must not be used.
+    blocks = re.findall(r"```[^\n`]*\n(.*?)```", code_from_llm or "", re.DOTALL)
+    for block in blocks:
+        if block.strip():
+            return block.strip()
+    # Print an error message if the code extraction fails
+    print("Runtime Error: No code was generated or the format is incorrect.")
+    return "ERROR"  # Return ERROR
 
 def get_llm_code_generator(llm_model):
     # Prefer the local uvicorn-hosted model when configured
@@ -518,7 +520,7 @@ def get_llm_server_hostname():
         hostname = f.readline().strip() 
     return hostname
 
-def submit_mixtral_local(prompt, max_new_tokens=850, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
+def submit_mixtral_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
     if server_url is None:
         server_url = f"http://{os.getenv('SERVER_HOSTNAME', 'localhost')}:{PORT}/generate"
     payload = {
@@ -554,7 +556,7 @@ def submit_mixtral_local(prompt, max_new_tokens=850, temperature=0.2, top_p=0.15
         print(f"Request failed: {e}")
         return None
 
-def submit_deepseek_local(prompt, max_new_tokens=850, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
+def submit_deepseek_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
     if server_url is None:
         server_url = f"http://{get_llm_server_hostname()}:8000/generate"
     payload = {
