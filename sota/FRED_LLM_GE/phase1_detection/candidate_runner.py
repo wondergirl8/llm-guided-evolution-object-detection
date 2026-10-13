@@ -16,6 +16,7 @@ elites are retrained at full budget later.
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -248,6 +249,14 @@ def main():
         gene_id = args.model.split('network_')[1]
     except IndexError:
         gene_id = 'seed'
+
+    # A GPU job whose GPU CUDA cannot see would otherwise fall back to the CPU
+    # and run for hours; fail now so LLM-GE is not left waiting on it.
+    if args.device == "cpu" and os.environ.get("CUDA_VISIBLE_DEVICES"):
+        message = (f"GPU allocated (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}) "
+                   "but CUDA is unavailable on this node; not training on CPU")
+        write_failure_results(args.sota_root, gene_id, time.time(), message)
+        raise SystemExit(1)
 
     run(gene_id, args.model, args.variant_dir, args.family, load_protocol(args.protocol),
         args.sota_root, args.device)

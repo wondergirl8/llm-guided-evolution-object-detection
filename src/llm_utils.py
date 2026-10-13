@@ -128,6 +128,20 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
     
     return code_from_llm 
 
+def strip_leading_imports(code):
+    """Drop import lines the LLM puts above a class.
+
+    D-FINE candidates may hold only one class per section, and the protected
+    preamble already imports torch, nn and F, so these lines only get the
+    candidate rejected.
+    """
+    lines = code.splitlines()
+    start = 0
+    while start < len(lines) and (not lines[start].strip()
+                                  or re.match(r"(import|from)\s+\S", lines[start])):
+        start += 1
+    return "\n".join(lines[start:])
+
 def extract_note(txt):
     """Extracts note from the part if present."""
     if "# -- NOTE --" in txt:
