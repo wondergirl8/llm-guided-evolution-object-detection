@@ -29,6 +29,7 @@ try:
     from .adapters.dfine import DFINEAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
+    from .adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from .export_split import dataset_parts
     from .proxy_data import REVISION, load_exported_split, load_split
     from .result_contract import DetectionResult, write_results
@@ -37,15 +38,22 @@ except ImportError:
     from adapters.dfine import DFINEAdapter
     from adapters.tiny_yolo11 import TinyYolo11Adapter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
+    from adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from export_split import dataset_parts
     from proxy_data import REVISION, load_exported_split, load_split
     from result_contract import DetectionResult, write_results
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
-DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
+FAMILY_SOTA_ROOTS = {
+    "tiny_yolo11": FRED_DIR / "phase1_detection" / "seeds" / "yolo11",
+    "yolo11": FRED_DIR / "phase1_detection" / "seeds" / "ultralytics_yolo11",
+    "yolo26_p2": FRED_DIR / "phase1_detection" / "seeds" / "yolo26_p2",
+    "dfine": FRED_DIR / "phase1_detection" / "seeds" / "dfine",
+}
 ADAPTERS = {adapter.name: adapter for adapter in
-            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter)}
+            (TinyYolo11Adapter, UltralyticsYolo11Adapter, UltralyticsYolo26P2Adapter,
+             DFINEAdapter)}
 
 # Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
 FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
@@ -235,14 +243,17 @@ def main():
     parser.add_argument("--family", choices=sorted(ADAPTERS), default="tiny_yolo11")
     parser.add_argument("--model", type=str, default="network",
                         help='Variant module name like "network_XXXX"; "network" trains the seed')
-    parser.add_argument("--variant_dir", type=str, default=str(DEFAULT_SOTA_ROOT / "models"),
+    parser.add_argument("--variant_dir", type=str, default=None,
                         help="Directory where models are written by LLM-GE")
     parser.add_argument("--protocol", type=str, default=str(DEFAULT_PROTOCOL))
-    parser.add_argument("--sota_root", type=str, default=str(DEFAULT_SOTA_ROOT),
+    parser.add_argument("--sota_root", type=str, default=None,
                         help="Where results/ and trained_models/ are written")
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
+
+    sota_root = args.sota_root or str(FAMILY_SOTA_ROOTS[args.family])
+    variant_dir = args.variant_dir or str(Path(sota_root) / "models")
 
     # this will get the gene id value: "network_XXXX" -> "XXXX"
     try:
@@ -255,11 +266,11 @@ def main():
     if args.device == "cpu" and os.environ.get("CUDA_VISIBLE_DEVICES"):
         message = (f"GPU allocated (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}) "
                    "but CUDA is unavailable on this node; not training on CPU")
-        write_failure_results(args.sota_root, gene_id, time.time(), message)
+        write_failure_results(sota_root, gene_id, time.time(), message)
         raise SystemExit(1)
 
-    run(gene_id, args.model, args.variant_dir, args.family, load_protocol(args.protocol),
-        args.sota_root, args.device)
+    run(gene_id, args.model, variant_dir, args.family, load_protocol(args.protocol),
+        sota_root, args.device)
 
 
 if __name__ == "__main__":

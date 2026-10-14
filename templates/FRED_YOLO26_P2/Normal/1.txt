@@ -1,0 +1,6 @@
+Make one focused change to this YOLO26n-P2 section that could improve localization of tiny drones in FRED Event frames. Follow the family rules and preserve the P2/P3/P4/P5 paths.
+
+The current section:
+```yaml
+{}
+```

@@ -16,9 +16,13 @@ echo "Using UV cache: $UV_CACHE_DIR"
 export SERVER_HOSTNAME=$(hostname)
 # Slurm does not create --output directories for the jobs this run submits.
 mkdir -p run_job_outputs/{islands,evolution,evaluation,server}
-# Keep D-FINE's state separate while preserving existing YOLO run paths.
+# Keep each full-size seed's state separate while preserving existing YOLO11 paths.
 run_tag="fred_yolo11"
 if [[ "${FRED_SEED_FAMILY:-yolo11}" == "dfine" ]]; then
   run_tag="fred_dfine"
+elif [[ "${FRED_SEED_FAMILY:-yolo11}" == "yolo26_p2" ]]; then
+  run_tag="fred_yolo26_p2"
+elif [[ "${FRED_SEED_FAMILY:-yolo11}" == "tiny_yolo11" ]]; then
+  run_tag="fred_tiny_yolo11"
 fi
 uv run python run_improved.py --checkpoints "${run_tag}_checkpoints" --global_path "${run_tag}_checkpoints"

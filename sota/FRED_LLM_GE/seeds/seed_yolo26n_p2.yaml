@@ -1,0 +1,53 @@
+# Ultralytics YOLO26n-P2 seed for one-class FRED Event-frame detection.
+# Adapted from Ultralytics 8.4.175 cfg/models/26/yolo26-p2.yaml.
+# Ultralytics AGPL-3.0 License: https://ultralytics.com/license
+# The backbone and head are the two LLM-GE mutation sections. The header is fixed.
+
+nc: 1  # drone
+scale: n
+end2end: True
+reg_max: 1
+scales:
+  n: [0.50, 0.25, 1024]
+
+# --OPTION--
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]] # 4
+  - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
+  - [-1, 2, C3k2, [512, True]] # 6
+  - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
+  - [-1, 2, C3k2, [1024, True]]
+  - [-1, 1, SPPF, [1024, 5, 3, True]] # 9
+  - [-1, 2, C2PSA, [1024]] # 10
+
+# --OPTION--
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 11
+  - [[-1, 6], 1, Concat, [1]] # 12: backbone P4
+  - [-1, 2, C3k2, [512, True]] # 13
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 14
+  - [[-1, 4], 1, Concat, [1]] # 15: backbone P3
+  - [-1, 2, C3k2, [256, True]] # 16-P3/8
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 17
+  - [[-1, 2], 1, Concat, [1]] # 18: backbone P2
+  - [-1, 2, C3k2, [128, True]] # 19-P2/4
+
+  - [-1, 1, Conv, [128, 3, 2]] # 20
+  - [[-1, 16], 1, Concat, [1]] # 21: head P3
+  - [-1, 2, C3k2, [256, True]] # 22-P3/8
+
+  - [-1, 1, Conv, [256, 3, 2]] # 23
+  - [[-1, 13], 1, Concat, [1]] # 24: head P4
+  - [-1, 2, C3k2, [512, True]] # 25-P4/16
+
+  - [-1, 1, Conv, [512, 3, 2]] # 26
+  - [[-1, 10], 1, Concat, [1]] # 27: backbone P5
+  - [-1, 1, C3k2, [1024, True, 0.5, True]] # 28-P5/32
+
+  - [[19, 22, 25, 28], 1, Detect, [nc]] # 29: P2, P3, P4, P5

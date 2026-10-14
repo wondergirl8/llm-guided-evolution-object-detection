@@ -100,3 +100,8 @@ families:
     # Train and score candidates on the challenging search split above.
     data: challenging_search
     workers: 8
+  yolo26_p2:
+    # Isolated YOLO26n-P2 prototype; uses the same Event export and evaluator.
+    seed_file: seeds/seed_yolo26n_p2.yaml
+    data: challenging_search
+    workers: 8

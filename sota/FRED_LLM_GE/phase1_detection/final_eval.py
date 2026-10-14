@@ -1,8 +1,10 @@
-"""Train a YOLO11-family model on FRED challenging_train and score it once on challenging_test.
+"""Train a supported Ultralytics model on FRED challenging_train and score challenging_test once.
 
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_scratch
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name best_evolved \\
         --model network_<gene_id> --variant_dir <run's models dir>
+    uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py \\
+        --family yolo26_p2 --name yolo26n_p2_scratch
     # optional: start from COCO-pretrained weights where layers match
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_coco \\
         --weights yolo11n.pt
@@ -10,8 +12,9 @@
 Training uses the dataset written by export_split.py --set final (official
 challenging_train, every <train_frame_step>th frame). The trained model is then run on every frame
 of the official challenging_test split (downloaded a sequence at a time) and scored
-by map_reporter in held-out mode; the report goes to
-<data_root>/held_out_reports/<name>_evaluation.json. Use this only on models
+by map_reporter in held-out mode; the YOLO11 report goes to
+<data_root>/held_out_reports/<name>_evaluation.json and YOLO26-P2 artifacts
+go under <data_root>/yolo26_p2/. Use this only on models
 whose selection is already frozen: test results must not feed back into search.
 """
 
@@ -29,6 +32,7 @@ import yaml
 try:
     from . import map_reporter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
+    from .adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from .candidate_runner import code_revision, load_protocol, sha256_file
     from .fred_splits import challenging_split, sequence_frames
     from .proxy_data import REVISION, STEP_US, load_annotations
@@ -36,6 +40,7 @@ try:
 except ImportError:
     import map_reporter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
+    from adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from candidate_runner import code_revision, load_protocol, sha256_file
     from fred_splits import challenging_split, sequence_frames
     from proxy_data import REVISION, STEP_US, load_annotations
@@ -43,6 +48,8 @@ except ImportError:
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
+FINAL_ADAPTERS = {"yolo11": UltralyticsYolo11Adapter,
+                  "yolo26_p2": UltralyticsYolo26P2Adapter}
 
 
 def predict_test_split(adapter, model, test, settings, device, report_dir):
@@ -90,6 +97,7 @@ def predict_test_split(adapter, model, test, settings, device, report_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Final train + held-out test on FRED challenging")
+    parser.add_argument("--family", choices=FINAL_ADAPTERS, default="yolo11")
     parser.add_argument("--name", required=True, help="Report name, e.g. yolo11n_scratch")
     parser.add_argument("--model", default="network",
                         help='"network" for the seed or network_<id> for an evolved candidate')
@@ -117,10 +125,11 @@ def main():
         raise SystemExit(f"{data_yaml} missing: run export_split.py --set final "
                          "(all shards, then --finalize)")
     _, test = challenging_split(data_root)
-    out = data_root / "final_runs" / args.name
+    artifact_root = data_root if args.family == "yolo11" else data_root / args.family
+    out = artifact_root / "final_runs" / args.name
     out.mkdir(parents=True, exist_ok=True)
 
-    adapter = UltralyticsYolo11Adapter(protocol["families"]["yolo11"], FRED_DIR)
+    adapter = FINAL_ADAPTERS[args.family](protocol["families"][args.family], FRED_DIR)
     variant_path = adapter.variant_path(args.model, args.variant_dir)
     model = adapter.build(variant_path, num_classes=1, device=args.device)
     params = adapter.param_count(model)
@@ -141,7 +150,7 @@ def main():
                 "test_frame_step": final["test_frame_step"]}
     frames, expected = predict_test_split(adapter, model, test, settings, args.device, out)
 
-    config = {"family": "yolo11", "final": final, "proxy_eval": settings, "epochs": epochs,
+    config = {"family": args.family, "final": final, "proxy_eval": settings, "epochs": epochs,
               "seed": seed,
               "weights": args.weights, "variant": variant_path.name}
     split_files = data_root / "splits"
@@ -166,7 +175,7 @@ def main():
     }
     payload = {"metadata": metadata, "frames": frames, "params": params,
                "expected_sample_ids": expected}
-    result, report_path = map_reporter.report(payload, sota_root=data_root, gene_id=args.name,
+    result, report_path = map_reporter.report(payload, sota_root=artifact_root, gene_id=args.name,
                                               mode="held-out")
     shutil.rmtree(adapter.workdir, ignore_errors=True)
     print(f"challenging_test mAP50: {result.map50}, mAP50:95: {result.map50_95}, "

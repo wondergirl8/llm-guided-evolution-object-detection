@@ -1,0 +1,6 @@
+Improve parameter efficiency in this YOLO26n-P2 section while retaining the stride-4 P2 detector for tiny drones. Change only permitted Conv or C3k2 channel, repeat, or kernel values.
+
+The current section:
+```yaml
+{}
+```

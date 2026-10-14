@@ -3,9 +3,9 @@
 Paths are derived from this checkout so the same configuration can be used on
 a laptop or on PACE ICE. SEED_FAMILY picks the seed: "yolo11" evolves the
 Ultralytics YOLO11n model YAML (sota/FRED_LLM_GE/seeds/seed_yolo11n.yaml);
-"tiny_yolo11" evolves Ruhi's tutorial-sized DroneDetector
-(sota/FRED_LLM_GE/seeds/seed_yolo11.py); "dfine" selects the Event-only
-D-FINE-inspired seed. Every family is trained and
+"yolo26_p2" evolves the YOLO26n-P2 YAML; "tiny_yolo11" evolves Ruhi's
+tutorial-sized DroneDetector (sota/FRED_LLM_GE/seeds/seed_yolo11.py);
+"dfine" selects the Event-only D-FINE-inspired seed. Every family is trained and
 scored by phase1_detection/candidate_runner.py under
 configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.csv.
 """
@@ -27,6 +27,13 @@ _FAMILIES = {
         "rules": "templates/FRED_YOLO11/ConstantRules.txt",
         # 80 epochs of YOLO11n at 1280 can outlast the 40 min default; the
         # evaluation job itself is limited to 4 h.
+        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+    },
+    "yolo26_p2": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo26_p2"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo26n_p2.yaml"),
+        "prompt_group": "FRED_YOLO26_P2/Normal",
+        "rules": "templates/FRED_YOLO26_P2/ConstantRules.txt",
         "eval_timeout": 3 * 60 * 60 + 30 * 60,
     },
     "tiny_yolo11": {
@@ -59,12 +66,16 @@ PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
-OUTPUT_DIR = os.path.join(ROOT_DIR, "fred_dfine_output" if SEED_FAMILY == "dfine"
-                          else "fred_yolo11_output")
+OUTPUT_DIR = os.path.join(ROOT_DIR, {
+    "dfine": "fred_dfine_output",
+    "yolo26_p2": "fred_yolo26_p2_output",
+    "tiny_yolo11": "fred_tiny_yolo11_output",
+}.get(SEED_FAMILY, "fred_yolo11_output"))
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
 SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
-ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
-GLOBAL_DATA_PATH = os.path.join(ROOT_DIR, "global_data")
+ISLAND_TEMP_SCRIPT = os.path.join(SOTA_ROOT, "island_temp_script_{ISLAND_NUM}.sh")
+# islands_wrapper joins this relative directory to its family checkpoint root.
+GLOBAL_DATA_PATH = "global_data"
 HOSTNAME_DIR = os.path.join(ROOT_DIR, "hostname.log")
 ENVIRONMENT_DIR = os.path.join(ROOT_DIR, ".venv")
 
@@ -117,7 +128,11 @@ SLURM_MIXT_TOP_P = 0.15
 SLURM_MIXT_TEMPERATURE = 0.1
 SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
-ISLAND_CONTROLLER_RUN_NAME = "fred_dfine_islands" if SEED_FAMILY == "dfine" else "fred_yolo11_islands"
+ISLAND_CONTROLLER_RUN_NAME = {
+    "dfine": "fred_dfine_islands",
+    "yolo26_p2": "fred_yolo26_p2_islands",
+    "tiny_yolo11": "fred_tiny_yolo11_islands",
+}.get(SEED_FAMILY, "fred_yolo11_islands")
 ISLAND_CONTROLLER_NUM_ISLANDS = 1
 ISLAND_CONTROLLER_LLMS = LLM_MODEL
 ISLAND_CONTROLLER_PROMPT_GROUPS = DEFAULT_PROMPT_GROUP
@@ -149,5 +164,6 @@ KEEP_BEST_ELITE = True
 hof_size = 4
 max_gen_attempts = 5
 migration_gen = 0
-DNA_TXT = "FRED YOLO11"
+DNA_TXT = {"yolo26_p2": "FRED YOLO26-P2", "dfine": "FRED D-FINE"}.get(
+    SEED_FAMILY, "FRED YOLO11")
 FORBIDDEN_PATTERNS = []
