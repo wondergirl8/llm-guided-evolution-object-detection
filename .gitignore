@@ -16,6 +16,9 @@ data/
 /sota/FRED_LLM_GE/data/*
 !/sota/FRED_LLM_GE/data/__init__.py
 !/sota/FRED_LLM_GE/data/fred_stream.py
+!/sota/FRED_LLM_GE/data/fred_events.py
+!/sota/FRED_LLM_GE/data/ecf/
+/sota/FRED_LLM_GE/data/ecf/build/
 .DS_Store
 mistralai
 **/*.egg-info
