@@ -134,10 +134,10 @@ FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
-# run_improved.py loops range(1, num_generations). This is set high so a run
-# keeps evolving until its Slurm time limit; resubmitting resumes from the
-# latest checkpoint in fred_yolo11_checkpoints.
-num_generations = 1000
+# run_improved.py loops range(1, num_generations), so 21 runs generations
+# 1-20 after the seed population. Resubmitting resumes from the latest
+# checkpoint in fred_yolo11_checkpoints.
+num_generations = 21
 start_population_size = 4
 population_size = 4
 crossover_probability = 0.5
