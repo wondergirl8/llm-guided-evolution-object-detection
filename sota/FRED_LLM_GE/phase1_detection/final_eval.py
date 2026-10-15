@@ -30,6 +30,7 @@ try:
     from . import map_reporter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from .candidate_runner import code_revision, load_protocol, sha256_file
+    from .export_split import events_suffix
     from .fred_splits import challenging_split, sequence_frames
     from .proxy_data import REVISION, STEP_US, load_annotations
     from .result_contract import validate_gene_id
@@ -37,6 +38,7 @@ except ImportError:
     import map_reporter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from candidate_runner import code_revision, load_protocol, sha256_file
+    from export_split import events_suffix
     from fred_splits import challenging_split, sequence_frames
     from proxy_data import REVISION, STEP_US, load_annotations
     from result_contract import validate_gene_id
@@ -70,7 +72,8 @@ def predict_test_split(adapter, model, test, settings, device, report_dir):
         annotations, count = None, 0
         report = report_dir / f"bad_timestamps_test_{sequence}.csv"
         for image, timestamp in sequence_frames(folder, sequence, report,
-                                                settings["test_frame_step"], report_dir / "downloads"):
+                                                settings["test_frame_step"], report_dir / "downloads",
+                                                events=settings.get("events")):
             image = image.convert("RGB")
             if annotations is None:
                 annotations = load_annotations(folder, sequence, *image.size)
@@ -112,7 +115,9 @@ def main():
     epochs = args.epochs or final["epochs"]
     seed = proxy["seed"] if args.seed is None else args.seed
     data_root = FRED_DIR / challenging["data_root"]
-    data_yaml = data_root / f"final_train_step{final['train_frame_step']}" / "data.yaml"
+    events = challenging.get("events")
+    data_yaml = (data_root / f"final_train_step{final['train_frame_step']}{events_suffix(events)}"
+                 / "data.yaml")
     if not data_yaml.is_file():
         raise SystemExit(f"{data_yaml} missing: run export_split.py --set final "
                          "(all shards, then --finalize)")
@@ -136,7 +141,7 @@ def main():
     checkpoint = out / "model.pt"
     model.save(checkpoint)
 
-    settings = {"img_width": final["img_width"], "eval_conf": proxy["eval_conf"],
+    settings = {"events": events, "img_width": final["img_width"], "eval_conf": proxy["eval_conf"],
                 "nms_iou": proxy["nms_iou"], "batch_size": final["batch_size"],
                 "test_frame_step": final["test_frame_step"]}
     frames, expected = predict_test_split(adapter, model, test, settings, args.device, out)

@@ -10,6 +10,10 @@ Sets (configs/phase1/protocol.yaml, `challenging`):
             search_val_step<k>: search.val_sequences (scored by candidate_runner.py)
     final   final_train_step<k>: all of challenging_train (for final_eval.py)
 
+With challenging.events.source "raw", frames are rendered from each sequence's
+raw events instead (data/fred_events.py) and the folder names gain
+_raw_w<window_us>_<encoding>, so each event setting is its own export.
+
 Each sequence is downloaded from Hugging Face and its event frames written at
 their native 1280x720 size to <part>/images/<seq>_<frame>.png, with YOLO-format
 labels in labels/ and the exact pixel boxes in done/<seq>.json. A sequence is
@@ -32,6 +36,7 @@ try:
 except ImportError:
     from fred_splits import challenging_split, sequence_frames
     from proxy_data import load_annotations, STEP_US
+from fred_events import ENCODINGS  # on sys.path via proxy_data
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
@@ -46,12 +51,26 @@ def yolo_label(boxes, width, height):
         for x1, y1, x2, y2 in boxes)
 
 
+def events_suffix(events):
+    """Dataset folder suffix for challenging.events: "" for the released frames."""
+    if not events or events["source"] == "released":
+        return ""
+    if events["source"] != "raw":
+        raise ValueError(f"events.source must be released or raw, got {events['source']!r}")
+    if events["encoding"] not in ENCODINGS:
+        raise ValueError(f"events.encoding must be one of {ENCODINGS}, got {events['encoding']!r}")
+    if not isinstance(events["window_us"], int) or events["window_us"] <= 0:
+        raise ValueError(f"events.window_us must be a positive integer, got {events['window_us']!r}")
+    return f"_raw_w{events['window_us']}_{events['encoding']}"
+
+
 def dataset_parts(challenging, data_root, name):
     """[(part_root, [(sequence, hf_folder)], frame_step)] for an export set."""
     train, _ = challenging_split(data_root)
+    suffix = events_suffix(challenging.get("events"))
     if name == "final":
         step = challenging["final"]["train_frame_step"]
-        return [(data_root / f"final_train_step{step}", train, step)]
+        return [(data_root / f"final_train_step{step}{suffix}", train, step)]
     search = challenging["search"]
     val_ids = {str(s) for s in search["val_sequences"]}
     unknown = val_ids - {s for s, _ in train}
@@ -59,21 +78,22 @@ def dataset_parts(challenging, data_root, name):
         raise ValueError(f"search val_sequences not in challenging_train: {sorted(unknown)}")
     train_step, val_step = search["train_frame_step"], search["val_frame_step"]
     return [
-        (data_root / f"search_train_step{train_step}",
+        (data_root / f"search_train_step{train_step}{suffix}",
          [(s, f) for s, f in train if s not in val_ids], train_step),
-        (data_root / f"search_val_step{val_step}",
+        (data_root / f"search_val_step{val_step}{suffix}",
          [(s, f) for s, f in train if s in val_ids], val_step),
     ]
 
 
-def export_sequence(sequence, folder, frame_step, root):
+def export_sequence(sequence, folder, frame_step, root, events=None):
     done = root / "done" / f"{sequence}.json"
     if done.is_file():
         return json.loads(done.read_text())["frames"]
     for sub in ("images", "labels", "done", "reports"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     report = root / "reports" / f"bad_timestamps_{sequence}.csv"
-    frames = sequence_frames(folder, sequence, report, frame_step, root / "downloads")
+    frames = sequence_frames(folder, sequence, report, frame_step, root / "downloads",
+                             events=events)
     records, annotations = [], None
     for image, timestamp in frames:
         if annotations is None:
@@ -89,7 +109,8 @@ def export_sequence(sequence, folder, frame_step, root):
         raise ValueError(f"no event frames read for {folder}/{sequence}")
     temp = done.with_suffix(f".{os.getpid()}.tmp")
     temp.write_text(json.dumps({"sequence": sequence, "hf_folder": folder,
-                                "frame_step": frame_step, "frames": len(records),
+                                "frame_step": frame_step, "events": events,
+                                "frames": len(records),
                                 "size": list(image.size), "records": records}))
     os.replace(temp, done)
     return len(records)
@@ -163,7 +184,7 @@ def main():
     print(f"shard {args.shard}/{args.num_shards}: {len(mine)} of {len(work)} sequences",
           flush=True)
     for root, sequence, folder, step in mine:
-        count = export_sequence(sequence, folder, step, root)
+        count = export_sequence(sequence, folder, step, root, challenging.get("events"))
         print(f"{root.name} {folder}/{sequence}: {count} frames", flush=True)
 
 

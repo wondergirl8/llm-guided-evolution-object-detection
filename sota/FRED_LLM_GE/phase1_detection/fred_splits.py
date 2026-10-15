@@ -22,6 +22,7 @@ try:
 except ImportError:
     from proxy_data import REVISION
 from fred_stream import zip_event_frames  # on sys.path via proxy_data
+from fred_events import zip_rendered_frames
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 PHASE0_CONFIG = FRED_DIR / "configs" / "phase0" / "default.yaml"
@@ -96,12 +97,14 @@ def challenging_split(cache_dir):
     return [(s, folders[s]) for s in train], [(s, folders[s]) for s in test]
 
 
-def sequence_frames(folder, sequence, report, frame_step, download_dir):
+def sequence_frames(folder, sequence, report, frame_step, download_dir, events=None):
     """Event frames of one sequence, from a temporary whole-zip download.
 
     Same frames and timestamp checks as fred_stream.stream_event_frames, but
     downloading the zip (~80 MB/s) is far faster than streaming its frames.
-    The zip is deleted once the frames have been read.
+    The zip is deleted once the frames have been read. events is protocol.yaml's
+    challenging.events: with source "raw", frames are rendered from
+    events.hdf5 (data/fred_events.py) instead of read from the released PNGs.
     """
     from huggingface_hub import hf_hub_download
 
@@ -110,6 +113,10 @@ def sequence_frames(folder, sequence, report, frame_step, download_dir):
     try:
         archive = hf_hub_download("GabrieleMagrini/FRED", f"{folder}/{int(sequence)}.zip",
                                   repo_type="dataset", revision=REVISION, local_dir=temp)
-        yield from zip_event_frames(archive, folder, sequence, report, frame_step)
+        if events and events["source"] == "raw":
+            yield from zip_rendered_frames(archive, folder, sequence, report, frame_step,
+                                           events["window_us"], events["encoding"])
+        else:
+            yield from zip_event_frames(archive, folder, sequence, report, frame_step)
     finally:
         shutil.rmtree(temp, ignore_errors=True)

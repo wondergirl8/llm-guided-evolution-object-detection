@@ -69,6 +69,19 @@ challenging:
   # Training frames Ultralytics validates on after its last epoch; not used
   # for any reported score.
   trainer_val_frames: 256
+  # How event frames are made, for export_split.py and final_eval.py.
+  # released: FRED's Event/Frames PNGs (fixed 33.3 ms window); window_us and
+  #   encoding are ignored.
+  # raw: rendered from each sequence's events.hdf5 (data/fred_events.py) at
+  #   the released frame times, using events in the window_us before each.
+  #   encoding palette looks like the released frames; polarity sets red for
+  #   positive and green for negative events. raw, 33333, palette reproduces
+  #   the released frames exactly. Exports go to folders suffixed
+  #   _raw_w<window_us>_<encoding>, so settings do not overwrite each other.
+  events:
+    source: released
+    window_us: 33333
+    encoding: palette
 
 families:
   dfine:
