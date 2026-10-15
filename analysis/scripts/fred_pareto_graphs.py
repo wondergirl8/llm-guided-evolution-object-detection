@@ -190,7 +190,12 @@ def main():
                         help="Folder to write plots and CSVs to")
     parser.add_argument("--seed_results", default=os.path.join(YOLO11_DIR, "results", "seed_results.csv"),
                         help="Seed score CSV (mAP50,mAP50:95,params); skipped if missing")
+    parser.add_argument("--models_dir", default=os.path.join(YOLO11_DIR, "models"),
+                        help="Where the run's network_<id> files are (for pareto_models.csv)")
     parser.add_argument("--no_gif", action="store_true", help="Skip the animated GIF")
+    parser.add_argument("--family", default="YOLO11", help="Seed family name used in plot titles")
+    parser.add_argument("--seed_file", default=os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_yolo11.py"),
+                        help="Seed model file listed for the seed in pareto_models.csv")
     args = parser.parse_args()
 
     generations = discover_generations(args.checkpoints)
@@ -216,14 +221,14 @@ def main():
 
     frames, history = [], []
     for gen, df in by_gen:
-        title = f"FRED YOLO11 LLM-GE: generation {gen} ({n_candidates(df)} valid candidates)"
+        title = f"FRED {args.family} LLM-GE: generation {gen} ({n_candidates(df)} valid candidates)"
         frames.append(plot_front_3d(df, title, seed, limits,
                                     os.path.join(args.output, f"pareto3d_gen_{gen}.png")))
         history.append({"generation": gen, "mAP50": df["mAP50"].max(),
                         "mAP50_95": df["mAP50_95"].max()})
     print(f"Saved {len(frames)} per-generation 3D plots to {args.output}")
 
-    final_title = (f"FRED YOLO11 LLM-GE: final Pareto front after generation {last_gen} "
+    final_title = (f"FRED {args.family} LLM-GE: final Pareto front after generation {last_gen} "
                    f"({n_candidates(final)} valid candidates)")
     print("Saved " + plot_front_3d(final, final_title, seed, limits,
                                    os.path.join(args.output, "pareto3d_final.png"), dpi=300))
@@ -239,9 +244,9 @@ def main():
     final.to_csv(os.path.join(args.output, "candidates.csv"), index=False)
 
     models = final[final["pareto_front"]].sort_values("params").copy()
-    seed_file = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_yolo11.py")
+    seed_file = args.seed_file
     models["model_file"] = [seed_file if g == "seed"
-                            else os.path.join(YOLO11_DIR, "models", f"network_{g}.py")
+                            else os.path.join(args.models_dir, f"network_{g}.py")
                             for g in models["gene_id"]]
     models.to_csv(os.path.join(args.output, "pareto_models.csv"), index=False)
 

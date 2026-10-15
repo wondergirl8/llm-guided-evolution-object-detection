@@ -1,0 +1,56 @@
+# Ultralytics YOLO11n seed for FRED event-only drone detection (LLM-GE genome).
+#
+# Copied from Ultralytics 8.4.175 cfg/models/11/yolo11.yaml at scale n, with
+# one class (drone). Candidates are built with ultralytics.YOLO from this file
+# and trained from scratch by phase1_detection/adapters/ultralytics_yolo11.py.
+#
+# LLM-GE splits this file at every option-marker line. Everything above the
+# first marker is protected; the backbone and the head sections below it are
+# mutable, one per section.
+#
+# Each layer is [from, repeats, module, args]. Layers are numbered in order
+# across both sections: backbone 0-10, head 11-23. Channel arguments are
+# before scaling: scale n multiplies them by 0.25 (capped at 1024) and
+# repeats by 0.5.
+
+nc: 1
+scale: n
+scales:
+  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024]
+
+# --OPTION--
+# YOLO11n backbone. The head reads layers 4 (P3/8), 6 (P4/16) and 10 (P5/32).
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]] # 4
+  - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
+  - [-1, 2, C3k2, [512, True]] # 6
+  - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
+  - [-1, 2, C3k2, [1024, True]]
+  - [-1, 1, SPPF, [1024, 5]] # 9
+  - [-1, 2, C2PSA, [1024]] # 10
+
+# --OPTION--
+# YOLO11n head: top-down then bottom-up feature fusion, detecting at P3, P4, P5.
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 11
+  - [[-1, 6], 1, Concat, [1]] # 12 cat backbone P4
+  - [-1, 2, C3k2, [512, False]] # 13
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 14
+  - [[-1, 4], 1, Concat, [1]] # 15 cat backbone P3
+  - [-1, 2, C3k2, [256, False]] # 16 (P3/8-small)
+
+  - [-1, 1, Conv, [256, 3, 2]] # 17
+  - [[-1, 13], 1, Concat, [1]] # 18 cat head P4
+  - [-1, 2, C3k2, [512, False]] # 19 (P4/16-medium)
+
+  - [-1, 1, Conv, [512, 3, 2]] # 20
+  - [[-1, 10], 1, Concat, [1]] # 21 cat head P5
+  - [-1, 2, C3k2, [1024, True]] # 22 (P5/32-large)
+
+  - [[16, 19, 22], 1, Detect, [nc]] # 23 Detect(P3, P4, P5)

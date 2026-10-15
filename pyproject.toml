@@ -15,6 +15,8 @@ dependencies = [
     "sphinx>=8.2.3",
     "torch==2.6.0",
     "torchvision==0.21.0",
+    # D-FINE's fixed one-to-one matcher uses scipy.optimize.linear_sum_assignment.
+    "scipy==1.16.2",
     "transformers",
     "uvicorn",
     "fastapi",
@@ -40,6 +42,7 @@ dependencies = [
     # Streams FRED event frames from Hugging Face (data/fred_stream.py).
     "datasets",
     "certifi>=2024.2.2",
+    "ultralytics==8.4.175",
 ]
 
 [tool.pytest.ini_options]

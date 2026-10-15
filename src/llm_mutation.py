@@ -18,7 +18,8 @@ from utils.print_utils import box_print
 
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, generate_augmented_code, 
-                       extract_note, clean_code_from_llm, retrieve_base_code)
+                       extract_note, clean_code_from_llm, retrieve_base_code,
+                       strip_leading_imports)
 
 def validate_generated_chunk(code_from_llm):
     """Reject common invalid patterns as defined by config"""
@@ -56,9 +57,12 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
                                             top_p, llm_model, temperature)
     
-    if not code_from_llm:
-        code_from_llm = txt2llm
+    if not code_from_llm or code_from_llm == "ERROR":
+        # Keep the parent's chunk rather than writing the prompt into the model
+        code_from_llm = code2llm.strip()
     else:
+        if "dfine" in os.path.basename(input_filename) or "/dfine/" in input_filename:
+            code_from_llm = strip_leading_imports(code_from_llm)
         valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
         if not valid_code:
             print(f"Rejected generated chunk: {invalid_reason}. Falling back to parent chunk.", flush=True)
