@@ -82,6 +82,17 @@ challenging:
     source: released
     window_us: 33333
     encoding: palette
+  # Raw settings compared by phase1_detection/event_sweep.py, exported together
+  # by export_split.py --sweep. The released frames are always the control, so
+  # raw 33333 palette (identical to them) is not listed.
+  event_sweep:
+    - {source: raw, window_us: 10000, encoding: palette}
+    - {source: raw, window_us: 20000, encoding: palette}
+    - {source: raw, window_us: 50000, encoding: palette}
+    - {source: raw, window_us: 10000, encoding: polarity}
+    - {source: raw, window_us: 20000, encoding: polarity}
+    - {source: raw, window_us: 33333, encoding: polarity}
+    - {source: raw, window_us: 50000, encoding: polarity}
 
 families:
   dfine:

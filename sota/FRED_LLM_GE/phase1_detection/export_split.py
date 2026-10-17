@@ -4,6 +4,7 @@
     uv run python sota/FRED_LLM_GE/phase1_detection/export_split.py --set search --shard 0 --num_shards 4
     # once every shard is done
     uv run python sota/FRED_LLM_GE/phase1_detection/export_split.py --set search --finalize
+    # add --sweep to both to export every challenging.event_sweep setting instead
 
 Sets (configs/phase1/protocol.yaml, `challenging`):
     search  search_train_step<k>: challenging_train minus search.val_sequences,
@@ -13,6 +14,8 @@ Sets (configs/phase1/protocol.yaml, `challenging`):
 With challenging.events.source "raw", frames are rendered from each sequence's
 raw events instead (data/fred_events.py) and the folder names gain
 _raw_w<window_us>_<encoding>, so each event setting is its own export.
+--sweep exports every setting in challenging.event_sweep, downloading each
+sequence once and rendering all the settings from it.
 
 Each sequence is downloaded from Hugging Face and its event frames written at
 their native 1280x720 size to <part>/images/<seq>_<frame>.png, with YOLO-format
@@ -25,16 +28,19 @@ challenging_test is never exported; final_eval.py reads it from the downloads.
 import argparse
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
 import yaml
 
 try:
-    from .fred_splits import challenging_split, sequence_frames
+    from .fred_splits import (archive_frames, challenging_split, downloaded_sequence,
+                              sequence_frames)
     from .proxy_data import load_annotations, STEP_US
 except ImportError:
-    from fred_splits import challenging_split, sequence_frames
+    from fred_splits import (archive_frames, challenging_split, downloaded_sequence,
+                             sequence_frames)
     from proxy_data import load_annotations, STEP_US
 from fred_events import ENCODINGS  # on sys.path via proxy_data
 
@@ -64,6 +70,18 @@ def events_suffix(events):
     return f"_raw_w{events['window_us']}_{events['encoding']}"
 
 
+def events_from_tag(tag):
+    """challenging.events for a tag like "raw_w10000_polarity" or "released"."""
+    if tag == "released":
+        return {"source": "released", "window_us": STEP_US, "encoding": "palette"}
+    match = re.fullmatch(r"raw_w(\d+)_(\w+)", tag)
+    if not match:
+        raise ValueError(f"event tag must be released or raw_w<window_us>_<encoding>, got {tag!r}")
+    events = {"source": "raw", "window_us": int(match[1]), "encoding": match[2]}
+    events_suffix(events)  # validates
+    return events
+
+
 def dataset_parts(challenging, data_root, name):
     """[(part_root, [(sequence, hf_folder)], frame_step)] for an export set."""
     train, _ = challenging_split(data_root)
@@ -85,15 +103,20 @@ def dataset_parts(challenging, data_root, name):
     ]
 
 
-def export_sequence(sequence, folder, frame_step, root, events=None):
+def export_sequence(sequence, folder, frame_step, root, events=None, archive=None):
+    """Write one sequence's frames and labels to root; archive is an already
+    downloaded zip of it, otherwise it is downloaded here."""
     done = root / "done" / f"{sequence}.json"
     if done.is_file():
         return json.loads(done.read_text())["frames"]
     for sub in ("images", "labels", "done", "reports"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     report = root / "reports" / f"bad_timestamps_{sequence}.csv"
-    frames = sequence_frames(folder, sequence, report, frame_step, root / "downloads",
-                             events=events)
+    if archive is None:
+        frames = sequence_frames(folder, sequence, report, frame_step, root / "downloads",
+                                 events=events)
+    else:
+        frames = archive_frames(archive, folder, sequence, report, frame_step, events)
     records, annotations = [], None
     for image, timestamp in frames:
         if annotations is None:
@@ -168,24 +191,39 @@ def main():
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--num_shards", type=int, default=1)
     parser.add_argument("--finalize", action="store_true")
+    parser.add_argument("--sweep", action="store_true",
+                        help="export every challenging.event_sweep setting instead of events")
     args = parser.parse_args()
     if not 0 <= args.shard < args.num_shards:
         parser.error("need 0 <= shard < num_shards")
 
     challenging = yaml.safe_load(Path(args.protocol).read_text())["challenging"]
     data_root = FRED_DIR / challenging["data_root"]
-    parts = dataset_parts(challenging, data_root, args.set)
+    settings = challenging["event_sweep"] if args.sweep else [challenging.get("events")]
+    parts = [(events, *part) for events in settings
+             for part in dataset_parts(dict(challenging, events=events), data_root, args.set)]
     if args.finalize:
-        for root, sequences, _ in parts:
+        for _, root, sequences, _ in parts:
             finalize(sequences, root, challenging["trainer_val_frames"])
         return
-    work = [(root, s, f, step) for root, sequences, step in parts for s, f in sequences]
+    # Every (root, frame_step, events) a sequence is exported to, so each
+    # sequence is downloaded once however many settings are exported.
+    targets = {}
+    for events, root, sequences, step in parts:
+        for sequence, folder in sequences:
+            targets.setdefault((sequence, folder), []).append((root, step, events))
+    work = list(targets.items())
     mine = work[args.shard::args.num_shards]
-    print(f"shard {args.shard}/{args.num_shards}: {len(mine)} of {len(work)} sequences",
-          flush=True)
-    for root, sequence, folder, step in mine:
-        count = export_sequence(sequence, folder, step, root, challenging.get("events"))
-        print(f"{root.name} {folder}/{sequence}: {count} frames", flush=True)
+    print(f"shard {args.shard}/{args.num_shards}: {len(mine)} of {len(work)} sequences, "
+          f"{len(settings)} event setting(s)", flush=True)
+    for (sequence, folder), outputs in mine:
+        todo = [o for o in outputs if not (o[0] / "done" / f"{sequence}.json").is_file()]
+        if not todo:
+            continue
+        with downloaded_sequence(folder, sequence, data_root / "downloads") as archive:
+            for root, step, events in todo:
+                count = export_sequence(sequence, folder, step, root, events, archive)
+                print(f"{root.name} {folder}/{sequence}: {count} frames", flush=True)
 
 
 if __name__ == "__main__":
