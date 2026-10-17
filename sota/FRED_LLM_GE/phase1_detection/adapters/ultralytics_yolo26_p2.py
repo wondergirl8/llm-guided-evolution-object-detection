@@ -1,5 +1,7 @@
 """YOLO26n-P2 Event-frame adapter, reusing the YOLO11 Ultralytics data path."""
 
+import hashlib
+import json
 import tempfile
 from pathlib import Path
 
@@ -13,6 +15,12 @@ except ImportError:
 
 class UltralyticsYolo26P2Adapter(UltralyticsYolo11Adapter):
     name = "yolo26_p2"
+
+    def __init__(self, settings, fred_dir):
+        super().__init__(settings, fred_dir)
+        self.inference_head = settings["inference_head"]
+        if self.inference_head not in ("one_to_many", "one_to_one"):
+            raise ValueError("YOLO26 inference_head must be one_to_many or one_to_one")
 
     def _validate_candidate(self, config):
         seed = yaml.safe_load(self.variant_path("network", None).read_text())
@@ -51,6 +59,37 @@ class UltralyticsYolo26P2Adapter(UltralyticsYolo11Adapter):
                       or args[1:] != old_args[1:]):
                     raise ValueError(f"YOLO26n-P2 {section} layer {index} C3k2 arguments are fixed")
 
+    @staticmethod
+    def architecture_hash(variant_path):
+        """Hash parsed YAML so formatting and comments do not create new designs."""
+        config = yaml.safe_load(Path(variant_path).read_text())
+        return hashlib.sha256(json.dumps(config, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+    def preflight(self, variant_path, parent_path):
+        """Validate one focused edit and construct the model on CPU before GPU work."""
+        config = yaml.safe_load(Path(variant_path).read_text())
+        self._validate_candidate(config)
+        parent = yaml.safe_load(Path(parent_path).read_text())
+        self._validate_candidate(parent)
+        changed_layers = sum(
+            layer != previous
+            for section in ("backbone", "head")
+            for layer, previous in zip(config[section], parent[section])
+        )
+        if changed_layers != 1:
+            raise ValueError(
+                f"YOLO26 proposal must change exactly one layer relative to its parent; "
+                f"found {changed_layers}"
+            )
+
+        from ultralytics import YOLO
+
+        with tempfile.TemporaryDirectory(prefix="yolo26_p2_preflight_") as directory:
+            model_yaml = Path(directory) / "yolo26n-p2.yaml"
+            model_yaml.write_text(yaml.safe_dump(config, sort_keys=False))
+            YOLO(str(model_yaml), task="detect", verbose=False)
+        return self.architecture_hash(variant_path)
+
     def build(self, variant_path, num_classes, device):
         from ultralytics import YOLO
 
@@ -63,6 +102,19 @@ class UltralyticsYolo26P2Adapter(UltralyticsYolo11Adapter):
         # The inherited trainer uses pretrained=False, matching YOLO11 candidate runs.
         return YOLO(str(model_yaml), task="detect")
 
+    def training_overrides(self):
+        # Only the standalone ablation runner supplies these controlled settings.
+        return self.settings.get("training_overrides", {})
+
+    def prediction_overrides(self):
+        # Ultralytics 8.4.175 selects the NMS-free one-to-one head only with
+        # nms=False. Pin both modes explicitly so scoring matches report metadata.
+        return {"nms": self.inference_head == "one_to_many"}
+
     def postprocessing(self, proxy):
-        return (f"ultralytics YOLO26 end2end predict imgsz={proxy['img_width']} "
-                f"conf={proxy['eval_conf']}; no NMS")
+        if self.inference_head == "one_to_one":
+            return (f"ultralytics YOLO26 head=one_to_one nms=False "
+                    f"imgsz={proxy['img_width']} conf={proxy['eval_conf']}; no NMS")
+        return (f"ultralytics YOLO26 head=one_to_many nms=True "
+                f"imgsz={proxy['img_width']} conf={proxy['eval_conf']} "
+                f"nms_iou={proxy['nms_iou']}")

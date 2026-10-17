@@ -98,8 +98,6 @@ python_bash_script: '#!/bin/bash
 
     module load uv
 
-    export CUDA_VISIBLE_DEVICES=0
-
     unset VIRTUAL_ENV
 
     export UV_CACHE_DIR="${TMPDIR:-${SLURM_TMPDIR:-/tmp}}/uv-cache-${SLURM_JOB_ID:-$$}"

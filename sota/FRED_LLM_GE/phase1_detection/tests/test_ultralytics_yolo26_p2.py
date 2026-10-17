@@ -2,6 +2,7 @@ import sys
 from unittest.mock import patch
 
 import pytest
+import torch
 import yaml
 
 pytest.importorskip("ultralytics")
@@ -50,11 +51,62 @@ def test_bounded_mutation_builds_and_routing_change_is_rejected(tmp_path):
         adapter.build(variant, num_classes=1, device="cpu")
 
 
+def test_preflight_requires_one_valid_layer_edit_and_normalizes_hash(tmp_path):
+    adapter = _adapter()
+    seed = adapter.variant_path("network", None)
+    config = yaml.safe_load(seed.read_text())
+    config["head"][8][1] = 3
+    variant = tmp_path / "network_candidate.py"
+    variant.write_text(yaml.safe_dump(config, sort_keys=False))
+
+    digest = adapter.preflight(variant, seed)
+    variant.write_text("# A formatting-only change\n" + yaml.safe_dump(config))
+    assert adapter.architecture_hash(variant) == digest
+
+    config["head"][9][3][1] = 5
+    variant.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="exactly one layer"):
+        adapter.preflight(variant, seed)
+
+    config["head"][9][3][1] = 3
+    config["head"][8][3][0] = 9999
+    variant.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="out of bounds"):
+        adapter.preflight(variant, seed)
+
+
 def test_final_evaluation_selects_yolo26_adapter():
     from sota.FRED_LLM_GE.phase1_detection import final_eval
 
     assert final_eval.FINAL_ADAPTERS["yolo26_p2"] is candidate_runner.ADAPTERS["yolo26_p2"]
-    assert "no NMS" in _adapter().postprocessing({"img_width": 1280, "eval_conf": 0.001})
+    assert _adapter().postprocessing({"img_width": 1280, "eval_conf": 0.05,
+                                      "nms_iou": 0.5}) == (
+        "ultralytics YOLO26 head=one_to_many nms=True imgsz=1280 conf=0.05 nms_iou=0.5")
+
+
+def test_prediction_selects_each_real_yolo26_head():
+    adapter = _adapter()
+    model = adapter.build(adapter.variant_path("network", None), num_classes=1, device="cpu")
+    images = torch.zeros(1, 3, 64, 96, dtype=torch.uint8)
+    proxy = {"img_width": 96, "eval_conf": 0.05, "nms_iou": 0.5}
+
+    for head, nms in (("one_to_many", True), ("one_to_one", False)):
+        adapter.inference_head = head
+        predictions = adapter.predict(model, images, proxy, "cpu")
+        assert len(predictions) == 1
+        assert predictions[0][0].shape[1] == 4
+        assert model.predictor.args.nms is nms
+        assert model.predictor.model.end2end is not nms
+        assert model.predictor.model.model.end2end is not nms
+
+    assert "no NMS" in adapter.postprocessing(proxy)
+
+
+def test_invalid_inference_head_is_rejected():
+    protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
+    settings = dict(protocol["families"]["yolo26_p2"], inference_head="auto")
+    with pytest.raises(ValueError, match="inference_head"):
+        candidate_runner.ADAPTERS["yolo26_p2"](settings, candidate_runner.FRED_DIR)
 
 
 def test_runner_defaults_to_separate_yolo26_output():
@@ -63,3 +115,10 @@ def test_runner_defaults_to_separate_yolo26_output():
         candidate_runner.main()
     assert run.call_args.args[2] == str(candidate_runner.FAMILY_SOTA_ROOTS["yolo26_p2"] / "models")
     assert run.call_args.args[5] == str(candidate_runner.FAMILY_SOTA_ROOTS["yolo26_p2"])
+
+
+def test_runner_diagnostics_flag_is_opt_in():
+    arguments = ["candidate_runner.py", "--family", "yolo26_p2", "--diagnostics"]
+    with patch.object(sys, "argv", arguments), patch.object(candidate_runner, "run") as run:
+        candidate_runner.main()
+    assert run.call_args.kwargs["diagnostics"] is True

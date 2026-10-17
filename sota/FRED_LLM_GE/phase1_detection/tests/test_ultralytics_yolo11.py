@@ -24,6 +24,18 @@ def test_seed_builds_yolo11n_with_one_class():
     assert adapter.param_count(model) == 2_590_035
 
 
+def test_prediction_keeps_yolo11_output_contract():
+    adapter = _adapter()
+    model = adapter.build(adapter.variant_path("network", None), num_classes=1, device="cpu")
+    images = torch.zeros(1, 3, 64, 96, dtype=torch.uint8)
+    predictions = adapter.predict(model, images,
+                                  {"img_width": 96, "eval_conf": 0.05, "nms_iou": 0.5}, "cpu")
+    assert len(predictions) == 1
+    boxes, scores = predictions[0]
+    assert boxes.shape[1] == 4
+    assert len(boxes) == len(scores)
+
+
 def test_seed_has_protected_preamble_and_two_mutable_sections():
     adapter = _adapter()
     parts = adapter.variant_path("network", None).read_text().split("# --OPTION--")

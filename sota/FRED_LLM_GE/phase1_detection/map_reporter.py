@@ -25,7 +25,7 @@ sota_root: output directory
 gene_id: need the candidate's id to be providid os we can create and evaluation
 file for each, and the id will be included in the file name
 """
-def report(payload, *, sota_root, gene_id, mode="validation"):
+def report(payload, *, sota_root, gene_id, mode="validation", diagnostics=False):
     """Validation CSV feeds the legacy orchestrator; held-out JSON never does.
 
     The caller is responsible for enforcing trusted-evaluator label access.
@@ -66,8 +66,10 @@ def report(payload, *, sota_root, gene_id, mode="validation"):
         raise ValueError("held-out reporting requires an official_split declaration")
 
     # do evaluation
-    result = evaluate_frames(payload["frames"], params=payload["params"],
-                             expected_sample_ids=payload["expected_sample_ids"])
+    evaluated = evaluate_frames(payload["frames"], params=payload["params"],
+                                expected_sample_ids=payload["expected_sample_ids"],
+                                diagnostics=diagnostics)
+    result, details = evaluated if diagnostics else (evaluated, None)
     directory = Path(sota_root) / ("results" if mode == "validation" else "held_out_reports")
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -86,6 +88,10 @@ def report(payload, *, sota_root, gene_id, mode="validation"):
                       "recall_threshold_count": 101, "max_detections": [1, 10, 100]},
         "comparison_status": "metric-compatible; exact paper reproduction not established",
     }
+    if diagnostics:
+        summary["diagnostics"] = details
+    if "training_history" in payload:
+        summary["training_history"] = payload["training_history"]
 
     #  write the JSON file:
     output = directory / f"{gene_id}_evaluation.json"
@@ -112,9 +118,12 @@ def main():
     parser.add_argument("--sota-root", required=True, type=Path)
     parser.add_argument("--gene-id", required=True)
     parser.add_argument("--mode", choices=("validation", "held-out"), default="validation")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="include COCO size, sequence and missed-box diagnostics")
     args = parser.parse_args()
     result, output = report(json.loads(args.input.read_text()), sota_root=args.sota_root,
-                            gene_id=args.gene_id, mode=args.mode)
+                            gene_id=args.gene_id, mode=args.mode,
+                            diagnostics=args.diagnostics)
     print(f"mAP50={result.map50:.6f}, mAP50:95={result.map50_95:.6f}, params={result.params}")
     print(output)
     if args.mode == "validation":

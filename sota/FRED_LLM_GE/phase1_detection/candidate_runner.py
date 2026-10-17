@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import statistics
 import subprocess
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ try:
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from .adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from .export_split import dataset_parts
+    from .fitness import evaluate_frames
     from .proxy_data import REVISION, load_exported_split, load_split
     from .result_contract import DetectionResult, write_results
 except ImportError:
@@ -40,6 +42,7 @@ except ImportError:
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from export_split import dataset_parts
+    from fitness import evaluate_frames
     from proxy_data import REVISION, load_exported_split, load_split
     from result_contract import DetectionResult, write_results
 
@@ -57,6 +60,7 @@ ADAPTERS = {adapter.name: adapter for adapter in
 
 # Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
 FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
+INFRASTRUCTURE_ERROR = "ERROR infrastructure: "
 
 
 def load_protocol(path):
@@ -93,6 +97,17 @@ def write_failure_results(sota_root, gene_id, start_time, message):
     print('='*120);print('job done');print('='*120)
 
 
+def _record_run_failure(sota_root, gene_id, start_time, family, device, error):
+    """Keep an unavailable CUDA node distinct from a bad candidate."""
+    message = repr(error)
+    if (family == "dfine" and torch.device(device).type == "cuda"
+            and isinstance(error, RuntimeError) and "cuda" in str(error).lower()
+            and "busy or unavailable" in str(error).lower()):
+        print(f"{INFRASTRUCTURE_ERROR}{message}", flush=True)
+        raise SystemExit(1) from error
+    write_failure_results(sota_root, gene_id, start_time, message)
+
+
 def predict_frames(adapter, model, data, proxy, device):
     """Predict every val frame and pair it with ground truth in original pixels."""
     width, height = data["orig_size"]
@@ -119,6 +134,22 @@ def predict_frames(adapter, model, data, proxy, device):
                                "scores": [s for _, s in kept]},
             })
     return frames
+
+
+def inference_ms_per_frame(adapter, model, data, proxy, device):
+    """Time one preloaded frame through the D-FINE inference adapter."""
+    image = data["images"][:1]
+    adapter.predict(model, image, proxy, device)  # warm up kernels and allocations
+    elapsed = []
+    for _ in range(3):
+        if torch.device(device).type == "cuda":
+            torch.cuda.synchronize(device)
+        start = time.perf_counter()
+        adapter.predict(model, image, proxy, device)
+        if torch.device(device).type == "cuda":
+            torch.cuda.synchronize(device)
+        elapsed.append((time.perf_counter() - start) * 1000)
+    return statistics.median(elapsed)
 
 
 def report_metadata(adapter, proxy, config, variant_path, model_path):
@@ -178,8 +209,15 @@ def challenging_search(protocol, family=None):
         val_root, val)
 
 
-def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
+def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
+        diagnostics=False, training_arm=None, refinement_bins=None):
     start_time = time.time()
+    if family == "dfine" and torch.device(device).type == "cuda":
+        try:
+            torch.empty(1, device=device)
+        except (RuntimeError, AssertionError) as exc:
+            print(f"{INFRASTRUCTURE_ERROR}CUDA unavailable on allocated device: {exc}", flush=True)
+            raise SystemExit(1) from exc
     adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
     if adapter.settings.get("data") == "challenging_search":
         proxy, train_data, load_val = challenging_search(protocol, family)
@@ -195,7 +233,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
         variant_path = adapter.variant_path(model_name, variant_dir)
         model = adapter.build(variant_path, num_classes=1, device=device)
     except Exception as e:
-        write_failure_results(sota_root, gene_id, start_time, repr(e))
+        _record_run_failure(sota_root, gene_id, start_time, family, device, e)
         return
 
     param_count = adapter.param_count(model)
@@ -210,24 +248,70 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
           flush=True)
 
     try:
-        adapter.train(model, train_data, proxy, device)
+        training_history = []
+        final_frames = None
+        if training_arm is None:
+            adapter.train(model, train_data, proxy, device)
+        else:
+            def record_epoch(epoch, train_loss, learning_rate):
+                nonlocal final_frames
+                point = {"epoch": epoch, "train_loss": train_loss, "lr": learning_rate}
+                if epoch == 1 or epoch % 5 == 0 or epoch == proxy["epochs"]:
+                    frames = predict_frames(adapter, model, val_data, proxy, device)
+                    score = evaluate_frames(frames, params=param_count,
+                                            expected_sample_ids=val_data["sample_ids"])
+                    point.update(mAP50=score.map50, mAP50_95=score.map50_95)
+                    if epoch == proxy["epochs"]:
+                        final_frames = frames
+                training_history.append(point)
+
+            adapter.train(model, train_data, proxy, device, on_epoch_end=record_epoch)
 
         model_dir = Path(sota_root) / "trained_models"
         model_dir.mkdir(parents=True, exist_ok=True)
         model_path = model_dir / f"{gene_id}.pt"
         adapter.save(model, model_path)
 
-        frames = predict_frames(adapter, model, val_data, proxy, device)
+        frames = final_frames if final_frames is not None else predict_frames(
+            adapter, model, val_data, proxy, device)
+        metadata = report_metadata(adapter, proxy, config, variant_path, model_path)
+        if family == "dfine":
+            metadata["training_seed"] = proxy["seed"]
+            metadata["validation_sample_ids_sha256"] = hashlib.sha256(
+                json.dumps(val_data["sample_ids"]).encode()).hexdigest()
+            recipe = dict(config, proxy={key: value for key, value in proxy.items()
+                                         if key != "seed"})
+            metadata["training_recipe_identity"] = hashlib.sha256(
+                json.dumps(recipe, sort_keys=True).encode()).hexdigest()
+            if training_arm is not None:
+                metadata["training_arm"] = training_arm
+            if refinement_bins is not None:
+                metadata["refinement_bins"] = refinement_bins
+                training_settings = dict(adapter.settings, model={
+                    key: value for key, value in adapter.settings["model"].items()
+                    if key != "reg_max"})
+                shared_config = dict(
+                    config, family_settings=training_settings,
+                    proxy={key: value for key, value in proxy.items() if key != "seed"})
+                metadata["model_ablation_protocol_identity"] = hashlib.sha256(
+                    json.dumps(shared_config, sort_keys=True).encode()).hexdigest()
+                metadata["preloaded_inference_ms_per_frame"] = inference_ms_per_frame(
+                    adapter, model, val_data, proxy, device)
+                metadata["inference_device"] = str(device)
         payload = {
-            "metadata": report_metadata(adapter, proxy, config, variant_path, model_path),
+            "metadata": metadata,
             "frames": frames,
             "params": param_count,
             "expected_sample_ids": val_data["sample_ids"],
         }
+        if training_arm is not None:
+            payload["training_history"] = training_history
+        report_options = {"diagnostics": True} if diagnostics else {}
         result, report_path = map_reporter.report(payload, sota_root=sota_root,
-                                                  gene_id=gene_id, mode="validation")
+                                                  gene_id=gene_id, mode="validation",
+                                                  **report_options)
     except Exception as e:
-        write_failure_results(sota_root, gene_id, start_time, repr(e))
+        _record_run_failure(sota_root, gene_id, start_time, family, device, e)
         return
     train_time = time.time() - start_time
 
@@ -250,6 +334,14 @@ def main():
                         help="Where results/ and trained_models/ are written")
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="include optional COCO diagnostic breakdowns in the report")
+    parser.add_argument("--training-seed", type=int,
+                        help="D-FINE confirmation seed; write diagnostics outside evolution results")
+    parser.add_argument("--dfine-training-arm", choices=("baseline", "longer_budget", "cosine_lr"),
+                        help="D-FINE-only training comparison; requires --training-seed")
+    parser.add_argument("--dfine-reg-max", type=int,
+                        help="D-FINE-only refinement-bin ablation; requires --training-seed")
     args = parser.parse_args()
 
     sota_root = args.sota_root or str(FAMILY_SOTA_ROOTS[args.family])
@@ -266,11 +358,51 @@ def main():
     if args.device == "cpu" and os.environ.get("CUDA_VISIBLE_DEVICES"):
         message = (f"GPU allocated (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}) "
                    "but CUDA is unavailable on this node; not training on CPU")
-        write_failure_results(sota_root, gene_id, time.time(), message)
+        if args.family == "dfine":
+            print(f"{INFRASTRUCTURE_ERROR}{message}", flush=True)
+        else:
+            write_failure_results(sota_root, gene_id, time.time(), message)
         raise SystemExit(1)
 
-    run(gene_id, args.model, variant_dir, args.family, load_protocol(args.protocol),
-        sota_root, args.device)
+    protocol = load_protocol(args.protocol)
+    if args.dfine_reg_max is not None:
+        if (args.family != "dfine" or args.training_seed is None
+                or args.dfine_training_arm is not None):
+            parser.error("--dfine-reg-max requires --family dfine and --training-seed, "
+                         "without --dfine-training-arm")
+        if args.dfine_reg_max < 4 or args.dfine_reg_max % 2:
+            parser.error("--dfine-reg-max must be an even integer of at least 4")
+        protocol["families"]["dfine"]["model"]["reg_max"] = args.dfine_reg_max
+    if args.dfine_training_arm is not None:
+        if args.family != "dfine" or args.training_seed is None:
+            parser.error("--dfine-training-arm requires --family dfine and --training-seed")
+        if args.dfine_training_arm == "longer_budget":
+            protocol["challenging"]["search"]["epochs"] *= 2
+        protocol["families"]["dfine"]["lr_schedule"] = (
+            "cosine" if args.dfine_training_arm == "cosine_lr" else "constant")
+    if args.training_seed is not None:
+        if args.family != "dfine" or args.training_seed < 0:
+            parser.error("--training-seed requires --family dfine and a nonnegative seed")
+        protocol["proxy"]["seed"] = args.training_seed
+        if args.dfine_reg_max is not None:
+            sota_root = str(Path(sota_root) / "model_ablations" /
+                            f"reg_max_{args.dfine_reg_max}" / f"seed_{args.training_seed}")
+        elif args.dfine_training_arm is None:
+            sota_root = str(Path(sota_root) / "diagnostic_repeats" /
+                            f"seed_{args.training_seed}")
+        else:
+            sota_root = str(Path(sota_root) / "training_ablations" /
+                            args.dfine_training_arm / f"seed_{args.training_seed}")
+        if any((Path(sota_root) / folder / f"{gene_id}{suffix}").exists()
+               for folder, suffix in (("results", "_evaluation.json"),
+                                      ("results", "_results.csv"),
+                                      ("trained_models", ".pt"))):
+            parser.error(f"confirmation run already exists: {sota_root}/{gene_id}")
+
+    run(gene_id, args.model, variant_dir, args.family, protocol,
+        sota_root, args.device,
+        diagnostics=args.diagnostics or args.training_seed is not None,
+        training_arm=args.dfine_training_arm, refinement_bins=args.dfine_reg_max)
 
 
 if __name__ == "__main__":

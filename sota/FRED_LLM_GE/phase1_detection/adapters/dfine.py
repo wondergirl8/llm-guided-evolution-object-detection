@@ -117,7 +117,24 @@ class DFINEAdapter(FamilyAdapter):
         self.criterion = criterion
         return model
 
-    def train(self, model, data, proxy, device):
+    def preflight(self, variant_path, proxy):
+        """Check training and inference interfaces before submitting a GPU job."""
+        model = self.build(variant_path, num_classes=1, device="cpu")
+        images = torch.randint(0, 256, (2, 3, 65, 97), dtype=torch.uint8,
+                               generator=torch.Generator().manual_seed(0))
+        targets = [_targets_from_pixels(boxes, 97, 65, "cpu") for boxes in (
+            torch.empty(0, 4), torch.tensor([[20., 15., 30., 25.]]),
+        )]
+        loss = self.criterion(model(images.float().div(255)), targets)["loss_total"]
+        loss.backward()
+        gradients = [parameter.grad for parameter in model.parameters()
+                     if parameter.grad is not None]
+        if not gradients or any(not torch.isfinite(gradient).all() for gradient in gradients):
+            raise ValueError("D-FINE preflight produced missing or non-finite gradients")
+        if len(self.predict(model, images, proxy, "cpu")) != len(images):
+            raise ValueError("D-FINE preflight prediction count does not match the input")
+
+    def train(self, model, data, proxy, device, on_epoch_end=None):
         images, boxes = data.get("images"), data.get("boxes")
         if images is None or not hasattr(images, "shape") or len(images.shape) != 4 or images.shape[1] != 3:
             raise ValueError("D-FINE training requires [N,3,H,W] Event images")
@@ -141,6 +158,12 @@ class DFINEAdapter(FamilyAdapter):
             model.parameters(), lr=self.settings["lr"],
             weight_decay=self.settings.get("weight_decay", 1e-4),
         )
+        schedule = self.settings.get("lr_schedule", "constant")
+        if schedule not in ("constant", "cosine"):
+            raise ValueError("D-FINE lr_schedule must be constant or cosine")
+        scheduler = (torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=epochs, eta_min=self.settings["lr"] * 0.1)
+            if schedule == "cosine" else None)
         generator = torch.Generator().manual_seed(proxy["seed"])
         workers = self.settings.get("workers", 0)
         for epoch in range(epochs):
@@ -176,7 +199,13 @@ class DFINEAdapter(FamilyAdapter):
                 )
                 optimizer.step()
                 total += batch_loss * len(group)
-            print(f"epoch {epoch + 1}/{epochs}: D-FINE loss {float(total) / len(images):.4f}", flush=True)
+            train_loss = float(total) / len(images)
+            learning_rate = optimizer.param_groups[0]["lr"]
+            print(f"epoch {epoch + 1}/{epochs}: D-FINE loss {train_loss:.4f}", flush=True)
+            if scheduler is not None:
+                scheduler.step()
+            if on_epoch_end is not None:
+                on_epoch_end(epoch + 1, train_loss, learning_rate)
 
     def predict(self, model, images, proxy, device):
         if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[1] != 3:

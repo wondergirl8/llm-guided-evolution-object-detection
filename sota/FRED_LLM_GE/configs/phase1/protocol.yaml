@@ -105,3 +105,6 @@ families:
     seed_file: seeds/seed_yolo26n_p2.yaml
     data: challenging_search
     workers: 8
+    # Historical YOLO26 search used Ultralytics' one-to-many head with NMS.
+    # one_to_one selects its NMS-free head; compare separately before changing.
+    inference_head: one_to_many

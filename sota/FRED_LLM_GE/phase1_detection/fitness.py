@@ -14,6 +14,7 @@ DetectionResult (mAp50, Map50_95, param_count)
 import contextlib
 import io
 import math
+from collections import defaultdict
 from numbers import Integral, Real
 
 #  need to import DetectionResult, since this is where we will be stroing results
@@ -90,7 +91,115 @@ def _boxes(record, width, height, prediction):
 # evaluate_frames(frames, params=123, expected_sample_ids=sample_ids)
 # expected_sample_ids is the list of every frame that should be evaluated.
 # expected_sample_ids = ["sequence_1:frame_0", "sequence_1:frame_2"]
-def evaluate_frames(frames, *, params, expected_sample_ids):
+def _defined_metric(value):
+    """COCO uses -1 when an area or sequence has no ground truth."""
+    return None if value < 0 else float(value)
+
+
+def _bbox_iou(a, b):
+    """IoU of two COCO xywh boxes, used only to describe unmatched targets."""
+    left, top = max(a[0], b[0]), max(a[1], b[1])
+    right, bottom = min(a[0] + a[2], b[0] + b[2]), min(a[1] + a[3], b[1] + b[3])
+    overlap = max(0.0, right - left) * max(0.0, bottom - top)
+    return overlap / (a[2] * a[3] + b[2] * b[3] - overlap)
+
+
+def _xyxy(box):
+    return [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+
+
+def _diagnostics(evaluator, images, annotations, gt, dt):
+    """Use the same COCO inputs for sequence metrics and missed boxes."""
+    from pycocotools.cocoeval import COCOeval
+
+    overall_stats = tuple(evaluator.stats)
+    image_ids = defaultdict(list)
+    sequence_for_image = {}
+    ground_truth_counts = defaultdict(int)
+    for image in images:
+        sequence = image["sample_id"].rsplit(":", 1)[0]
+        image_ids[sequence].append(image["id"])
+        sequence_for_image[image["id"]] = sequence
+    for ann in annotations:
+        ground_truth_counts[sequence_for_image[ann["image_id"]]] += 1
+
+    misses, localization = [], []
+    miss_counts = defaultdict(int)
+    localization_counts = defaultdict(int)
+    # One category, first COCO area range ('all'), maxDets=100.
+    for entry in evaluator.evalImgs[:len(images)]:
+        if entry is None:
+            continue
+        image_id = entry["image_id"]
+        sequence = sequence_for_image[image_id]
+        for index, target_id in enumerate(entry["gtIds"]):
+            if entry["gtIgnore"][index]:
+                continue
+            target = gt.anns[target_id]
+            match50 = entry["gtMatches"][0, index]
+            if match50:
+                if not entry["gtMatches"][5, index]:  # matched at .50, missed at .75
+                    localization_counts[sequence] += 1
+                    prediction = dt.anns[int(match50)]
+                    localization.append({
+                        "sample_id": images[image_id - 1]["sample_id"],
+                        "target_xyxy": _xyxy(target["bbox"]),
+                        "best_prediction_xyxy": _xyxy(prediction["bbox"]),
+                        "best_score": prediction["score"],
+                        "best_iou": _bbox_iou(target["bbox"], prediction["bbox"]),
+                    })
+                continue
+            miss_counts[sequence] += 1
+            best_id = max(entry["dtIds"],
+                          key=lambda pred_id: _bbox_iou(target["bbox"], dt.anns[pred_id]["bbox"]),
+                          default=None)
+            best = dt.anns[best_id] if best_id is not None else None
+            best_iou = _bbox_iou(target["bbox"], best["bbox"]) if best else 0.0
+            misses.append({
+                "sample_id": images[image_id - 1]["sample_id"],
+                "target_xyxy": _xyxy(target["bbox"]),
+                "best_prediction_xyxy": _xyxy(best["bbox"]) if best_iou else None,
+                "best_score": best["score"] if best_iou else None,
+                "best_iou": best_iou,
+            })
+
+    per_sequence = {}
+    for sequence, ids in sorted(image_ids.items()):
+        score = {"frames": len(ids), "ground_truth": ground_truth_counts[sequence],
+                 "false_negatives_iou50": miss_counts[sequence],
+                 "poorly_localized_iou50_to75": localization_counts[sequence],
+                 "mAP50": None, "mAP75": None, "mAP50_95": None}
+        if ground_truth_counts[sequence]:
+            subset = COCOeval(gt, dt, "bbox")
+            subset.params.imgIds = ids
+            with contextlib.redirect_stdout(io.StringIO()):
+                subset.evaluate()
+                subset.accumulate()
+                subset.summarize()
+            score.update(mAP50=_defined_metric(subset.stats[1]),
+                         mAP75=_defined_metric(subset.stats[2]),
+                         mAP50_95=_defined_metric(subset.stats[0]))
+        per_sequence[sequence] = score
+
+    return {
+        "definition": "COCO bbox, original pixels, maxDets=100; small area <32x32 px; "
+                      "poorly localized = matched at IoU .50 but missed at .75",
+        "overall": {"mAP75": _defined_metric(overall_stats[2]),
+                    "mAP_small": _defined_metric(overall_stats[3]),
+                    "recall_small": _defined_metric(overall_stats[9]),
+                    "false_negatives_iou50": len(misses),
+                    "poorly_localized_iou50_to75": len(localization)},
+        "by_sequence": per_sequence,
+        "examples": {
+            "false_negatives": sorted(misses, key=lambda item: (item["best_iou"],
+                                      item["sample_id"]))[:10],
+            "poorly_localized": sorted(localization, key=lambda item: (
+                -item["best_score"], item["sample_id"]))[:10],
+        },
+    }
+
+
+def evaluate_frames(frames, *, params, expected_sample_ids, diagnostics=False):
     """Compute AP once across the complete declared evaluation partition.
 
     expected_sample_ids comes from the frozen manifest, not model predictions.
@@ -124,7 +233,8 @@ def evaluate_frames(frames, *, params, expected_sample_ids):
                for x in (width, height)):
             raise ValueError("width and height must be positive integers")
         # adding image to the coco dataset
-        images.append({"id": image_id, "width": width, "height": height})
+        images.append({"id": image_id, "width": width, "height": height,
+                       "sample_id": sample_id})
 
         # collect boxes and check completeness
         for ann in _boxes(frame.get("target"), width, height, False):
@@ -153,8 +263,12 @@ def evaluate_frames(frames, *, params, expected_sample_ids):
         evaluator.accumulate()
         evaluator.summarize()
         # Returns mAP50 from stats[1], mAP50:95 from stats[0], and the supplied parameter count.
-    return DetectionResult(
+    result = DetectionResult(
         map50=float(evaluator.stats[1]),
         map50_95=float(evaluator.stats[0]),
         params=int(params),
     )
+    if diagnostics:
+        details = _diagnostics(evaluator, images, annotations, gt, dt)
+        return result, details
+    return result

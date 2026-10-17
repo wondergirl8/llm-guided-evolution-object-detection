@@ -68,7 +68,7 @@ CONSTANT_RULES_PATH = _FAMILY["rules"]
 
 OUTPUT_DIR = os.path.join(ROOT_DIR, {
     "dfine": "fred_dfine_output",
-    "yolo26_p2": "fred_yolo26_p2_output",
+    "yolo26_p2": "fred_yolo26_p2_map5095_v1_output",
     "tiny_yolo11": "fred_tiny_yolo11_output",
 }.get(SEED_FAMILY, "fred_yolo11_output"))
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
@@ -119,7 +119,8 @@ EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
 # and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
 EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
-                "--model {} --variant_dir {VARIANT_DIR}")
+                "--model {} --variant_dir {VARIANT_DIR}"
+                + (" --device cuda" if SEED_FAMILY == "dfine" else ""))
 
 SLURM_MIXT_INPUT_X = SEED_NETWORK
 SLURM_MIXT_INPUT_Y = os.path.join(VARIANT_DIR, "network_x.py")
@@ -130,7 +131,7 @@ SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
 ISLAND_CONTROLLER_RUN_NAME = {
     "dfine": "fred_dfine_islands",
-    "yolo26_p2": "fred_yolo26_p2_islands",
+    "yolo26_p2": "fred_yolo26_p2_map5095_v1_islands",
     "tiny_yolo11": "fred_tiny_yolo11_islands",
 }.get(SEED_FAMILY, "fred_yolo11_islands")
 ISLAND_CONTROLLER_NUM_ISLANDS = 1

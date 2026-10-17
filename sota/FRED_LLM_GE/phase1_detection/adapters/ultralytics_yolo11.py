@@ -113,23 +113,19 @@ class UltralyticsYolo11Adapter(FamilyAdapter):
         # proxy frames are exported once on first use.
         data_yaml = data.get("data_yaml") or export_dataset(
             data, proxy, self.fred_dir / proxy["cache_dir"])
-        model.train(
-            data=str(data_yaml),
-            epochs=proxy["epochs"],
-            imgsz=proxy["img_width"],
-            batch=proxy["batch_size"],
-            seed=proxy["seed"],
-            deterministic=True,
-            pretrained=False,
-            device=_ultralytics_device(device),
-            workers=self.settings.get("workers", 8),
-            project=str(self.workdir),
-            name="train",
-            exist_ok=True,
-            val=False,
-            plots=False,
-            verbose=False,
-        )
+        options = dict(data=str(data_yaml), epochs=proxy["epochs"], imgsz=proxy["img_width"],
+                       batch=proxy["batch_size"], seed=proxy["seed"], deterministic=True,
+                       pretrained=False, device=_ultralytics_device(device),
+                       workers=self.settings.get("workers", 8), project=str(self.workdir),
+                       name="train", exist_ok=True, val=False, plots=False, verbose=False)
+        options.update(self.training_overrides())
+        model.train(**options)
+
+    def training_overrides(self):
+        return {}
+
+    def prediction_overrides(self):
+        return {}
 
     def predict(self, model, images, proxy, device):
         # Cached frames are RGB; Ultralytics treats numpy input as BGR.
@@ -137,7 +133,7 @@ class UltralyticsYolo11Adapter(FamilyAdapter):
                  for image in images]
         results = model.predict(batch, imgsz=proxy["img_width"], conf=proxy["eval_conf"],
                                 iou=proxy["nms_iou"], device=_ultralytics_device(device),
-                                verbose=False)
+                                verbose=False, **self.prediction_overrides())
         out = []
         for result in results:
             prediction = yolo11_prediction(result)

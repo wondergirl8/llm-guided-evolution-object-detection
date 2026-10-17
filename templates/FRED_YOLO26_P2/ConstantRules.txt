@@ -4,6 +4,6 @@ You are editing one section of a YOLO26n-P2 model YAML for one-class drone detec
 2. Keep 11 backbone layers (indices 0-10) and 19 head layers (indices 11-29). Each layer stays [from, repeats, module, args] at its original index.
 3. Keep every "from" value and module name. Keep nn.Upsample, Concat, SPPF, C2PSA, and Detect layers exactly unchanged. The P2/P3/P4/P5 Detect input must remain [19, 22, 25, 28].
 4. Only Conv and C3k2 layers may change. For Conv, keep repeats and stride unchanged; you may change the first channel argument and kernel to 1, 3, or 5. For C3k2, you may change the first channel argument and repeats (1-4); keep every other argument unchanged.
-5. Channel arguments are before n-scale scaling. Use multiples of 64, between half the seed value (minimum 64) and twice the seed value. Make one focused change per mutation and keep the model small.
+5. Channel arguments are before n-scale scaling. Use multiples of 64, between half the seed value (minimum 64) and twice the seed value. Change exactly one Conv or C3k2 layer relative to the input model, and keep the model small.
 6. Preserve the high-resolution P2 branch and its stride-4 detection. Favor useful P2/P3 features for tiny drones over extra P5 capacity.
 7. Use valid YAML lists and booleans. Do not add a # --OPTION-- marker, explanations, or extra keys.

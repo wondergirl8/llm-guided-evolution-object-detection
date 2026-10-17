@@ -1,7 +1,7 @@
 # Phase 1 — Drone Detection Planning Document
 ## FRED + LLM-GE Research Project
 
-**Status:** Version 1.0 — Implementation-Ready Phase Specification  
+**Status:** Version 1.1 — Implementation-Ready Phase Specification\
 **Document path:** `docs/PHASE1_DETECTION_PLAN.md`  
 **Phase:** Phase 1 — Drone Detection  
 **Primary purpose:** Reproduce trustworthy FRED detector baselines, define controlled detector-family search spaces, adapt LLM-GE to object-detection architecture evolution, run family-specific Event-based evolutionary studies, preserve elite detectors, and freeze a versioned detection interface for Phase 2.
@@ -27,7 +27,7 @@ Authority is divided by domain:
 
 - the **Master Plan** owns project-wide research architecture, LLM-GE policy, benchmark/evaluation policy, reproducibility policy, cross-phase interfaces, and project-wide experimental principles;
 - the **Engineering Implementation Standard** owns software-engineering behavior, testing, state safety, external dependency verification, failure handling, and coding-agent completion requirements;
-- the **Phase 0 Plan** owns the canonical FRED data representation, manifests, split integrity, leakage controls, and generic data/adapter contract;
+- the **Phase 0 Plan** owns the canonical FRED data representation, pinned remote-source identity, provider-facing source adapter, bounded cache/materialization behavior, manifests, split integrity, leakage controls, model-neutral loader, and generic data/adapter contract;
 - this **Phase 1 Plan** owns detector-family integration, detector baseline validation, architecture-evolution boundaries, candidate validation, detection fitness/search behavior, elite handling, and Phase 1 outputs;
 - a **current implementation task** owns only its immediate scope;
 - the **repository** is evidence of current implementation state, not a source of policy.
@@ -42,7 +42,7 @@ This document uses four decision statuses.
 
 ### FIXED
 
-A Phase 1 project decision accepted for Version 1.0.
+A Phase 1 project decision accepted for Version 1.1.
 
 ### REQUIRED VERIFICATION
 
@@ -114,6 +114,8 @@ relevant repository code
 | Completion gate | §19 |
 
 For non-trivial work, the coding agent SHOULD use the short pre-task contract required by `AGENTS.md` and identify the relevant work-package ID from Section 18.
+
+For any Phase 1 task that touches FRED loading, runtime data delivery, or adapters, the coding agent SHOULD additionally read the frozen Phase 0 remote-access/data-interface sections (especially Phase 0 §§5–6, 9, 11–13 and the Phase 0 Stage H/handoff contract). The coding agent MUST NOT inspect the FRED provider API as a reason to bypass the Phase 0 abstraction.
 
 ---
 
@@ -191,7 +193,7 @@ These objectives MUST NOT broaden the first controlled implementation/search bef
 
 ## 2.5 Out of scope for the core implementation
 
-The core Phase 1 Version 1.0 study SHALL NOT include:
+The core Phase 1 Version 1.1 study SHALL NOT include:
 
 - changing the Phase 0 event representation;
 - raw-event voxel/point-cloud processing;
@@ -217,7 +219,7 @@ Future/expansion studies are collected in Appendix A and do not block core Phase
 | ID | Decision |
 |---|---|
 | `P1-D01` | Phase 1 uses YOLO11, RT-DETR, and Faster R-CNN as mandatory established seed families. |
-| `P1-D02` | Phase 1 consumes the frozen Phase 0 canonical dataset and MUST NOT reimplement FRED preprocessing. |
+| `P1-D02` | Phase 1 consumes the frozen Phase 0 canonical dataset through the versioned Phase 0 model-neutral loader and MUST NOT reimplement FRED preprocessing, remote-source resolution, or cache/materialization logic. |
 | `P1-D03` | Each selected seed must work non-evolutionarily before LLM-GE may modify it. |
 | `P1-D04` | RGB and Event are separate baseline input tracks, producing six mandatory seed/modality baselines. |
 | `P1-D05` | The first primary LLM-GE studies use Event input for YOLO11, RT-DETR, and Faster R-CNN separately. |
@@ -237,6 +239,9 @@ Future/expansion studies are collected in Appendix A and do not block core Phase
 | `P1-D19` | Published FRED detector scores are external reference values, not tuning targets. |
 | `P1-D20` | FRED-derived architecture statistics such as anchor priors may use project-training data only; official test ground truth MUST NOT influence design. |
 | `P1-D21` | Modern/custom models remain separate post-core expansion studies unless explicitly promoted through the expansion gate. |
+| `P1-D22` | Phase 1 obtains FRED content only through the frozen Phase 0 model-neutral loader/data-access contract; detector-family adapters MUST NOT directly call the remote dataset provider or assume a complete local dataset. |
+| `P1-D23` | Remote logical-reference resolution, on-demand materialization, cache ownership, invalidation, and eviction remain Phase 0 responsibilities. Phase 1 may use only approved Phase 0 workload controls such as prefetch/cache warming. |
+| `P1-D24` | Formal comparisons use one frozen Phase 0 source revision and data-access contract. Model latency is measured independently of remote fetch time, while training/runtime reports separately record data-delivery behavior where it materially affects execution. |
 
 ## 3.2 Recommended seed defaults pending gates
 
@@ -452,7 +457,7 @@ Planning-time upstream/API observations MUST be rechecked against pinned impleme
 
 | ID | Required verification | Blocks |
 |---|---|---|
-| `P1-V01` | Frozen Phase 0 schema/manifest/split/adapter contract matches repository/runtime | all formal Phase 1 work |
+| `P1-V01` | Frozen Phase 0 schema/manifest/split/data-access/adapter contract and pinned remote-source identity match repository/runtime | all formal Phase 1 work |
 | `P1-V02` | Selected Ultralytics revision/config/checkpoint API and YOLO architecture boundaries | YOLO adapter/genome |
 | `P1-V03` | Selected RT-DETR revision/config/checkpoint API and architecture boundaries | RT-DETR adapter/genome |
 | `P1-V04` | Selected Faster R-CNN framework/config/checkpoint/component boundaries | FRCNN adapter/genome |
@@ -464,12 +469,14 @@ Planning-time upstream/API observations MUST be rechecked against pinned impleme
 | `P1-V10` | Candidate/output artifact paths and stale-result handling in LLM-GE are understood and testable | formal evolution |
 | `P1-V11` | Prompt/version integration points in the selected LLM-GE implementation are verified | pilot evolution |
 | `P1-V12` | Phase 2-required detection fields can be exported without detector-internal coupling | Phase 1 freeze |
+| `P1-V13` | Frozen Phase 0 remote-source/data-access/cache contract is provider-agnostic at the Phase 1 adapter boundary; cold-cache and warm-cache access yield identical canonical sample semantics | all family adapters/formal baselines |
+| `P1-V14` | Representative Phase 0 remote+cache delivery does not materially starve each selected detector; any required performance fix is made at the Phase 0 loader/cache boundary rather than by creating detector-specific data copies | `DG-P1-04`, formal baselines |
 
 Verification evidence SHALL be preserved as project artifacts/records rather than existing only in agent reasoning.
 
 ---
 
-# 5. Phase 0 Handoff and Protected Data Contract
+# 5. Phase 0 Handoff, Remote-Access Boundary, and Protected Data Contract
 
 ## 5.1 Required Phase 0 inputs
 
@@ -479,6 +486,10 @@ Phase 1 SHALL consume by versioned reference:
 - project train membership;
 - project validation membership;
 - official challenging-test identity;
+- `P0-CONTRACT-FRED-SAMPLE-v1`;
+- versioned Phase 0 model-neutral data-access/loader contract;
+- pinned official remote FRED identity/revision;
+- Phase 0 remote-source adapter/backend identity required for provenance;
 - RGB view;
 - Event view;
 - paired RGB/Event view where later explicitly required;
@@ -487,7 +498,8 @@ Phase 1 SHALL consume by versioned reference:
 - Phase 0 validation report;
 - known-data-issue registry;
 - generic adapter contract;
-- runtime-loading guidance.
+- bounded-cache/materialization policy version;
+- remote-access/cache runtime guidance, including approved prefetch/cache-warming controls and cold/warm benchmark evidence.
 
 Phase 1 SHALL NOT reconstruct:
 
@@ -496,7 +508,10 @@ Phase 1 SHALL NOT reconstruct:
 - coordinate interpretation;
 - event-frame generation;
 - sample identity;
-- annotation parsing.
+- annotation parsing;
+- remote logical-reference resolution;
+- provider-specific download/materialization behavior;
+- a separate detector-specific cache or dataset mirror.
 
 ## 5.2 Handoff validation
 
@@ -506,20 +521,64 @@ Before formal model work:
 - verify manifest version;
 - verify split version;
 - verify annotation policy;
+- verify pinned remote FRED identity/revision;
+- verify Phase 0 data-access/loader contract version;
+- verify bounded-cache/materialization policy version;
 - verify known-data-issue handling;
-- verify generic adapter expectations against actual code.
+- verify generic adapter expectations against actual code;
+- load the same deterministic non-held-out canonical samples through both cold-cache and warm-cache paths and verify identical sample IDs, decoded content semantics, targets, and metadata;
+- verify a representative cache miss can be materialized through Phase 0 without detector-family code calling the remote provider directly;
+- verify no handoff/smoke workflow creates or requires a complete local FRED mirror;
+- preserve evidence for `P1-V01` and `P1-V13`.
 
 A mismatch blocks formal Phase 1 work.
 
-## 5.3 Protected data/evaluation invariants
+## 5.3 Remote-access ownership boundary — FIXED
+
+The implementation boundary is:
+
+```text
+pinned official FRED remote source
+              ↓
+Phase 0 remote-source adapter
+              ↓
+bounded Phase 0 cache/materialization
+              ↓
+Phase 0 canonical loader / FREDSample
+              ↓
+Phase 1 family adapter
+              ↓
+detector framework input + target
+              ↓
+YOLO11 / RT-DETR / Faster R-CNN
+```
+
+Only Phase 0 infrastructure is provider-facing.
+
+A Phase 1 family adapter SHALL consume a canonical sample or documented Phase 0 loader output. It MUST NOT:
+
+- call Hugging Face or another FRED provider directly;
+- implement its own remote downloader/listing logic;
+- infer sample identity from local cache paths;
+- require all FRED content to exist locally;
+- create a permanent family-specific copy of RGB/Event data;
+- own cache eviction/invalidation policy;
+- receive or expose remote-service credentials to model/candidate code.
+
+Phase 1 MAY invoke Phase 0-approved workload controls such as prefetching, sequence/archive materialization, or cache warming when the frozen Phase 0 contract exposes them. These controls are performance mechanisms only and MUST NOT alter scientific sample identity, annotations, split membership, or modality semantics.
+
+## 5.4 Protected data/evaluation invariants
 
 Phase 1 model/candidate code MUST NOT:
 
-- modify Phase 0 source/manifests;
+- modify Phase 0 manifests, source descriptors, logical references, or cache-policy artifacts;
 - alter train/validation/test membership;
 - receive official-test labels during search;
 - redefine canonical coordinates/annotations;
-- redefine the official evaluator to improve a candidate score.
+- redefine the official evaluator to improve a candidate score;
+- change the pinned remote FRED revision;
+- bypass Phase 0 by fetching alternate copies of FRED;
+- use cache presence/path layout as model input or search feedback.
 
 Published FRED held-out scores are post-hoc external references, not optimization targets.
 
@@ -592,14 +651,20 @@ This distinction prevents implementation smoke testing from silently becoming th
 Each selected family receives a thin project-owned adapter:
 
 ```text
-frozen Phase 0 sample
+pinned remote FRED source
         ↓
-family adapter
+Phase 0 source adapter + bounded cache
+        ↓
+frozen Phase 0 canonical loader/sample
+        ↓
+Phase 1 family adapter
         ↓
 official/framework-required input + target
         ↓
 selected seed model
 ```
+
+The family adapter begins at the **canonical Phase 0 sample boundary**. Remote fetching, cache lookup, archive/sequence materialization, provider authentication, and logical-reference resolution are not detector-adapter responsibilities.
 
 Adapters MAY perform only the transformations authorized by the frozen Phase 0 / Phase 1 protocol, such as:
 
@@ -616,7 +681,11 @@ Adapters MUST NOT:
 - hide invalid samples;
 - inject test information;
 - independently redefine class mapping;
-- silently change evaluation coordinate semantics.
+- silently change evaluation coordinate semantics;
+- call the remote dataset provider directly;
+- depend on machine-specific cache paths or require a complete local FRED mirror;
+- create family-specific persistent copies of canonical RGB/Event data;
+- manage Phase 0 cache invalidation/eviction independently.
 
 ## 7.2 Adapter verification
 
@@ -629,7 +698,10 @@ For each family and modality, verify:
 - batch/collate semantics;
 - device transfer;
 - deterministic target conversion where expected;
-- no source/manifests mutation;
+- no Phase 0 manifest/logical-reference/cache-policy mutation;
+- no provider-specific URL/path assumption in the family adapter;
+- the same canonical sample produces equivalent model-facing content whether Phase 0 serves it from a cold-cache materialization or a warm-cache hit;
+- adapter execution does not trigger a complete-dataset download/mirror;
 - minimal model forward path;
 - minimal supervised loss path.
 
@@ -718,7 +790,9 @@ Each formal baseline preserves:
 - family/config/revision;
 - checkpoint origin;
 - modality;
-- Phase 0 versions;
+- Phase 0 manifest/schema/data-access versions;
+- pinned remote FRED source revision;
+- Phase 0 bounded-cache/materialization policy version;
 - adapter version;
 - training config;
 - optimizer/scheduler;
@@ -756,7 +830,9 @@ If reproduction evidence requires family-specific details, those differences are
 
 After `DG-P1-04`–`DG-P1-06`, protect:
 
-- Phase 0 data;
+- Phase 0 manifest/schema/data-access contract;
+- pinned remote FRED source identity/revision;
+- Phase 0 canonical sample semantics and bounded-cache/materialization policy;
 - modality for the current study;
 - train/validation membership;
 - metric implementation;
@@ -771,6 +847,10 @@ After `DG-P1-04`–`DG-P1-06`, protect:
 - resource caps;
 - confidence/NMS evaluation policy where applicable;
 - experiment logging/provenance.
+
+For formal comparisons, any Phase 0 prefetch/cache-warming/materialization settings that can materially affect training wall-clock behavior SHOULD be fixed and recorded for the compared runs. Cache state MUST NOT affect sample membership or model inputs.
+
+Detector inference latency/throughput comparisons SHALL benchmark the model on already available/preloaded model inputs unless a separate end-to-end data-pipeline measurement is explicitly reported. Remote transfer latency MUST NOT be silently folded into a detector-only latency claim.
 
 ## 9.3 Evolvable variable
 
@@ -882,11 +962,25 @@ Official challenging-test performance MUST NOT be used for:
 - hyperparameter search;
 - decisions to continue architecture search.
 
-## 10.3 Resource measurements
+## 10.3 Resource and data-delivery measurements
 
 Before `DG-P1-05`, measure selected seeds on intended hardware.
 
+Before `DG-P1-04` is frozen, also confirm `P1-V14`: representative Phase 0 remote+cache delivery must not materially starve each selected detector. Record, as applicable:
+
+- model-side GPU/accelerator utilization;
+- data-wait/loader time;
+- batch delivery rate;
+- Phase 0 prefetch/materialization unit;
+- cache warm/cold state for the profiling run;
+- cache hit/miss behavior;
+- remote transfer contribution during cold-cache profiling.
+
+If this reveals a material data bottleneck, formal Phase 1 work blocks. Make a scoped, versioned Phase 0 loader/cache/runtime amendment (without changing canonical sample semantics unless separately authorized), then repeat `P1-A1`/`P1-A2` and the affected profiling checks. Do not solve the problem by adding a YOLO-, RT-DETR-, or Faster-R-CNN-specific dataset downloader or full local copy.
+
 Every valid formal candidate SHALL record the resource fields required by the frozen resource contract.
+
+Detector-only inference latency/throughput SHALL be measured independently of remote fetching. A separate end-to-end measurement MAY include Phase 0 loading, but it must be labeled as such.
 
 An OOM/timeout/resource-cap violation is a visible candidate outcome, not a reason to silently alter the global protocol.
 
@@ -1047,7 +1141,7 @@ Where compatible, preserve:
 Phase 1 replaces example-task assumptions with project-owned:
 
 - detector-family candidate builders;
-- Phase 0/FRED access;
+- Phase 0 canonical loader/data-access bridge (no direct FRED-provider calls);
 - object-detection training jobs;
 - validation evaluator bridge;
 - detection-fitness reader;
@@ -1088,7 +1182,8 @@ A mutation/crossover/EoT prompt MAY contain:
 It SHOULD NOT expose:
 
 - held-out test metrics/labels;
-- credentials/unrelated files;
+- remote-provider credentials/tokens;
+- provider-specific cache paths or unrelated local files;
 - arbitrary repository internals;
 - evaluator internals in a form encouraging benchmark manipulation.
 
@@ -1143,6 +1238,7 @@ Before expensive training:
 - dimensions/channels/heads are legal;
 - model constructs;
 - outputs satisfy adapter/evaluator expectations;
+- candidate/model code receives only the intended model-facing tensors/targets/metadata and cannot invoke provider-facing Phase 0 source/cache controls;
 - checkpoint loading follows the initialization contract;
 - batch/input shapes work;
 - gradients flow;
@@ -1233,6 +1329,7 @@ All three family pilots must demonstrate:
 - population-state persistence/recovery;
 - controlled failures;
 - no benchmark/data mutation;
+- no direct remote-provider access or detector-specific dataset mirroring;
 - no test feedback;
 - resource measurement;
 - reproducible execution.
@@ -1289,7 +1386,10 @@ Study E-F: Faster-RCNN-Event
 
 All use:
 
-- frozen Phase 0 Event view;
+- frozen Phase 0 Event view through the versioned model-neutral Phase 0 loader;
+- the same pinned remote FRED revision and Phase 0 manifest/data-access contract;
+- the same approved Phase 0 materialization/prefetch/cache policy for comparable formal execution;
+- no detector/candidate direct access to the remote provider;
 - identical project validation membership;
 - the controlled Phase 1 training/evaluation protocol;
 - family-specific versioned genome;
@@ -1347,7 +1447,7 @@ Each retained elite records:
 - prompt/operator-history references;
 - architecture specification;
 - training config;
-- Phase 0 versions;
+- Phase 0 manifest/schema/data-access versions and pinned remote source revision;
 - validation metrics;
 - resource profile;
 - checkpoint reference;
@@ -1373,7 +1473,8 @@ Before official challenging-test evaluation, freeze:
 - architecture;
 - genome version;
 - checkpoint/retraining policy;
-- Phase 0 versions;
+- Phase 0 manifest/schema/data-access versions and pinned remote FRED source revision;
+- approved Phase 0 materialization/prefetch/cache policy for the frozen evaluation workflow;
 - adapter;
 - evaluation configuration;
 - candidate-selection rule;
@@ -1383,7 +1484,7 @@ Held-out results MUST NOT trigger another search round under the same final-test
 
 ## 16.5 Core Phase 1 freeze occurs before expansion research
 
-Once core held-out evaluation, reporting, and the Phase 2 handoff contract are complete, the project freezes **core Phase 1 Version 1.0**.
+Once core held-out evaluation, reporting, and the Phase 2 handoff contract are complete, the project freezes **core Phase 1 Version 1.1**.
 
 Only after this freeze may `DG-P1-10` authorize expansion studies.
 
@@ -1395,22 +1496,23 @@ Only after this freeze may `DG-P1-10` authorize expansion studies.
 
 Core Phase 1 produces:
 
-1. seed-selection decision records;
-2. adapter implementations/tests;
-3. family bring-up/profile evidence;
-4. frozen controlled training/evaluation/resource protocol;
-5. six formal baseline-validation packages;
-6. versioned genome schemas/builders/validators;
-7. LLM-GE integration map and adapters;
-8. prompt/operator versions;
-9. candidate lineage/state/failure artifacts;
-10. pilot reports;
-11. primary evolutionary-study reports;
-12. family elite archives;
-13. final elite checkpoints/confirmation summaries;
-14. held-out evaluation report;
-15. detector prediction contract;
-16. Phase 2 handoff metadata.
+1. Phase 0 handoff verification, including provider-agnostic loader/cache contract and `P1-V13`/`P1-V14` evidence;
+2. seed-selection decision records;
+3. adapter implementations/tests;
+4. family bring-up/profile evidence;
+5. frozen controlled training/evaluation/resource protocol;
+6. six formal baseline-validation packages;
+7. versioned genome schemas/builders/validators;
+8. LLM-GE integration map and adapters;
+9. prompt/operator versions;
+10. candidate lineage/state/failure artifacts;
+11. pilot reports;
+12. primary evolutionary-study reports;
+13. family elite archives;
+14. final elite checkpoints/confirmation summaries;
+15. held-out evaluation report;
+16. detector prediction contract;
+17. Phase 2 handoff metadata.
 
 ## 17.2 Detection prediction contract
 
@@ -1434,6 +1536,8 @@ confidence
 predicted class/label mapping
 coordinate-space version
 Phase 0 manifest version
+Phase 0 data-access/schema version
+pinned remote FRED source revision
 Phase 1 adapter/evaluator version
 code revision
 ```
@@ -1462,20 +1566,38 @@ A coding agent SHOULD be tasked with one work package at a time. Each non-trivia
 
 ## Stage A — Phase 0 handoff
 
-### `P1-A1` Verify Phase 0 contract
+### `P1-A1` Verify Phase 0 semantic/source contract
 
 **Prerequisites:** frozen Phase 0.
 
 **Work:**
 
-- record schema/manifest/split versions;
-- verify RGB/Event access;
+- record schema/manifest/split/data-access versions;
+- record pinned remote FRED source identity/revision;
+- verify RGB/Event access through the Phase 0 loader;
 - verify generic adapter contract;
-- reconcile `P1-V01`.
+- verify bounded-cache/materialization policy and approved workload controls;
+- reconcile `P1-V01` and `P1-V13`.
 
-**Must not:** reconstruct/modify Phase 0 semantics.
+**Must not:** reconstruct/modify Phase 0 semantics, call the FRED provider from detector code, or create a complete local dataset copy.
 
-**Exit:** trusted FRED samples can be consumed without Phase 0 reimplementation.
+**Exit:** trusted FRED samples can be consumed through one provider-agnostic Phase 0 interface without Phase 0 reimplementation.
+
+### `P1-A2` Verify Phase 0 runtime handoff
+
+**Prerequisites:** `P1-A1`.
+
+**Work:**
+
+- run deterministic non-held-out sample access from an empty/compatible cold cache;
+- repeat from a warm cache;
+- verify identical canonical sample IDs, content semantics, targets, and metadata;
+- verify representative on-demand materialization succeeds through Phase 0;
+- verify failures such as unavailable remote content are surfaced by Phase 0 rather than hidden by family adapters;
+- record initial data-delivery timing sufficient to detect an obvious integration bottleneck;
+- confirm the workflow does not materialize the complete FRED dataset.
+
+**Exit:** the remote+bounded-cache handoff is operational and family-adapter work can proceed without provider-specific code.
 
 ## Stage B — Seed evidence and gate resolution
 
@@ -1503,19 +1625,19 @@ No formal adapter/baseline implementation is pinned to a recommendation before t
 
 ### `P1-C1` Implement/verify YOLO adapter
 
-**Read:** §§5–7 plus pinned upstream API.
+**Read:** §§5–7 plus the pinned detector-framework API. The FRED provider API remains Phase 0-owned and is not part of the detector adapter.
 
-**Deliverables:** adapter, config, adapter tests, minimal model construction/forward/loss path.
+**Deliverables:** provider-agnostic adapter, config, adapter tests, minimal model construction/forward/loss path.
 
-**Verification:** `P1-V02`, `P1-V05`.
+**Verification:** `P1-V02`, `P1-V05`, `P1-V13`.
 
 ### `P1-C2` Implement/verify RT-DETR adapter
 
-**Verification:** `P1-V03`, `P1-V05`.
+**Verification:** `P1-V03`, `P1-V05`, `P1-V13`.
 
 ### `P1-C3` Implement/verify Faster R-CNN adapter
 
-**Verification:** `P1-V04`, `P1-V05`.
+**Verification:** `P1-V04`, `P1-V05`, `P1-V13`.
 
 ### `P1-C4` Verify evaluator/postprocessing on trusted development data
 
@@ -1544,11 +1666,18 @@ Short trusted training/evaluation sufficient to verify optimizer/checkpoint/reso
 
 **Verification:** `P1-V07`.
 
-### `P1-D5` Consolidate resource/protocol evidence
+### `P1-D5` Consolidate model + data-delivery resource/protocol evidence
 
-**Verification:** `P1-V08`.
+**Verification:** `P1-V08`, `P1-V14`.
 
-**Exit:** evidence exists to resolve the training/resource/metric gates.
+**Work:**
+
+- separate model compute/memory evidence from Phase 0 data-delivery evidence;
+- confirm representative warm-cache training is not materially starved by the loader;
+- retain cold-cache measurements as data-path evidence rather than detector latency;
+- if a material loader bottleneck remains, resolve it through a scoped versioned Phase 0 loader/cache/runtime amendment, then repeat `P1-A1`/`P1-A2` before freezing the formal protocol.
+
+**Exit:** evidence exists to resolve the training/resource/metric gates without introducing detector-specific dataset access paths.
 
 ## Stage E — Freeze controlled experimental protocol
 
@@ -1695,7 +1824,7 @@ If this branch is skipped, record "not used" and proceed with the frozen full ca
 
 **Exit:** Phase 2 may begin formal tracking integration.
 
-**Core Phase 1 Version 1.0 is now frozen.**
+**Core Phase 1 Version 1.1 is now frozen.**
 
 Post-core expansion research, if any, is authorized separately through `DG-P1-10` and Appendix A.
 
@@ -1705,10 +1834,18 @@ Post-core expansion research, if any, is authorized separately through `DG-P1-10
 
 ## 19.1 Completion gate
 
-Core Phase 1 Version 1.0 is complete only when all applicable mandatory items pass.
+Core Phase 1 Version 1.1 is complete only when all applicable mandatory items pass.
 
 ```text
-[ ] Frozen Phase 0 manifest/schema/split versions are verified and recorded.
+[ ] Frozen Phase 0 manifest/schema/split/data-access versions and pinned remote FRED source revision are verified and recorded.
+
+[ ] P1-A1/P1-A2 confirm Phase 1 consumes FRED only through the provider-agnostic Phase 0 loader and bounded-cache boundary.
+
+[ ] No family adapter or LLM-GE candidate directly calls the remote FRED provider, requires a full local dataset mirror, or owns a parallel detector-specific dataset cache.
+
+[ ] Cold-cache and warm-cache Phase 0 access produce identical canonical sample semantics for the handoff smoke set.
+
+[ ] P1-V14 confirms representative Phase 0 data delivery does not materially starve the selected detectors before the formal protocol is frozen.
 
 [ ] DG-P1-01 resolved and exact YOLO11 seed/revision/checkpoint recorded.
 
@@ -1718,7 +1855,7 @@ Core Phase 1 Version 1.0 is complete only when all applicable mandatory items pa
 
 [ ] Recommended seed defaults were not treated as implementation authorization before their gates.
 
-[ ] All three family adapters consume Phase 0 without redefining it.
+[ ] All three family adapters consume Phase 0 canonical samples without redefining it or depending on provider/cache path internals.
 
 [ ] Single-class `drone` mapping is verified consistently across adapters/modalities.
 
@@ -1752,7 +1889,7 @@ Core Phase 1 Version 1.0 is complete only when all applicable mandatory items pa
 
 [ ] Versioned formal genome schemas exist for all three families.
 
-[ ] Candidate code cannot mutate protected dataset/evaluator/training fields.
+[ ] Candidate code cannot mutate protected dataset/evaluator/training/source-access fields or invoke provider-facing Phase 0 controls.
 
 [ ] Candidate validity funnel rejects invalid models before unnecessary full training.
 
@@ -1801,7 +1938,7 @@ Any unresolved mandatory item blocks the core Phase 1 freeze.
 
 Phase 1 succeeds when the project can state with evidence:
 
-> The three required detector families have trustworthy RGB and Event baselines on the frozen FRED data interface; seed choices are evidence-backed rather than guessed or tuned to published held-out scores; the primary task uses one consistent `drone` class and a frozen controlled pretraining/training/evaluation protocol; candidate initialization and randomness follow reproducible contracts; LLM-GE evolves only bounded family-specific architecture representations while data, benchmark membership, evaluator, and protected training variables remain fixed; invalid candidates are rejected cheaply and recorded transparently; three independent Event-based evolutionary studies produce reproducible family elite archives; reportable claims are confirmed across approved independent training seeds without held-out-test feedback; held-out evaluation occurs only after candidate selection is frozen; and `P1-CONTRACT-DETECTIONS-v1` allows Phase 2 to consume detector outputs without depending on detector internals.
+> The three required detector families have trustworthy RGB and Event baselines on the frozen FRED data interface; the interface resolves the pinned official remote FRED source through the Phase 0 model-neutral loader and bounded cache without requiring a complete local dataset mirror or provider-specific detector code; representative data delivery is fast enough for the selected detectors and is measured separately from detector-only inference latency; seed choices are evidence-backed rather than guessed or tuned to published held-out scores; the primary task uses one consistent `drone` class and a frozen controlled pretraining/training/evaluation protocol; candidate initialization and randomness follow reproducible contracts; LLM-GE evolves only bounded family-specific architecture representations while data, benchmark membership, evaluator, remote-source identity, and protected training variables remain fixed; invalid candidates are rejected cheaply and recorded transparently; three independent Event-based evolutionary studies produce reproducible family elite archives; reportable claims are confirmed across approved independent training seeds without held-out-test feedback; held-out evaluation occurs only after candidate selection is frozen; and `P1-CONTRACT-DETECTIONS-v1` allows Phase 2 to consume detector outputs without depending on detector internals or remote-provider/cache implementation details.
 
 ---
 
@@ -1809,7 +1946,7 @@ Phase 1 succeeds when the project can state with evidence:
 
 This appendix is **not part of the core Phase 1 implementation path**.
 
-A coding agent MUST NOT implement these items unless `DG-P1-10` explicitly authorizes an expansion task after core Phase 1 Version 1.0 is frozen.
+A coding agent MUST NOT implement these items unless `DG-P1-10` explicitly authorizes an expansion task after core Phase 1 Version 1.1 is frozen.
 
 Possible future studies include:
 
@@ -1883,7 +2020,7 @@ These do not retroactively redefine the original three primary seeds.
 
 ## A.6 Event-native raw-event models
 
-Models requiring raw events, voxelization, point clouds, or alternate temporal accumulation remain outside Phase 1 Version 1.0 and require an approved Phase 0 research extension first.
+Models requiring raw events, voxelization, point clouds, or alternate temporal accumulation remain outside Phase 1 Version 1.1 and require an approved Phase 0 research extension first.
 
 ---
 
@@ -1959,7 +2096,9 @@ The brief MUST NOT silently add policy or resolve an open research decision.
 The intended progression is:
 
 ```text
-frozen Phase 0
+frozen Phase 0 remote-source + canonical-loader handoff
+      ↓
+provider-agnostic Phase 1 data-access smoke
       ↓
 evidence-backed seed selection
       ↓

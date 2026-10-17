@@ -39,8 +39,8 @@ class FamilyAdapter:
         """Detect on a uint8 [B, 3, H, W] batch.
 
         Returns one (boxes, scores) pair per image: xyxy boxes in the pixels of
-        the given images and confidences in [0, 1], after the family's own NMS
-        at proxy["eval_conf"] and proxy["nms_iou"].
+        the given images and confidences in [0, 1], after the family's configured
+        confidence filtering and (where used) NMS.
         """
         raise NotImplementedError
 

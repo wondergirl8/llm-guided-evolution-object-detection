@@ -1,10 +1,11 @@
-"""Train a supported Ultralytics model on FRED challenging_train and score challenging_test once.
+"""Train a supported detector on FRED challenging_train and score challenging_test once.
 
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_scratch
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name best_evolved \\
         --model network_<gene_id> --variant_dir <run's models dir>
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py \\
         --family yolo26_p2 --name yolo26n_p2_scratch
+    uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --family dfine --name frozen_dfine --dfine-reg-max 32
     # optional: start from COCO-pretrained weights where layers match
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_coco \\
         --weights yolo11n.pt
@@ -14,7 +15,8 @@ challenging_train, every <train_frame_step>th frame). The trained model is then 
 of the official challenging_test split (downloaded a sequence at a time) and scored
 by map_reporter in held-out mode; the YOLO11 report goes to
 <data_root>/held_out_reports/<name>_evaluation.json and YOLO26-P2 artifacts
-go under <data_root>/yolo26_p2/. Use this only on models
+go under <data_root>/yolo26_p2/ and D-FINE artifacts under <data_root>/dfine/.
+Use this only on models
 whose selection is already frozen: test results must not feed back into search.
 """
 
@@ -27,29 +29,31 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import yaml
 
 try:
     from . import map_reporter
+    from .adapters.dfine import DFINEAdapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from .adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from .candidate_runner import code_revision, load_protocol, sha256_file
     from .fred_splits import challenging_split, sequence_frames
-    from .proxy_data import REVISION, STEP_US, load_annotations
+    from .proxy_data import REVISION, STEP_US, load_annotations, load_exported_split
     from .result_contract import validate_gene_id
 except ImportError:
     import map_reporter
+    from adapters.dfine import DFINEAdapter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from candidate_runner import code_revision, load_protocol, sha256_file
     from fred_splits import challenging_split, sequence_frames
-    from proxy_data import REVISION, STEP_US, load_annotations
+    from proxy_data import REVISION, STEP_US, load_annotations, load_exported_split
     from result_contract import validate_gene_id
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 FINAL_ADAPTERS = {"yolo11": UltralyticsYolo11Adapter,
-                  "yolo26_p2": UltralyticsYolo26P2Adapter}
+                  "yolo26_p2": UltralyticsYolo26P2Adapter,
+                  "dfine": DFINEAdapter}
 
 
 def predict_test_split(adapter, model, test, settings, device, report_dir):
@@ -105,6 +109,8 @@ def main():
                         help="Folder holding network_<id>.py (the run's models dir)")
     parser.add_argument("--weights", default=None,
                         help="Optional pretrained checkpoint (e.g. yolo11n.pt); default from scratch")
+    parser.add_argument("--dfine-reg-max", type=int,
+                        help="Frozen D-FINE refinement-bin count selected on search validation")
     parser.add_argument("--protocol", default=str(DEFAULT_PROTOCOL))
     parser.add_argument("--epochs", type=int, default=None, help="Override protocol final.epochs")
     parser.add_argument("--seed", type=int, default=None,
@@ -112,6 +118,14 @@ def main():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
     validate_gene_id(args.name)
+    if args.family == "dfine":
+        if args.weights is not None:
+            parser.error("D-FINE final training starts from scratch; --weights is unsupported")
+        if args.dfine_reg_max is not None:
+            if args.dfine_reg_max < 4 or args.dfine_reg_max % 2:
+                parser.error("--dfine-reg-max must be an even integer of at least 4")
+    elif args.dfine_reg_max is not None:
+        parser.error("--dfine-reg-max requires --family dfine")
 
     start = time.time()
     protocol = load_protocol(args.protocol)
@@ -119,16 +133,25 @@ def main():
     final = challenging["final"]
     epochs = args.epochs or final["epochs"]
     seed = proxy["seed"] if args.seed is None else args.seed
+    if args.family == "dfine" and args.dfine_reg_max is not None:
+        protocol["families"]["dfine"]["model"]["reg_max"] = args.dfine_reg_max
     data_root = FRED_DIR / challenging["data_root"]
     data_yaml = data_root / f"final_train_step{final['train_frame_step']}" / "data.yaml"
     if not data_yaml.is_file():
         raise SystemExit(f"{data_yaml} missing: run export_split.py --set final "
                          "(all shards, then --finalize)")
-    _, test = challenging_split(data_root)
+    train, test = challenging_split(data_root)
     artifact_root = data_root if args.family == "yolo11" else data_root / args.family
     out = artifact_root / "final_runs" / args.name
+    if args.family == "dfine" and (
+        (out / "model.pt").exists() or
+        (artifact_root / "held_out_reports" / f"{args.name}_evaluation.json").exists()
+    ):
+        parser.error(f"D-FINE final run already exists: {args.name}")
     out.mkdir(parents=True, exist_ok=True)
 
+    if args.family == "dfine":
+        torch.manual_seed(seed)
     adapter = FINAL_ADAPTERS[args.family](protocol["families"][args.family], FRED_DIR)
     variant_path = adapter.variant_path(args.model, args.variant_dir)
     model = adapter.build(variant_path, num_classes=1, device=args.device)
@@ -136,14 +159,21 @@ def main():
     print(f"{args.name}: {variant_path.name}, {params} params, weights={args.weights or 'scratch'}, "
           f"{epochs} epochs, seed {seed}", flush=True)
 
-    model.train(
-        data=str(data_yaml), epochs=epochs, imgsz=final["img_width"], batch=final["batch_size"],
-        seed=seed, deterministic=True, pretrained=args.weights or False,
-        device=_ultralytics_device(args.device), workers=adapter.settings.get("workers", 8),
-        project=str(out), name="train", exist_ok=True, val=False, plots=False, verbose=False,
-    )
     checkpoint = out / "model.pt"
-    model.save(checkpoint)
+    if args.family == "dfine":
+        training = load_exported_split(data_yaml.parent, train)
+        adapter.train(model, training, dict(proxy, epochs=epochs,
+                                            batch_size=final["batch_size"], seed=seed),
+                      args.device)
+        adapter.save(model, checkpoint)
+    else:
+        model.train(
+            data=str(data_yaml), epochs=epochs, imgsz=final["img_width"], batch=final["batch_size"],
+            seed=seed, deterministic=True, pretrained=args.weights or False,
+            device=_ultralytics_device(args.device), workers=adapter.settings.get("workers", 8),
+            project=str(out), name="train", exist_ok=True, val=False, plots=False, verbose=False,
+        )
+        model.save(checkpoint)
 
     settings = {"img_width": final["img_width"], "eval_conf": proxy["eval_conf"],
                 "nms_iou": proxy["nms_iou"], "batch_size": final["batch_size"],
@@ -153,6 +183,8 @@ def main():
     config = {"family": args.family, "final": final, "proxy_eval": settings, "epochs": epochs,
               "seed": seed,
               "weights": args.weights, "variant": variant_path.name}
+    if args.family == "dfine":
+        config["family_settings"] = adapter.settings
     split_files = data_root / "splits"
     metadata = {
         "dataset_revision": REVISION,
@@ -173,11 +205,14 @@ def main():
         "project_split": "held_out_test",
         "official_split": "challenging_test",
     }
+    if args.family == "dfine":
+        metadata["refinement_bins"] = adapter.settings["model"]["reg_max"]
     payload = {"metadata": metadata, "frames": frames, "params": params,
                "expected_sample_ids": expected}
     result, report_path = map_reporter.report(payload, sota_root=artifact_root, gene_id=args.name,
-                                              mode="held-out")
-    shutil.rmtree(adapter.workdir, ignore_errors=True)
+                                              mode="held-out", diagnostics=args.family == "dfine")
+    if args.family != "dfine":
+        shutil.rmtree(adapter.workdir, ignore_errors=True)
     print(f"challenging_test mAP50: {result.map50}, mAP50:95: {result.map50_95}, "
           f"Params: {result.params}, test frames: {len(frames)}, Time: {time.time() - start:.1f}s")
     print(f"Saved model: {checkpoint}")

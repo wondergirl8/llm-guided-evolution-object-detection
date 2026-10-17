@@ -1,11 +1,14 @@
+import json
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 import torch
 from PIL import Image
 
-from sota.FRED_LLM_GE.phase1_detection import candidate_runner
+from sota.FRED_LLM_GE.phase1_detection import candidate_runner, final_eval
 from sota.FRED_LLM_GE.phase1_detection.adapters.dfine import (
     DFINEAdapter, _nms, _targets_from_pixels,
 )
@@ -111,6 +114,19 @@ def test_dfine_trains_from_exported_lazy_images(tmp_path):
     assert len(candidate_runner.predict_frames(adapter, model, data, proxy, "cpu")) == 2
 
 
+def test_dfine_cosine_schedule_changes_lr_after_each_epoch():
+    adapter = _adapter()
+    adapter.settings.update(workers=0, lr_schedule="cosine")
+    model = adapter.build(adapter.variant_path("network", None), num_classes=1, device="cpu")
+    history = []
+    adapter.train(model, _data(), {"epochs": 3, "batch_size": 3, "seed": 0}, "cpu",
+                  on_epoch_end=lambda epoch, loss, lr: history.append((epoch, loss, lr)))
+    assert [row[0] for row in history] == [1, 2, 3]
+    assert history[0][2] == pytest.approx(adapter.settings["lr"])
+    assert history[0][2] > history[1][2] > history[2][2]
+    assert all(np.isfinite(row[1]) for row in history)
+
+
 def test_dfine_challenging_route_loads_export(monkeypatch, tmp_path):
     protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
     protocol["challenging"]["data_root"] = str(tmp_path)
@@ -155,3 +171,98 @@ def test_dfine_seed_runs_through_candidate_runner(monkeypatch, tmp_path):
     assert gene_id == "seed" and mode == "validation"
     assert len(payload["frames"]) == 3
     assert payload["metadata"]["model_identity"]
+    assert payload["metadata"]["training_seed"] == 0
+    assert len(payload["metadata"]["training_recipe_identity"]) == 64
+    assert len(payload["metadata"]["validation_sample_ids_sha256"]) == 64
+
+
+def test_dfine_training_arm_records_loss_and_validation_curve(monkeypatch, tmp_path):
+    protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
+    settings = protocol["families"]["dfine"]
+    settings.update(model=_adapter().settings["model"], workers=0, lr_schedule="constant")
+    settings.pop("data")
+    protocol["proxy"].update(epochs=2, batch_size=2, img_width=96)
+    monkeypatch.setattr(candidate_runner, "proxy_data", lambda proxy: (_data(), _data()))
+
+    candidate_runner.run("seed", "network", tmp_path / "models", "dfine",
+                         protocol, tmp_path, "cpu", diagnostics=True,
+                         training_arm="baseline")
+
+    report = json.loads((tmp_path / "results" / "seed_evaluation.json").read_text())
+    history = report["training_history"]
+    assert report["metadata"]["training_arm"] == "baseline"
+    assert [point["epoch"] for point in history] == [1, 2]
+    assert all("train_loss" in point and "mAP50_95" in point for point in history)
+    assert history[0]["lr"] == history[1]["lr"] == settings["lr"]
+    assert history[-1]["mAP50_95"] == pytest.approx(report["metrics"]["mAP50_95"])
+
+
+def test_dfine_refinement_ablation_reports_accuracy_size_and_latency(monkeypatch, tmp_path):
+    monkeypatch.setattr(candidate_runner, "proxy_data", lambda proxy: (_data(), _data()))
+    reports = []
+    for bins in (16, 32):
+        protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
+        settings = protocol["families"]["dfine"]
+        settings.update(model={**_adapter().settings["model"], "reg_max": bins}, workers=0)
+        settings.pop("data")
+        protocol["proxy"].update(epochs=1, batch_size=2, img_width=96)
+        output = tmp_path / f"reg_max_{bins}"
+        candidate_runner.run("seed", "network", tmp_path / "models", "dfine",
+                             protocol, output, "cpu", diagnostics=True,
+                             refinement_bins=bins)
+        reports.append(json.loads((output / "results" / "seed_evaluation.json").read_text()))
+
+    first, second = reports
+    assert first["metadata"]["model_ablation_protocol_identity"] == (
+        second["metadata"]["model_ablation_protocol_identity"])
+    assert first["metadata"]["training_recipe_identity"] != (
+        second["metadata"]["training_recipe_identity"])
+    assert first["metadata"]["refinement_bins"] == 16
+    assert second["metadata"]["refinement_bins"] == 32
+    assert first["metrics"]["params"] < second["metrics"]["params"]
+    for report in reports:
+        assert 0 <= report["metrics"]["mAP50"] <= 1
+        assert 0 <= report["metrics"]["mAP50_95"] <= 1
+        assert "mAP75" in report["diagnostics"]["overall"]
+        assert report["metadata"]["preloaded_inference_ms_per_frame"] > 0
+        assert report["metadata"]["inference_device"] == "cpu"
+
+
+def test_dfine_final_eval_retrains_frozen_bins_and_reports_once(monkeypatch, tmp_path):
+    protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
+    protocol["challenging"]["data_root"] = str(tmp_path)
+    protocol["families"]["dfine"].update(model=_adapter().settings["model"], workers=0)
+    final = protocol["challenging"]["final"]
+    final["batch_size"] = 2
+    export = tmp_path / f"final_train_step{final['train_frame_step']}"
+    export.mkdir()
+    (export / "data.yaml").write_text("train: synthetic\n")
+    splits = tmp_path / "splits"
+    splits.mkdir()
+    for name in ("challenging_train", "challenging_test"):
+        (splits / f"{name}_split.txt").write_text("synthetic\n")
+    monkeypatch.setattr(final_eval, "load_protocol", lambda path: protocol)
+    monkeypatch.setattr(final_eval, "challenging_split", lambda root: (
+        [("5", "train")], [("9", "test")]))
+    monkeypatch.setattr(final_eval, "load_exported_split", lambda root, train: _data())
+    def fake_predict(adapter, model, test, settings, device, report_dir):
+        frames = candidate_runner.predict_frames(adapter, model, _data(), settings, device)
+        return frames, [frame["sample_id"] for frame in frames]
+
+    monkeypatch.setattr(final_eval, "predict_test_split", fake_predict)
+    arguments = ["final_eval.py", "--family", "dfine", "--name", "frozen_dfine",
+                 "--dfine-reg-max", "32", "--epochs", "1", "--device", "cpu"]
+    with patch.object(sys, "argv", arguments):
+        final_eval.main()
+
+    root = tmp_path / "dfine"
+    assert (root / "final_runs" / "frozen_dfine" / "model.pt").is_file()
+    report = json.loads((root / "held_out_reports" / "frozen_dfine_evaluation.json").read_text())
+    assert report["mode"] == "held-out"
+    assert report["metadata"]["official_split"] == "challenging_test"
+    assert report["metadata"]["refinement_bins"] == 32
+    assert "mAP75" in report["diagnostics"]["overall"]
+    assert report["metrics"]["params"] > 0
+    with patch.object(sys, "argv", arguments), pytest.raises(SystemExit) as error:
+        final_eval.main()
+    assert error.value.code == 2
