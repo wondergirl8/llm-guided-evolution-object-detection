@@ -30,7 +30,7 @@ try:
     from . import map_reporter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from .candidate_runner import code_revision, load_protocol, sha256_file
-    from .export_split import events_suffix
+    from .export_split import events_from_tag, events_suffix
     from .fred_splits import challenging_split, sequence_frames
     from .proxy_data import REVISION, STEP_US, load_annotations
     from .result_contract import validate_gene_id
@@ -38,7 +38,7 @@ except ImportError:
     import map_reporter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from candidate_runner import code_revision, load_protocol, sha256_file
-    from export_split import events_suffix
+    from export_split import events_from_tag, events_suffix
     from fred_splits import challenging_split, sequence_frames
     from proxy_data import REVISION, STEP_US, load_annotations
     from result_contract import validate_gene_id
@@ -101,6 +101,9 @@ def main():
     parser.add_argument("--weights", default=None,
                         help="Optional pretrained checkpoint (e.g. yolo11n.pt); default from scratch")
     parser.add_argument("--protocol", default=str(DEFAULT_PROTOCOL))
+    parser.add_argument("--events", default=None,
+                        help='Event frames, e.g. "raw_w10000_polarity" (default: protocol\'s '
+                             "challenging.events)")
     parser.add_argument("--epochs", type=int, default=None, help="Override protocol final.epochs")
     parser.add_argument("--seed", type=int, default=None,
                         help="Training seed (default protocol proxy.seed); repeat with others to confirm")
@@ -115,7 +118,7 @@ def main():
     epochs = args.epochs or final["epochs"]
     seed = proxy["seed"] if args.seed is None else args.seed
     data_root = FRED_DIR / challenging["data_root"]
-    events = challenging.get("events")
+    events = events_from_tag(args.events) if args.events else challenging.get("events")
     data_yaml = (data_root / f"final_train_step{final['train_frame_step']}{events_suffix(events)}"
                  / "data.yaml")
     if not data_yaml.is_file():
