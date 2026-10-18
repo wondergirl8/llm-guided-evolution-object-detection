@@ -202,7 +202,12 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
           flush=True)
 
     try:
-        adapter.train(model, train_data, proxy, device)
+        if family == "yolo11":
+            args_path = Path(sota_root) / "training_args" / gene_id / "args.yaml"
+            adapter.train(model, train_data, proxy, device, args_path=args_path)
+            print(f"Saved Ultralytics training arguments: {args_path}", flush=True)
+        else:
+            adapter.train(model, train_data, proxy, device)
 
         model_dir = Path(sota_root) / "trained_models"
         model_dir.mkdir(parents=True, exist_ok=True)

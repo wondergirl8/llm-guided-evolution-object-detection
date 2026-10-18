@@ -94,6 +94,12 @@ def _ultralytics_device(device):
 class UltralyticsYolo11Adapter(FamilyAdapter):
     name = "yolo11"
 
+    def training_options(self):
+        """Return the frozen optimizer, schedule and augmentation overrides."""
+        training = self.settings["training"]
+        return {**{key: value for key, value in training.items() if key != "augmentation"},
+                **training["augmentation"]}
+
     def build(self, variant_path, num_classes, device):
         from ultralytics import YOLO
 
@@ -108,28 +114,41 @@ class UltralyticsYolo11Adapter(FamilyAdapter):
         # Built from YAML: random initialization, no pretrained weights.
         return YOLO(str(model_yaml), task="detect")
 
-    def train(self, model, data, proxy, device):
+    def train(self, model, data, proxy, device, args_path=None):
         # Disk datasets (export_split.py) come as {"data_yaml": ...}; in-memory
         # proxy frames are exported once on first use.
         data_yaml = data.get("data_yaml") or export_dataset(
             data, proxy, self.fred_dir / proxy["cache_dir"])
-        model.train(
-            data=str(data_yaml),
-            epochs=proxy["epochs"],
-            imgsz=proxy["img_width"],
-            batch=proxy["batch_size"],
-            seed=proxy["seed"],
-            deterministic=True,
-            pretrained=False,
-            device=_ultralytics_device(device),
-            workers=self.settings.get("workers", 8),
-            project=str(self.workdir),
-            name="train",
-            exist_ok=True,
-            val=False,
-            plots=False,
-            verbose=False,
-        )
+        trained = False
+        try:
+            model.train(
+                data=str(data_yaml),
+                epochs=proxy["epochs"],
+                imgsz=proxy["img_width"],
+                batch=proxy["batch_size"],
+                seed=proxy["seed"],
+                deterministic=True,
+                pretrained=False,
+                device=_ultralytics_device(device),
+                workers=self.settings.get("workers", 8),
+                project=str(self.workdir),
+                name="train",
+                exist_ok=True,
+                val=False,
+                plots=False,
+                verbose=False,
+                **self.training_options(),
+            )
+            trained = True
+        finally:
+            if args_path is not None:
+                trainer_args = self.workdir / "train" / "args.yaml"
+                if trainer_args.is_file():
+                    args_path = Path(args_path)
+                    args_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(trainer_args, args_path)
+                elif trained:
+                    raise FileNotFoundError(f"Ultralytics did not write {trainer_args}")
 
     def predict(self, model, images, proxy, device):
         # Cached frames are RGB; Ultralytics treats numpy input as BGR.
