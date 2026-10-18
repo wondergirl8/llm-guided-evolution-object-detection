@@ -70,7 +70,9 @@ CONSTANT_RULES_PATH = _FAMILY["rules"]
 OUTPUT_DIR = os.path.join(ROOT_DIR, f"fred_{SEED_FAMILY}_output" if SEED_FAMILY in ("dfine", "rtdetr")
                           else "fred_yolo11_output")
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
-SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
+# A run can submit its jobs with its own copy of slurm_config.yaml (e.g. to
+# request faster GPUs) without changing the shared file.
+SLURM_CONFIG_DIR = os.getenv("LLMGE_SLURM_CONFIG_DIR", os.path.join(ROOT_DIR, "slurm-config"))
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
 GLOBAL_DATA_PATH = os.path.join(ROOT_DIR, "global_data")
 HOSTNAME_DIR = os.path.join(ROOT_DIR, "hostname.log")
