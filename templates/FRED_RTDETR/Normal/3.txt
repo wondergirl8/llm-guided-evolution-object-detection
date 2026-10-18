@@ -1,0 +1,7 @@
+Improve this class's efficiency without losing the high-resolution detail needed
+for FRED's small drones. Keep its constructor, forward output, and multiple-of-32 input behavior.
+
+Current class:
+```python
+{}
+```

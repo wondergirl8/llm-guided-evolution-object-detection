@@ -1,0 +1,7 @@
+Improve this RT-DETR architecture class for tiny drones in FRED Event frames.
+Keep the fixed public interface and make one focused, resource-conscious change.
+
+Current class:
+```python
+{}
+```

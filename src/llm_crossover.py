@@ -70,7 +70,8 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     if not code_from_llm or code_from_llm == "ERROR":
         # Keep the first parent's chunk rather than writing the prompt into the model
         code_from_llm = x.strip()
-    elif "dfine" in os.path.basename(input_filename_x) or "/dfine/" in input_filename_x:
+    elif any(family in os.path.basename(input_filename_x) or f"/{family}/" in input_filename_x
+             for family in ("dfine", "rtdetr")):
         code_from_llm = strip_leading_imports(code_from_llm)
 
     # Insert note if present

@@ -1,0 +1,45 @@
+You are replacing one complete architecture class in the Event-only original RT-DETR seed.
+The surrounding preamble is protected and supplies the official building blocks,
+contrastive denoising, Hungarian matcher, VFL/L1/GIoU criterion, and predict contract.
+
+1. Output only one executable Python class in a single Markdown code block. Keep
+   the original class name, constructor signature, and forward signature. The
+   block must contain nothing but that class: no helper classes, functions,
+   constants, or code outside it. Write helpers as methods or submodules of the
+   class.
+2. Do not add imports, file I/O, network calls, package installation, pretrained
+   weight loading, or new option markers. Use the symbols defined in the
+   protected preamble (ConvNormLayer, BasicBlock, BottleNeck, Blocks,
+   RepVggBlock, CSPRepLayer, TransformerEncoderLayer, TransformerEncoder, MLP,
+   MSDeformableAttention, TransformerDecoderLayer, TransformerDecoder,
+   get_contrastive_denoising_training_group, inverse_sigmoid,
+   bias_init_with_prob) or build layers directly from torch.nn.
+3. Preserve the fixed three-stage interface:
+   - PResNet(depth) sets self.out_channels (three ints) and
+     self.out_strides == [8, 16, 32], and forward returns a list of three maps at
+     strides 8, 16 and 32 with those channel counts.
+   - HybridEncoder(in_channels, hidden_dim, expansion, dim_feedforward) sets
+     self.out_channels (three ints) and returns a list of three maps with exactly
+     the input maps' spatial sizes and those channel counts.
+   - RTDETRTransformer(num_classes, hidden_dim, num_queries, feat_channels,
+     num_decoder_layers, num_denoising) keeps self.num_decoder_layers and
+     forward(feats, targets=None) returns pred_logits [B,Q,num_classes] and
+     sigmoid-normalized cxcywh pred_boxes [B,Q,4]. In training it also returns
+     aux_outputs with exactly num_decoder_layers entries (every earlier decoder
+     layer plus the encoder top-k proposals) and, when denoising queries exist,
+     dn_aux_outputs and dn_meta from get_contrastive_denoising_training_group.
+4. The protected wrapper verifies these shapes and finite, [0,1]-normalized
+   boxes. Keep every prediction differentiable.
+5. Input height and width are any multiples of 32. Do not assume a fixed Event
+   frame width or height, and do not change the three-channel Event input.
+6. Keep attention memory bounded: avoid full self-attention over the stride-8
+   or stride-16 token maps, and keep a bounded query count.
+7. Favor localization of tiny drones while keeping parameter and activation use
+   reasonable. Do not edit the matcher, loss, class mapping, confidence policy,
+   NMS, or data loading through a mutable architecture class.
+8. ConvNormLayer(ch_in, ch_out, kernel_size, stride, padding=None, bias=False,
+   act=None) is Conv2d + BatchNorm2d + optional activation; act is one of
+   None, "relu", "silu", "gelu", or "leaky_relu".
+9. Create every new tensor on the input's device and dtype (for example
+   torch.zeros(..., device=x.device, dtype=x.dtype)). Never move tensors to
+   the CPU or create CPU tensors inside forward.

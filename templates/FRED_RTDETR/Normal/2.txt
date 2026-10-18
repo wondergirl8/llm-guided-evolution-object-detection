@@ -1,0 +1,7 @@
+Improve multiscale feature quality for small Event-frame objects in this class.
+Preserve all tensor shapes, strides, and the protected RT-DETR output contract.
+
+Current class:
+```python
+{}
+```

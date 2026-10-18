@@ -61,7 +61,8 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
         # Keep the parent's chunk rather than writing the prompt into the model
         code_from_llm = code2llm.strip()
     else:
-        if "dfine" in os.path.basename(input_filename) or "/dfine/" in input_filename:
+        if any(family in os.path.basename(input_filename) or f"/{family}/" in input_filename
+               for family in ("dfine", "rtdetr")):
             code_from_llm = strip_leading_imports(code_from_llm)
         valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
         if not valid_code:
