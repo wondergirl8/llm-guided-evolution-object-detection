@@ -16,6 +16,7 @@ from utils.print_utils import *
 
 from typing import Optional
 import requests
+from local_llm_request import post_with_retry
 import huggingface_hub
 from huggingface_hub import InferenceClient
 import textwrap
@@ -536,7 +537,7 @@ def get_llm_server_hostname():
 
 def submit_mixtral_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
     if server_url is None:
-        server_url = f"http://{os.getenv('SERVER_HOSTNAME', 'localhost')}:{PORT}/generate"
+        server_url = f"http://{get_llm_server_hostname()}:{PORT}/generate"
     payload = {
         "prompt": prompt,
         "max_new_tokens": max_new_tokens, # can change to random between 800 - 1000 if needed
@@ -546,14 +547,8 @@ def submit_mixtral_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature=
 
     headers = {"Content-Type": "application/json"}
 
-    llm_hostname = get_llm_server_hostname()
-    
-    print(llm_hostname)
-
-    server_url = f"http://{llm_hostname}:{PORT}/generate"
-    
     try:
-        response = requests.post(server_url, headers=headers, json=payload)
+        response = post_with_retry(server_url, headers=headers, payload=payload)
         
         if response.status_code == 200:
             output_txt = response.json().get("generated_text", "No output received.")
@@ -584,7 +579,7 @@ def submit_deepseek_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature
     headers = {"Content-Type": "application/json"}
     
     try:
-        response = requests.post(server_url, headers=headers, json=payload)
+        response = post_with_retry(server_url, headers=headers, payload=payload)
         
         if response.status_code == 200:
             output_txt = response.json().get("generated_text", "No output received.")
