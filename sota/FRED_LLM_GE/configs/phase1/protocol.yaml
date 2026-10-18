@@ -90,6 +90,24 @@ families:
       num_queries: 64
       num_layers: 3
       reg_max: 16
+  rtdetr:
+    # Original RT-DETR (v1) ported from lyuwenyu/RT-DETR, trained from scratch
+    # on the challenging search split; see docs/SEED_RTDETR_PLAN.md. Frames are
+    # resized to proxy.img_width and zero-padded to a multiple of 32.
+    seed_file: seeds/seed_rtdetr.py
+    data: challenging_search
+    # Official AdamW settings (one learning rate: no pretrained backbone).
+    lr: 0.0001
+    weight_decay: 0.0001
+    grad_clip: 0.1
+    # Accumulate gradients to retain proxy.batch_size on one GPU.
+    microbatch_size: 2
+    workers: 8
+    model:
+      # Seed backbone: ResNet-vd depth 18, 34, 50 or 101 (official presets).
+      depth: 50
+      num_queries: 300
+      num_denoising: 100
   tiny_yolo11:
     # Relative to sota/FRED_LLM_GE; used when --model is "network".
     seed_file: seeds/seed_yolo11.py
