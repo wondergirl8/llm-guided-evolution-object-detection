@@ -43,3 +43,6 @@ contrastive denoising, Hungarian matcher, VFL/L1/GIoU criterion, and predict con
 9. Create every new tensor on the input's device and dtype (for example
    torch.zeros(..., device=x.device, dtype=x.dtype)). Never move tensors to
    the CPU or create CPU tensors inside forward.
+
+Now write the complete improved class, formatted as a single python code block
+like the current class above, and write nothing after that block.
