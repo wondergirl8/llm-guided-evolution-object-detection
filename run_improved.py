@@ -1063,6 +1063,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     llm_model = args.llm_model
 
+    # run.sh supplies legacy checkpoint names. An explicit FRED run tag keeps
+    # both checkpoint files in the same experiment-specific directory.
+    if "RUN_CHECKPOINT_DIR" in globals():
+        if not RUN_CHECKPOINT_DIR:
+            parser.error(
+                "set a fresh FRED_RUN_TAG, e.g. yolo11_20261017_eot0_trial1"
+            )
+        args.checkpoints = RUN_CHECKPOINT_DIR
+        args.global_path = RUN_CHECKPOINT_DIR
+        print(f"FRED run tag: {RUN_TAG}; checkpoints: {RUN_CHECKPOINT_DIR}", flush=True)
+
     PROMPT_GLOB = resolve_prompt_glob(args.prompt_group)
 
     print(DNA_TXT)

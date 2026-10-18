@@ -13,11 +13,22 @@ configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.c
 import math
 import os
 import platform
+import re
 
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FRED_DIR = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE")
 SEED_FAMILY = os.getenv("FRED_SEED_FAMILY", "yolo11")
+RUN_TAG = os.getenv("FRED_RUN_TAG", "")
+if RUN_TAG and not re.fullmatch(
+    rf"{re.escape(SEED_FAMILY)}_[0-9]{{8}}_eot[01]_[a-z0-9][a-z0-9_-]*", RUN_TAG
+):
+    raise ValueError(
+        "FRED_RUN_TAG must be <family>_YYYYMMDD_eot0-or-eot1_<experiment>, "
+        "for example yolo11_20261017_eot0_trial1"
+    )
+RUN_ROOT = os.path.join(ROOT_DIR, "fred_runs", RUN_TAG) if RUN_TAG else None
+RUN_CHECKPOINT_DIR = os.path.join(RUN_ROOT, "checkpoints") if RUN_ROOT else None
 _FAMILIES = {
     # SOTA_ROOT holds models/, results/ and trained_models/ for the family.
     "yolo11": {
@@ -25,9 +36,7 @@ _FAMILIES = {
         "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11n.yaml"),
         "prompt_group": "FRED_YOLO11/Normal",
         "rules": "templates/FRED_YOLO11/ConstantRules.txt",
-        # 80 epochs of YOLO11n at 1280 can outlast the 40 min default; the
-        # evaluation job itself is limited to 4 h.
-        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+        "eval_timeout": 8 * 60 * 60,
     },
     "tiny_yolo11": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo11"),
@@ -45,7 +54,7 @@ _FAMILIES = {
     },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
-SOTA_ROOT = _FAMILY["sota_root"]
+SOTA_ROOT = os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else _FAMILY["sota_root"]
 DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
 SEED_NETWORK = _FAMILY["seed"]
 MODEL = "network"
@@ -59,8 +68,9 @@ PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
-OUTPUT_DIR = os.path.join(ROOT_DIR, "fred_dfine_output" if SEED_FAMILY == "dfine"
-                          else "fred_yolo11_output")
+OUTPUT_DIR = (os.path.join(RUN_ROOT, "operator_jobs") if RUN_ROOT else
+              os.path.join(ROOT_DIR, "fred_dfine_output" if SEED_FAMILY == "dfine"
+                           else "fred_yolo11_output"))
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
 SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
@@ -100,6 +110,8 @@ RUN_COMMAND = "bash" if LOCAL else "sbatch"
 DELAYED_CHECK = not LOCAL
 MACOS = platform.system() == "Darwin"
 RUNLINE_AMP = ""
+# This clock starts at sbatch submission, including queue time. The evaluation
+# job's own four-hour Slurm limit still caps its runtime after it starts.
 EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
     os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(_FAMILY["eval_timeout"]))
 )
@@ -126,6 +138,8 @@ QC_CHECK_BOOL = False
 HUGGING_FACE_BOOL = False
 PROB_QC = 0.0
 PROB_EOT = 0.0
+if RUN_TAG and f"_eot{int(PROB_EOT > 0)}_" not in RUN_TAG:
+    raise ValueError("FRED_RUN_TAG EoT flag does not match PROB_EOT")
 NUM_EOT_ELITES = 1
 GENERATION = 0
 
@@ -136,7 +150,7 @@ PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
 # run_improved.py loops range(1, num_generations), so 21 runs generations
 # 1-20 after the seed population. Resubmitting resumes from the latest
-# checkpoint in fred_yolo11_checkpoints.
+# checkpoint in the configured run directory.
 num_generations = 21
 start_population_size = 4
 population_size = 4
