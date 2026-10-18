@@ -33,6 +33,9 @@ def clean_code_from_llm(code_from_llm):
     # Take the first non-empty closed ``` block. LLMs sometimes open with a stray
     # empty fence, and a reply cut off at the token limit leaves its last block
     # unclosed; that partial code must not be used.
+    # Llama 3.3 sometimes writes an empty fence glued to the code
+    # ("```python\n```class ..."); reopen the block at the code.
+    code_from_llm = re.sub(r"```[^\n`]+\n```(?=\S)", "```python\n", code_from_llm or "")
     blocks = re.findall(r"```[^\n`]*\n(.*?)```", code_from_llm or "", re.DOTALL)
     for block in blocks:
         if block.strip():
