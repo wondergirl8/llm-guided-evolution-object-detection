@@ -27,6 +27,7 @@ import yaml
 try:
     from . import map_reporter
     from .adapters.dfine import DFINEAdapter
+    from .adapters.rtdetr import RTDETRAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from .export_split import dataset_parts
@@ -35,6 +36,7 @@ try:
 except ImportError:
     import map_reporter
     from adapters.dfine import DFINEAdapter
+    from adapters.rtdetr import RTDETRAdapter
     from adapters.tiny_yolo11 import TinyYolo11Adapter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from export_split import dataset_parts
@@ -45,7 +47,7 @@ FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
 ADAPTERS = {adapter.name: adapter for adapter in
-            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter)}
+            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter, RTDETRAdapter)}
 
 # Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
 FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
@@ -147,8 +149,8 @@ def challenging_search(protocol, family=None):
     """Settings and data for the challenging search split (export_split.py --set search).
 
     Candidates train on challenging_train minus the held-out val_sequences
-    and are scored on the val_sequences. D-FINE reads the exported images
-    lazily; Ultralytics consumes the export's data.yaml directly.
+    and are scored on the val_sequences. D-FINE and RT-DETR read the exported
+    images lazily; Ultralytics consumes the export's data.yaml directly.
     """
     challenging = protocol["challenging"]
     data_root = FRED_DIR / challenging["data_root"]
@@ -161,7 +163,7 @@ def challenging_search(protocol, family=None):
     proxy = dict(protocol["proxy"], train_sequences=[s for s, _ in train],
                  val_sequences=[s for s, _ in val], frame_step=train_step,
                  val_frame_step=val_step, epochs=challenging["search"]["epochs"])
-    if family == "dfine":
+    if family in ("dfine", "rtdetr"):
         train_data = load_exported_split(train_root, train)
     else:
         frames = len((train_root / "train.txt").read_text().split())
