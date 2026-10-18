@@ -86,7 +86,7 @@ def pareto_mask(df):
 def load_seed(path):
     if not os.path.isfile(path):
         return None
-    map50, map50_95, params = pd.read_csv(path, header=None).iloc[0]
+    map50, map50_95, params = pd.read_csv(path, header=None).iloc[0, :3]
     return {"mAP50": map50, "mAP50_95": map50_95, "params": params}
 
 

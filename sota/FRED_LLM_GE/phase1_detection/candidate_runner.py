@@ -16,6 +16,7 @@ elites are retrained at full budget later.
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -47,8 +48,8 @@ DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
 ADAPTERS = {adapter.name: adapter for adapter in
             (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter)}
 
-# Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
-FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
+# Excluded by the orchestrator's INVALID_FITNESS_MAX filter.
+FAILED_RESULT = DetectionResult(-math.inf, -math.inf, math.inf)
 
 
 def load_protocol(path):
@@ -79,7 +80,7 @@ def code_revision():
 def write_failure_results(sota_root, gene_id, start_time, message):
     """Record worst-case fitness for candidates that cannot be evaluated."""
     train_time = time.time() - start_time
-    write_results(sota_root, gene_id, FAILED_RESULT)
+    write_results(sota_root, gene_id, FAILED_RESULT, reason=message)
     print(f"ERROR evaluating generated model: {message}")
     print(f"Wrote worst-case fitness after {train_time:.1f}s")
     print('='*120);print('job done');print('='*120)
@@ -172,31 +173,29 @@ def challenging_search(protocol, family=None):
 
 def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
     start_time = time.time()
-    adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
-    if adapter.settings.get("data") == "challenging_search":
-        proxy, train_data, load_val = challenging_search(protocol, family)
-    else:
-        proxy = protocol["proxy"]
-        train_data = load_val = None
-    torch.manual_seed(proxy["seed"])
-    config = {"family": family, "proxy": proxy, "family_settings": adapter.settings}
-
-    # This is LLM Guided Code
-    # Build the candidate; a broken LLM-generated architecture gets worst-case fitness
     try:
+        adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
+        if adapter.settings.get("data") == "challenging_search":
+            proxy, train_data, load_val = challenging_search(protocol, family)
+        else:
+            proxy = protocol["proxy"]
+            train_data = load_val = None
+        torch.manual_seed(proxy["seed"])
+        config = {"family": family, "proxy": proxy, "family_settings": adapter.settings}
+
+        # Build and prepare the candidate before starting expensive training.
         variant_path = adapter.variant_path(model_name, variant_dir)
         model = adapter.build(variant_path, num_classes=1, device=device)
+        param_count = adapter.param_count(model)
+        if load_val is None:
+            train_data, val_data = proxy_data(proxy)
+        else:
+            val_data = load_val()
+        train_frames = train_data.get("frames") or len(train_data["images"])
     except Exception as e:
-        write_failure_results(sota_root, gene_id, start_time, repr(e))
+        write_failure_results(sota_root, gene_id, start_time, f"setup_or_build_failed: {e!r}")
         return
 
-    param_count = adapter.param_count(model)
-
-    if load_val is None:
-        train_data, val_data = proxy_data(proxy)
-    else:
-        val_data = load_val()
-    train_frames = train_data.get("frames") or len(train_data["images"])
     print(f"family: {family}, train frames: {train_frames}, "
           f"val frames: {len(val_data['images'])}, params: {param_count}, device: {device}",
           flush=True)
@@ -224,7 +223,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
         result, report_path = map_reporter.report(payload, sota_root=sota_root,
                                                   gene_id=gene_id, mode="validation")
     except Exception as e:
-        write_failure_results(sota_root, gene_id, start_time, repr(e))
+        write_failure_results(sota_root, gene_id, start_time, f"train_or_eval_failed: {e!r}")
         return
     train_time = time.time() - start_time
 
@@ -260,7 +259,7 @@ def main():
     if args.device == "cpu" and os.environ.get("CUDA_VISIBLE_DEVICES"):
         message = (f"GPU allocated (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}) "
                    "but CUDA is unavailable on this node; not training on CPU")
-        write_failure_results(args.sota_root, gene_id, time.time(), message)
+        write_failure_results(args.sota_root, gene_id, time.time(), f"gpu_unavailable: {message}")
         raise SystemExit(1)
 
     run(gene_id, args.model, args.variant_dir, args.family, load_protocol(args.protocol),

@@ -3,6 +3,7 @@ import copy
 import glob
 import time
 import json
+import csv
 import string
 import random
 import pickle
@@ -18,6 +19,7 @@ from deap.tools import HallOfFame, ParetoFront
 from functools import partial
 from src.utils.print_utils import print_population, print_scores, box_print, print_job_info
 from src.llm_utils import split_file, retrieve_base_code
+from sota.FRED_LLM_GE.phase1_detection.protocol_fingerprint import verify_fingerprint
 from src.cfg.constants import *
 from src.cfg import constants
 import glob
@@ -458,7 +460,7 @@ def submit_run(gene_id):
             local_output = result.stdout.strip() + '\n' + result.stderr.strip()
             print("\t‣ Output:", local_output, flush=True)
             job_id = None
-            successful_sub_flag = True
+            successful_sub_flag = result.returncode == 0
         elif result.returncode == 0:
             print("\t‣ Script Submitted Successfully.\n\t‣ Output:", result.stdout.strip())
             successful_sub_flag = True
@@ -472,6 +474,11 @@ def submit_run(gene_id):
     out_dir = os.path.join(OUTPUT_DIR, str(GENERATION))
     file_path = os.path.join(out_dir, f'{gene_id}_model.sh')
     successful_sub_flag, job_id, local_output = submit_bash_py(file_path, gene_id)
+    if not successful_sub_flag:
+        reason = ('evaluation_process_failed: local command returned an error' if LOCAL else
+                  'evaluation_submission_failed: sbatch rejected the job')
+        record_failure(gene_id, reason)
+        return
     GLOBAL_DATA[gene_id]['status'] = 'running eval'
     GLOBAL_DATA[gene_id]['results_job'] = job_id
     GLOBAL_DATA[gene_id]['eval_start_time'] = time.time()
@@ -483,6 +490,25 @@ def evalModel(individual):
     # Initially, we don't have a fitness value
     return None
 
+def record_failure(gene_id, reason):
+    """Give an unsuccessful candidate the same invalid fitness in every path."""
+    entry = GLOBAL_DATA[gene_id]
+    entry.update(status='completed', fitness=INVALID_FITNESS_MAX, failure_reason=str(reason))
+    if "RUN_CHECKPOINT_DIR" in globals():
+        from sota.FRED_LLM_GE.phase1_detection.result_contract import DetectionResult, write_results
+        write_results(SOTA_ROOT, gene_id, DetectionResult(*INVALID_FITNESS_MAX), reason=str(reason))
+
+def log_failure_counts(generation, individuals):
+    """Print failures among this generation's evaluated individuals, by cause."""
+    counts = {}
+    for gene_id in {ind[0] for ind in individuals}:
+        reason = GLOBAL_DATA.get(gene_id, {}).get('failure_reason')
+        if reason:
+            category = reason.split(':', 1)[0]
+            counts[category] = counts.get(category, 0) + 1
+    print(f"Generation {generation} failures: {sum(counts.values())} "
+          f"of {len({ind[0] for ind in individuals})}; by reason: {counts}", flush=True)
+
 def check4model2run(gene_id):
     print(f'Checking for: SOTA_ROOT {VARIANT_DIR}/{MODEL}_{gene_id}.py')
     check_exist = f'{VARIANT_DIR}/{MODEL}_{gene_id}.py'
@@ -490,8 +516,7 @@ def check4model2run(gene_id):
     # Check if the model file exists
     if not os.path.isfile(check_exist):
         print(f'\t☠ Model file does not exist for gene_id: {gene_id}, skipping evaluation.')
-        GLOBAL_DATA[gene_id]['status'] = 'completed'
-        GLOBAL_DATA[gene_id]['fitness'] = INVALID_FITNESS_MAX
+        record_failure(gene_id, 'missing_model: generated model file is absent')
         return
 
     model_path = os.path.join(OUTPUT_DIR, str(GENERATION), f'{gene_id}_model.txt')
@@ -536,22 +561,29 @@ def check4results(gene_id):
         # The job saves the model results to a file f'{gene_id}_results.csv'
         # results_path = os.path.join(out_dir, f'{gene_id}_results.csv')
         results_path = f'{SOTA_ROOT}/results/{gene_id}_results.csv'
-        with open(results_path, 'r') as file:
-            lines = file.readlines()
-        # Skip header line (first line) and parse data line (second line)
-        results = lines[-1].strip() if len(lines) > 1 else lines[0].strip()
-        results = results.split(',')
-        fitness = [float(r.strip()) for r in results]
-        # TODO: get all features later
-        fitness = [fitness[i] for i in range(len(FITNESS_WEIGHTS))]
-        fitness = tuple(fitness)
-        
-        GLOBAL_DATA[gene_id]['status'] = 'completed'
-        GLOBAL_DATA[gene_id]['fitness'] = fitness
+        try:
+            with open(results_path, newline='') as file:
+                rows = list(csv.reader(file))
+            row = rows[-1]
+            if len(row) not in (len(FITNESS_WEIGHTS), len(FITNESS_WEIGHTS) + 1):
+                raise ValueError('wrong number of result columns')
+            fitness = tuple(float(value) for value in row[:len(FITNESS_WEIGHTS)])
+            if fitness == INVALID_FITNESS_MAX:
+                record_failure(gene_id, row[len(FITNESS_WEIGHTS)] if len(row) > len(FITNESS_WEIGHTS)
+                               and row[len(FITNESS_WEIGHTS)].strip()
+                               else 'candidate_failed: no reason supplied')
+            elif all(np.isfinite(value) for value in fitness):
+                if len(row) > len(FITNESS_WEIGHTS) and row[len(FITNESS_WEIGHTS)].strip():
+                    raise ValueError('successful result has a failure reason')
+                GLOBAL_DATA[gene_id].update(status='completed', fitness=fitness,
+                                            failure_reason=None)
+            else:
+                raise ValueError('non-finite result outside failure sentinel')
+        except (OSError, ValueError, IndexError, csv.Error) as exc:
+            record_failure(gene_id, f'invalid_result: {exc}')
         # print(f'Model from Gene: {gene_id} Evaluated')
     elif job_done is False:
-        GLOBAL_DATA[gene_id]['status'] = 'completed'
-        GLOBAL_DATA[gene_id]['fitness'] = INVALID_FITNESS_MAX
+        record_failure(gene_id, 'evaluation_job_failed: SLURM or process error')
         # print(f'Model from Gene: {gene_id} Failed to Run')
     else:
         # print('Job Has Not Finished Running Yet...', flush=True)
@@ -596,8 +628,8 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                                         'fitness':INVALID_FITNESS_MAX, 'start_time':time.time()}
             
             if GLOBAL_DATA[gene_id]['sub_flag']==False:
-                ind.fitness.values = INVALID_FITNESS_MAX # Max error
-                GLOBAL_DATA[gene_id]['status'] == "completed"      
+                record_failure(gene_id, 'submission_failed: no job was submitted')
+                ind.fitness.values = INVALID_FITNESS_MAX
             if ind.fitness.values == PLACEHOLDER_FITNESS:  # If fitness not assigned
                 # check for gene_id_model.txt file
                 if GLOBAL_DATA[gene_id]['status'] == 'subbed file':
@@ -609,8 +641,8 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                     no_error_flag = check4results(gene_id) # here we look for the results file for gene_id
                     if no_error_flag == False:
                         print(f"LLM Failed for Gene: {gene_id}")
-                        ind.fitness.values = INVALID_FITNESS_MAX 
-                        GLOBAL_DATA[gene_id]['status'] = 'completed'
+                        record_failure(gene_id, 'evaluation_job_failed: SLURM or process error')
+                        ind.fitness.values = INVALID_FITNESS_MAX
                 
                 
                 if GLOBAL_DATA[gene_id]['status'] == "completed":
@@ -620,14 +652,13 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                 elif time.time() - GLOBAL_DATA[gene_id].get('eval_start_time', GLOBAL_DATA[gene_id]['start_time']) > timeout:
                     print(f"Timeout for gene ID {gene_id} after {timeout} seconds without evaluation result")
                     cancel_eval_job(gene_id, f"no evaluation result for {timeout} seconds")
-                    ind.fitness.values = INVALID_FITNESS_MAX 
-                    GLOBAL_DATA[gene_id]['fitness'] = INVALID_FITNESS_MAX
-                    GLOBAL_DATA[gene_id]['status'] = 'FAILED: TIMEOUT'
+                    record_failure(gene_id, f'evaluation_timeout: no result after {timeout}s')
+                    ind.fitness.values = INVALID_FITNESS_MAX
                 else:
                     if 'results_job' not in GLOBAL_DATA[gene_id].keys():
-                        ind.fitness.values = INVALID_FITNESS_MAX # Max error
+                        record_failure(gene_id, 'submission_failed: no evaluation job id')
+                        ind.fitness.values = INVALID_FITNESS_MAX
                         print(f'\t☠ No Placeholder Fitness for: {gene_id}')
-                        GLOBAL_DATA[gene_id]['status'] == "completed"
                     else:
                         print(f"\t‣ Still Waiting On: Gene: {gene_id}", flush=True)
                         print_job_info(GLOBAL_DATA[gene_id])
@@ -909,8 +940,28 @@ def remove_duplicates(population):
     return unique_individuals
 
 # --- Checkpoint Functions --- #
+_ACTIVE_FINGERPRINT = None
+
+def run_fingerprint():
+    """Identify the FRED protocol and inputs that must stay fixed across resume."""
+    global _ACTIVE_FINGERPRINT
+    if "RUN_CHECKPOINT_DIR" not in globals():
+        return None
+
+    from sota.FRED_LLM_GE.phase1_detection.protocol_fingerprint import compute_fingerprint
+    identity = compute_fingerprint(ROOT_DIR, SEED_FAMILY, RUN_TAG, SEED_NETWORK)
+    if _ACTIVE_FINGERPRINT is not None and identity != _ACTIVE_FINGERPRINT:
+        raise RuntimeError('FRED protocol changed during this run; refusing checkpoint update')
+    _ACTIVE_FINGERPRINT = identity
+    return identity
+
 def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint_data=None):
+    fingerprint = run_fingerprint()
     os.makedirs(folder_name, exist_ok=True)
+    filename = os.path.join(folder_name, f'checkpoint_gen_{gen}.pkl')
+    if os.path.exists(filename):
+        with open(filename, 'rb') as file:
+            verify_fingerprint(pickle.load(file), filename, fingerprint)
 
     if global_path is not None:
         os.makedirs(global_path, exist_ok=True)
@@ -921,6 +972,7 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                     stored_global_data = pickle.load(file)
                 except EOFError:
                     stored_global_data = {}  
+            verify_fingerprint(stored_global_data, global_file, fingerprint)
         else:
             stored_global_data = {}
 
@@ -937,8 +989,10 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
             stored_global_data = {
                 "GLOBAL_DATA": GLOBAL_DATA,
                 "GLOBAL_DATA_HIST": GLOBAL_DATA_HIST,
-                "GLOBAL_DATA_ANCESTRY": GLOBAL_DATA_ANCESTRY
+                "GLOBAL_DATA_ANCESTRY": GLOBAL_DATA_ANCESTRY,
             }
+        if fingerprint is not None:
+            stored_global_data['protocol_fingerprint'] = fingerprint
 
         with open(global_file, 'wb') as file:
             pickle.dump(stored_global_data, file)
@@ -949,7 +1003,8 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
             "population": population,
             "hof": hof, 
         }
-    filename = os.path.join(folder_name, f'checkpoint_gen_{gen}.pkl')
+    if fingerprint is not None:
+        checkpoint_data = dict(checkpoint_data, protocol_fingerprint=fingerprint)
     with open(filename, 'wb') as file:
         pickle.dump(checkpoint_data, file)
     print(f"Population data saved as {filename}")
@@ -965,6 +1020,9 @@ def extract_generation(filename, kind):
     return int(matcher.group(1)) if matcher else None
 
 def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path="checkpoints", global_file=None):
+    fingerprint = run_fingerprint()
+    if fingerprint is not None and os.path.exists(folder_name) != os.path.exists(global_path):
+        raise RuntimeError('FRED checkpoint is incomplete: population and global paths must both exist')
     if not os.path.exists(folder_name) or not os.path.exists(global_path):
         print("Path does not exist, returning none for checkpoints")
         return None, None, None
@@ -981,6 +1039,7 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         filepath = os.path.join(folder_name, checkpoint_file)
         with open(filepath, 'rb') as file:
             population_data = pickle.load(file)
+        verify_fingerprint(population_data, filepath, fingerprint)
         print(f"Loaded population data from {filepath}")
         start_gen = extract_generation(checkpoint_file, "checkpoint") + 1
 
@@ -992,7 +1051,14 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         filepath = os.path.join(global_path, global_file)
         with open(filepath, 'rb') as file:
             global_data = pickle.load(file)
+        verify_fingerprint(global_data, filepath, fingerprint)
         print(f"Loaded global data from {filepath}")
+
+    if fingerprint is not None and bool(population_data) != bool(global_data):
+        raise RuntimeError('FRED checkpoint is incomplete: population and global data must both exist')
+    if fingerprint is not None and checkpoint_file and global_file:
+        if extract_generation(checkpoint_file, 'checkpoint') != extract_generation(global_file, 'global'):
+            raise RuntimeError('FRED checkpoint generations do not match')
 
     return population_data, start_gen, global_data
 
@@ -1106,6 +1172,8 @@ if __name__ == "__main__":
         ind.fitness.values = PLACEHOLDER_FITNESS
         
     check_and_update_fitness(population)
+    if not population_data:
+        log_failure_counts(0, population)
     # Evolution
     for gen in range(start_gen, num_generations if migration_gen == 0 else ((start_gen + migration_gen - 1) // migration_gen) * migration_gen + 1):
         GEN_COUNT = gen
@@ -1136,6 +1204,7 @@ if __name__ == "__main__":
             for ind in population:
                 ind.fitness.values = PLACEHOLDER_FITNESS
             check_and_update_fitness(population)
+            log_failure_counts(gen, population)
             population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
             box_print("CURRENT POPULATION SIZE:", len(population))
 
@@ -1213,6 +1282,7 @@ if __name__ == "__main__":
 
         GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
         check_and_update_fitness(offspring)
+        log_failure_counts(gen, offspring)
         GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
         # Replace the old population with the offspring
         population[:] = offspring
