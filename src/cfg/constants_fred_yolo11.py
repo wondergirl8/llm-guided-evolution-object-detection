@@ -54,6 +54,14 @@ _FAMILIES = {
     },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
+CANDIDATE_POLICY_MODULE = (
+    "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
+    if SEED_FAMILY == "yolo11" else None
+)
+CROSSOVER_TEMPLATE_DIR = (
+    "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
+    else "templates/CrossOver"
+)
 SOTA_ROOT = os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else _FAMILY["sota_root"]
 DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
 SEED_NETWORK = _FAMILY["seed"]

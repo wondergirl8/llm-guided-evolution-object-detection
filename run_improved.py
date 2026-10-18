@@ -19,6 +19,7 @@ from deap.tools import HallOfFame, ParetoFront
 from functools import partial
 from src.utils.print_utils import print_population, print_scores, box_print, print_job_info
 from src.llm_utils import split_file, retrieve_base_code
+from src.candidate_policy import load_candidate_policy
 from sota.FRED_LLM_GE.phase1_detection.protocol_fingerprint import verify_fingerprint
 from src.cfg.constants import *
 from src.cfg import constants
@@ -509,6 +510,29 @@ def log_failure_counts(generation, individuals):
     print(f"Generation {generation} failures: {sum(counts.values())} "
           f"of {len({ind[0] for ind in individuals})}; by reason: {counts}", flush=True)
 
+def candidate_preflight(gene_id, policy):
+    """Check the generated architecture before asking SLURM to train it."""
+    path = f'{VARIANT_DIR}/{MODEL}_{gene_id}.py'
+    try:
+        architecture_hash, params = policy.built_architecture(path)
+    except ImportError:
+        raise  # A missing Ultralytics installation is an environment failure.
+    except Exception as exc:
+        record_failure(gene_id, f'invalid_architecture: {type(exc).__name__}: {exc}')
+        return False
+    key = policy.evaluation_cache_key(architecture_hash, run_fingerprint())
+    GLOBAL_DATA[gene_id].update(architecture_hash=architecture_hash,
+                                architecture_params=params, evaluation_cache_key=key)
+    hit = EVAL_CACHE.get(key)
+    if hit:
+        fitness = tuple(hit['fitness'])
+        policy.write_cached_fitness(SOTA_ROOT, gene_id, fitness)
+        GLOBAL_DATA[gene_id].update(status='completed', fitness=fitness,
+                                    cache_source=hit['gene_id'], failure_reason=None)
+        print(f'Cached fitness for {gene_id} from {hit["gene_id"]}', flush=True)
+        return False
+    return True
+
 def check4model2run(gene_id):
     print(f'Checking for: SOTA_ROOT {VARIANT_DIR}/{MODEL}_{gene_id}.py')
     check_exist = f'{VARIANT_DIR}/{MODEL}_{gene_id}.py'
@@ -519,17 +543,11 @@ def check4model2run(gene_id):
         record_failure(gene_id, 'missing_model: generated model file is absent')
         return
 
-    model_path = os.path.join(OUTPUT_DIR, str(GENERATION), f'{gene_id}_model.txt')
+    policy = load_candidate_policy(globals())
+    if policy is not None and not candidate_preflight(gene_id, policy):
+        return
 
-    # Proceed only if the model hasn't been evaluated yet
-    if GLOBAL_DATA[gene_id]['status'] != 'running eval':
-        submit_run(gene_id)
-
-    print(f'Checking for: SOTA_ROOT {VARIANT_DIR}/{MODEL}_{gene_id}.py')
-    model_path = f'{VARIANT_DIR}/{MODEL}_{gene_id}.py'
-    if os.path.exists(model_path):
-        if GLOBAL_DATA[gene_id]['status'] != 'running eval':
-            submit_run(gene_id)
+    submit_run(gene_id)
 
 def check4results(gene_id):
     def check4error(gene_id):
@@ -577,6 +595,9 @@ def check4results(gene_id):
                     raise ValueError('successful result has a failure reason')
                 GLOBAL_DATA[gene_id].update(status='completed', fitness=fitness,
                                             failure_reason=None)
+                key = GLOBAL_DATA[gene_id].get('evaluation_cache_key')
+                if key:
+                    EVAL_CACHE[key] = {'fitness': fitness, 'gene_id': gene_id}
             else:
                 raise ValueError('non-finite result outside failure sentinel')
         except (OSError, ValueError, IndexError, csv.Error) as exc:
@@ -729,6 +750,9 @@ def delayed_mate_check(offspring):
                     print(f'\t‣ Error Loading Model Files for {new_gene_id}!!', flush=True)
 
                 failed_process = not (successful_sub_flag and job_done)
+                if failed_process and load_candidate_policy(globals()) is not None:
+                    record_failure(new_gene_id, 'operator_failed: crossover produced no valid changed architecture')
+                    continue
                 # Same as delayed_mutate_check: on failure update_individual drops
                 # the child and restores the parent.
                 individual = update_individual(individual, new_gene_id, old_gene_id=LINKED_GENES[k],
@@ -784,6 +808,9 @@ def delayed_mutate_check(offspring):
 
                     failed_process = not (successful_sub_flag and job_done)
                     old_gene_id = LINKED_GENES[k]
+                    if failed_process and load_candidate_policy(globals()) is not None:
+                        record_failure(new_gene_id, 'operator_failed: mutation produced no valid changed architecture')
+                        continue
                     individual = update_individual(individual, new_gene_id, old_gene_id=old_gene_id,
                                                    process_success=not failed_process, process_type='Mutation')
                   
@@ -984,6 +1011,8 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
             stored_global_data["GLOBAL_DATA"].update(GLOBAL_DATA)
             stored_global_data["GLOBAL_DATA_HIST"].update(GLOBAL_DATA_HIST)
             stored_global_data["GLOBAL_DATA_ANCESTRY"].update(GLOBAL_DATA_ANCESTRY)
+            if load_candidate_policy(globals()) is not None:
+                stored_global_data.setdefault("EVAL_CACHE", {}).update(EVAL_CACHE)
         else:
             print("No global data found, saving to a new file")
             stored_global_data = {
@@ -991,6 +1020,8 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                 "GLOBAL_DATA_HIST": GLOBAL_DATA_HIST,
                 "GLOBAL_DATA_ANCESTRY": GLOBAL_DATA_ANCESTRY,
             }
+            if load_candidate_policy(globals()) is not None:
+                stored_global_data["EVAL_CACHE"] = EVAL_CACHE
         if fingerprint is not None:
             stored_global_data['protocol_fingerprint'] = fingerprint
 
@@ -1110,6 +1141,7 @@ TOP_N_GENES = None
 LINKED_GENES = {}
 GLOBAL_DATA = {}
 GLOBAL_DATA_HIST = {}
+EVAL_CACHE = {}
 GLOBAL_DATA_ANCESTRY = {}
 GLOBAL_DATA_ANCESTRY[MODEL] = {'GENES':[MODEL], 'MUTATE_TYPE':["CREATED"]}
 
@@ -1156,6 +1188,7 @@ if __name__ == "__main__":
         GLOBAL_DATA = global_data["GLOBAL_DATA"]
         GLOBAL_DATA_HIST = global_data["GLOBAL_DATA_HIST"]
         GLOBAL_DATA_ANCESTRY = global_data["GLOBAL_DATA_ANCESTRY"]
+        EVAL_CACHE = global_data.get("EVAL_CACHE", {})
         population = population_data["population"]
         hof = population_data["hof"]
     else:
@@ -1246,6 +1279,9 @@ if __name__ == "__main__":
         # Apply mutation on the offspring
         box_print("Mutating", print_bbox_len=60, new_line_end=False)
         for mutant in offspring:
+            if (load_candidate_policy(globals()) is not None and
+                    GLOBAL_DATA.get(mutant[0], {}).get('failure_reason')):
+                continue
             if random.random() < mutation_probability:
                 toolbox.mutate(individual=mutant, llm_model=llm_model)
                 del mutant.fitness.values

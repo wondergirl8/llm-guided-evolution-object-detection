@@ -23,11 +23,12 @@ import numpy as np
 import torch
 import yaml
 from PIL import Image
-
 try:
+    from ..yolo11_search_space import load_and_validate, validate_built_model
     from .base import FamilyAdapter
     from .yolo11 import yolo11_prediction
 except ImportError:
+    from yolo11_search_space import load_and_validate, validate_built_model
     from base import FamilyAdapter
     from yolo11 import yolo11_prediction
 
@@ -103,16 +104,17 @@ class UltralyticsYolo11Adapter(FamilyAdapter):
     def build(self, variant_path, num_classes, device):
         from ultralytics import YOLO
 
-        config = yaml.safe_load(Path(variant_path).read_text())
-        if not isinstance(config, dict) or "backbone" not in config or "head" not in config:
-            raise ValueError("candidate must be a YAML mapping with backbone and head")
-        config["nc"] = num_classes
+        config = load_and_validate(variant_path)
+        if num_classes != config["nc"]:
+            raise ValueError("candidate class count differs from the frozen YOLO11 seed")
         self.workdir = Path(tempfile.mkdtemp(prefix="yolo11_candidate_"))
         # Ultralytics takes the model scale from the file name, not the YAML.
         model_yaml = self.workdir / f"yolo11{config.get('scale', 'n')}.yaml"
         model_yaml.write_text(yaml.safe_dump(config, sort_keys=False))
         # Built from YAML: random initialization, no pretrained weights.
-        return YOLO(str(model_yaml), task="detect")
+        model = YOLO(str(model_yaml), task="detect")
+        self.architecture_hash, self.architecture_params = validate_built_model(model)
+        return model
 
     def train(self, model, data, proxy, device, args_path=None):
         # Disk datasets (export_split.py) come as {"data_yaml": ...}; in-memory

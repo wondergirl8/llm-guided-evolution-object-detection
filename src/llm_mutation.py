@@ -15,6 +15,7 @@ if REPO_ROOT not in sys.path:
 
 from cfg.constants import *
 from utils.print_utils import box_print
+from candidate_policy import load_candidate_policy
 
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, generate_augmented_code, 
@@ -38,9 +39,6 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     print(f'Loading {input_filename} code')
     print('Using')
     parts = split_file(input_filename)
-    augment_idx = np.random.randint(1, len(parts))
-    # select code to be augmented randomly 
-    code2llm = parts[augment_idx]
     # prompt_templates = glob.glob(f'{ROOT_DIR}/templates/FixedPrompts/*/*.txt')
     # template_path = np.random.choice(prompt_templates)
     # template_path = f'{ROOT_DIR}/templates/{fname}'
@@ -53,30 +51,42 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     # Using str.format would treat JSON/dict examples in the prompt as fields.
     if "{}" not in template_txt:
         raise ValueError(f"Prompt template {fname} must contain a literal {{}} code placeholder")
-    txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
-    code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
-                                            top_p, llm_model, temperature)
-    
-    if not code_from_llm or code_from_llm == "ERROR":
-        # Keep the parent's chunk rather than writing the prompt into the model
-        code_from_llm = code2llm.strip()
-    else:
-        if "dfine" in os.path.basename(input_filename) or "/dfine/" in input_filename:
-            code_from_llm = strip_leading_imports(code_from_llm)
-        valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
-        if not valid_code:
-            print(f"Rejected generated chunk: {invalid_reason}. Falling back to parent chunk.", flush=True)
-            code_from_llm = code2llm.strip()
-
-    note_txt = extract_note(code2llm)
-    parts[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
-    # prompt_log = f'# Parent Prompt: {template_path} Root Code: {input_filename}\n'
-    # python_network_txt = prompt_log + '# --OPTION--'.join(parts)
-    python_network_txt = '# --OPTION--'.join(parts)
-    # Write the text to the file
     output_file = Path(output_filename)
     output_file.parent.mkdir(exist_ok=True, parents=True)
-    output_file.write_text(python_network_txt)
+    policy = load_candidate_policy(globals())
+    attempts = globals().get('max_gen_attempts', 5) if policy else 1
+    for attempt in range(attempts):
+        candidate_parts = parts.copy()
+        augment_idx = np.random.randint(1, len(parts))
+        code2llm = parts[augment_idx]
+        txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
+        code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
+                                                top_p, llm_model, temperature)
+        if not code_from_llm or code_from_llm == "ERROR":
+            code_from_llm = code2llm.strip()
+        else:
+            if "dfine" in os.path.basename(input_filename) or "/dfine/" in input_filename:
+                code_from_llm = strip_leading_imports(code_from_llm)
+            valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
+            if not valid_code:
+                print(f"Rejected generated chunk: {invalid_reason}.", flush=True)
+                code_from_llm = code2llm.strip()
+        note_txt = extract_note(code2llm)
+        candidate_parts[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
+        output_file.write_text('# --OPTION--'.join(candidate_parts))
+        if policy is None:
+            break
+        try:
+            if policy.differs_from_parents(output_file, input_filename):
+                break
+            print(f"Mutation attempt {attempt + 1}: unchanged parent graph", flush=True)
+        except ImportError:
+            raise  # Missing model packages are environment failures, not proposals to retry.
+        except Exception as exc:
+            print(f"Mutation attempt {attempt + 1}: invalid architecture: {exc}", flush=True)
+    else:
+        output_file.unlink(missing_ok=True)
+        raise RuntimeError(f"Mutation exhausted {attempts} architecture attempts")
 
         
     box_print(f"Python code saved to {os.path.basename(output_filename)}", print_bbox_len=120, new_line_end=False)
