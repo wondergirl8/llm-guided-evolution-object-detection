@@ -100,8 +100,9 @@ families:
     lr: 0.0001
     weight_decay: 0.0001
     grad_clip: 0.1
-    # Accumulate gradients to retain proxy.batch_size on one GPU.
-    microbatch_size: 2
+    # Accumulate gradients to retain proxy.batch_size on one GPU. 8 fits in
+    # ~26 GB at 1280 and was 2.2x faster than 2 in the R50 smoke test.
+    microbatch_size: 8
     workers: 8
     model:
       # Seed backbone: ResNet-vd depth 18, 34, 50 or 101 (official presets).
