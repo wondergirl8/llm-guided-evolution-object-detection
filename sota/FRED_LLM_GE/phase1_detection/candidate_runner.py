@@ -272,8 +272,6 @@ def main():
         if args.seed < 0:
             parser.error("--seed must be nonnegative")
         protocol["proxy"]["seed"] = args.seed
-    run(gene_id, args.model, args.variant_dir, args.family, protocol,
-        args.sota_root, args.device)
     if args.events:
         protocol["challenging"]["events"] = events_from_tag(args.events)
     run(gene_id, args.model, args.variant_dir, args.family, protocol, args.sota_root, args.device)
