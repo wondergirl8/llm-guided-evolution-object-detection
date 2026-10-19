@@ -1,0 +1,13 @@
+Return exactly one Python code block containing the complete replacement gene class.
+Preserve the class name, the exact existing dictionary keys, and its single values dictionary. Only change literal values.
+No imports, calls, methods, decorators, inheritance, I/O, or new fields.
+The class schemas are strict and must never be mixed:
+- FeatureGenes contains only fpn_channels: 128 or 256.
+- ProposalGenes contains only rpn_channels (128 or 256), rpn_convs (1 or 2),
+  anchor_scales ([4] or [8]), and anchor_ratios ([0.5, 1.0, 2.0] or [1.0]).
+- RoIGenes contains only roi_size (7 or 14), roi_sampling_ratio (0 or 2), and
+  box_fc_channels (512 or 1024).
+Never copy a field from one class into another class. Return the same keys shown
+in the current class, exactly once each, and change at least one value.
+Never add or load checkpoints, URLs, pretrained weights, or init_cfg.
+Keep data, losses, random initialization, training, and evaluation protected.

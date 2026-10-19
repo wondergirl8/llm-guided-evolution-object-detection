@@ -1,0 +1,6 @@
+Improve this bounded randomly initialized Faster R-CNN gene class for tiny drones in FRED event frames.
+Favor validation mAP50:95 while considering parameter count. Change at least one legal value.
+Current class:
+```python
+{}
+```

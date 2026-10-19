@@ -75,7 +75,11 @@ def load_sequence(split, sequence_id, frame_step, img_width):
 
 
 def load_split(split, sequences, frame_step, img_width):
-    parts = [load_sequence(split, s, frame_step, img_width) for s in sequences]
+    return load_archives([(split,s) for s in sequences],frame_step,img_width)
+
+def load_archives(archives, frame_step, img_width):
+    """Load sequence IDs from explicit physical HF train/test archive locations."""
+    parts = [load_sequence(split,s,frame_step,img_width) for split,s in archives]
     return {
         "images": torch.cat([p["images"] for p in parts]),
         "boxes": [b for p in parts for b in p["boxes"]],

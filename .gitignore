@@ -84,3 +84,13 @@ sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn/reports/
 sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn/trained_models/
 
 .cache-faster-rcnn/
+fred_faster_rcnn_scratch_checkpoints/
+fred_faster_rcnn_scratch_output/
+fred_faster_rcnn_scratch_global_data/
+fred_faster_rcnn_scratch_hostname.log
+sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/reports/
+sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/trained_models/
+sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/results/
+sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/final_results/
+sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/held_out_reports/
+sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/pareto_held_out_comparison/

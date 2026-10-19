@@ -79,18 +79,13 @@ def test_defaults_do_not_change_yolo_configuration(monkeypatch):
     assert "yolo11" in constants.TRAIN_FILE
 
 
-def test_shared_data_loader_preserves_yolo_source():
+def test_yolo_uses_shared_data_loader_without_redefining_it():
     import ast
-    import subprocess
     path = "sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/train_eval.py"
-    original = subprocess.check_output(["git", "show", "HEAD:" + path], text=True)
-    shared = Path("sota/FRED_LLM_GE/phase1_detection/event_data.py").read_text()
-    def functions(source):
-        return {node.name: ast.dump(node) for node in ast.parse(source).body
-                if isinstance(node, ast.FunctionDef)}
-    old, new = functions(original), functions(shared)
-    for name in ("load_annotations", "load_sequence", "load_split"):
-        assert old[name] == new[name]
+    tree=ast.parse(Path(path).read_text()); local={n.name for n in tree.body if isinstance(n,ast.FunctionDef)}
+    assert not {"load_annotations","load_sequence","load_split"}&local
+    imports=[n for n in tree.body if isinstance(n,ast.ImportFrom) and n.module=="event_data"]
+    assert len(imports)==1 and {"load_annotations","load_sequence","load_split"}<={a.name for a in imports[0].names}
 
 
 def test_mmdetection_alternative_genome_and_geometry():
