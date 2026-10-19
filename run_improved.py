@@ -1292,12 +1292,9 @@ if __name__ == "__main__":
         elites = select_elites(population, num_elites)
 
         # Select the next generation's parents
-        if len(population) < population_size:
-            print(f"Selecting {len(population)} offspring")
-            offspring = toolbox.select(population, len(population))
-        else:
-            print(f"Selecting {population_size} offspring")
-            offspring = toolbox.select(population, population_size)
+        offspring_count = min(len(population), globals().get("offspring_size", population_size))
+        print(f"Selecting {offspring_count} offspring")
+        offspring = toolbox.select(population, offspring_count)
         
         print_population(offspring, GLOBAL_DATA)
         

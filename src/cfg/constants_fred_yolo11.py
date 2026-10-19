@@ -168,14 +168,19 @@ PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 # runs generations 1-20. Resubmitting resumes from the latest
 # checkpoint in the configured run directory.
 num_generations = 21
-start_population_size = 4
-population_size = 4
+start_population_size = 8
+# Six selected parents enter the operators; two unmodified elites bring the
+# next generation to at most eight distinct candidates.
+population_size = 8
+offspring_size = 6
 crossover_probability = 0.5
 mutation_probability = 0.8
 num_elites = 2
-# Reserve one elite slot for the highest-mAP50 model; SPEA2 alone kept the
-# smallest model and dropped the most accurate ones.
-KEEP_BEST_ELITE = True
+# SPEA2 selects both elites using all three objectives; no individual gets a
+# reserved slot based on mAP50, mAP50:95, or parameter count alone.
+KEEP_BEST_ELITE = False
+if offspring_size + num_elites != population_size:
+    raise ValueError("FRED offspring_size + num_elites must equal population_size")
 hof_size = 4
 max_gen_attempts = 5
 migration_gen = 0
