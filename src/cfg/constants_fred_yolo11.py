@@ -62,13 +62,13 @@ CROSSOVER_TEMPLATE_DIR = (
     "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
     else "templates/CrossOver"
 )
-SOTA_ROOT = os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else _FAMILY["sota_root"]
 # Event frames candidates train on: unset for FRED's released frames, or a tag
 # such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
 # keeps its genes, results, outputs and checkpoints apart from the released run.
 FRED_EVENTS = os.getenv("FRED_EVENTS", "")
 _RUN_SUFFIX = f"_{FRED_EVENTS}" if FRED_EVENTS else ""
-SOTA_ROOT = _FAMILY["sota_root"] + _RUN_SUFFIX
+SOTA_ROOT = (os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else
+             _FAMILY["sota_root"] + _RUN_SUFFIX)
 DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
 SEED_NETWORK = _FAMILY["seed"]
 MODEL = "network"
@@ -164,8 +164,8 @@ FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
-# run_improved.py loops range(1, num_generations), so 21 runs generations
-# 1-20 after the seed population. Resubmitting resumes from the latest
+# run_improved.py checkpoints generation 0 (seed and initial candidates), then
+# runs generations 1-20. Resubmitting resumes from the latest
 # checkpoint in the configured run directory.
 num_generations = 21
 start_population_size = 4

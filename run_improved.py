@@ -9,6 +9,7 @@ import random
 import pickle
 import argparse
 import subprocess
+import shutil
 import yaml
 import numpy as np
 import re
@@ -1120,6 +1121,28 @@ def create_population(n, llm_model):
     individual_func = partial(toolbox.individual, llm_model=llm_model)
     return tools.initRepeat(list, individual_func, n)
 
+
+def add_stock_seed_to_initial_population(population):
+    """Give a FRED stock seed a normal candidate ID and evaluation job.
+
+    The copy is byte-for-byte, so Python seeds and YAML seeds use the same
+    candidate_runner path as their LLM-created descendants. The standalone
+    three-seed baseline remains independent of this single-seed GE individual.
+    """
+    if "SEED_FAMILY" not in globals():
+        return population
+    gene_id = "seed"
+    os.makedirs(VARIANT_DIR, exist_ok=True)
+    target = os.path.join(VARIANT_DIR, f"{MODEL}_{gene_id}.py")
+    if os.path.exists(target) or gene_id in GLOBAL_DATA:
+        raise RuntimeError(f"Stock seed already exists in a fresh run: {target}; use a fresh run tag")
+    shutil.copyfile(SEED_NETWORK, target)
+    GLOBAL_DATA[gene_id] = {"sub_flag": True, "job_id": None,
+                            "status": "subbed file", "fitness": None,
+                            "start_time": time.time(), "origin": "stock_seed"}
+    GLOBAL_DATA_ANCESTRY[gene_id] = {"GENES": [gene_id], "MUTATE_TYPE": ["STOCK_SEED"]}
+    return [creator.Individual([gene_id]), *population]
+
 # Define the problem
 creator.create("FitnessMulti", base.Fitness, weights=FITNESS_WEIGHTS)  # Adjust weights as needed
 creator.create("Individual", list, fitness=creator.FitnessMulti, file_id=None)
@@ -1195,9 +1218,13 @@ if __name__ == "__main__":
         # Create an initial population
         start_gen = 1
         box_print("CREATING POPULATION FROM SEED CODE")
-        population = toolbox.population(n=start_population_size, llm_model=llm_model)
+        initial_mutations = start_population_size - int("SEED_FAMILY" in globals())
+        if initial_mutations < 0:
+            raise ValueError("start_population_size must include a slot for the stock seed")
+        population = toolbox.population(n=initial_mutations, llm_model=llm_model)
         box_print("Batch Checking Created Genes", print_bbox_len=60, new_line_end=False)
         delayed_creation_check(population)
+        population = add_stock_seed_to_initial_population(population)
         hof = tools.ParetoFront()
 
     # Evaluate the entire population
@@ -1207,6 +1234,11 @@ if __name__ == "__main__":
     check_and_update_fitness(population)
     if not population_data:
         log_failure_counts(0, population)
+        if "SEED_FAMILY" in globals():
+            if GLOBAL_DATA["seed"]["fitness"] == INVALID_FITNESS_MAX:
+                raise RuntimeError("Stock seed failed evaluation; generation 0 was not checkpointed")
+            hof.update(population)
+            save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path)
     # Evolution
     for gen in range(start_gen, num_generations if migration_gen == 0 else ((start_gen + migration_gen - 1) // migration_gen) * migration_gen + 1):
         GEN_COUNT = gen
@@ -1225,6 +1257,17 @@ if __name__ == "__main__":
         box_print("CURRENT POPULATION SIZE:", len(population))
         while len(population) < num_elites:
             print("MINIMUM NUMBER OF IND NOT ACHIEVED, TRYING AGAIN")
+            if "SEED_FAMILY" in globals():
+                fresh = toolbox.population(
+                    n=max(start_population_size - len(population), num_elites - len(population)),
+                    llm_model=llm_model)
+                delayed_creation_check(fresh)
+                for ind in fresh:
+                    ind.fitness.values = PLACEHOLDER_FITNESS
+                check_and_update_fitness(fresh)
+                log_failure_counts(gen, fresh)
+                population.extend(ind for ind in fresh if ind.fitness.values != INVALID_FITNESS_MAX)
+                continue
             GEN_COUNT = -1
             TOP_N_GENES = None
             LINKED_GENES = {}
