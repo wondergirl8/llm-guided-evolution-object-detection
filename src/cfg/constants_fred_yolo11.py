@@ -53,7 +53,12 @@ _FAMILIES = {
     },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
-SOTA_ROOT = _FAMILY["sota_root"]
+# Event frames candidates train on: unset for FRED's released frames, or a tag
+# such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
+# keeps its genes, results, outputs and checkpoints apart from the released run.
+FRED_EVENTS = os.getenv("FRED_EVENTS", "")
+_RUN_SUFFIX = f"_{FRED_EVENTS}" if FRED_EVENTS else ""
+SOTA_ROOT = _FAMILY["sota_root"] + _RUN_SUFFIX
 DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
 SEED_NETWORK = _FAMILY["seed"]
 MODEL = "network"
@@ -67,8 +72,8 @@ PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
-OUTPUT_DIR = os.path.join(ROOT_DIR, f"fred_{SEED_FAMILY}_output" if SEED_FAMILY in ("dfine", "rtdetr")
-                          else "fred_yolo11_output")
+OUTPUT_DIR = os.path.join(ROOT_DIR, (f"fred_{SEED_FAMILY}_output" if SEED_FAMILY in ("dfine", "rtdetr")
+                                     else "fred_yolo11_output") + _RUN_SUFFIX)
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
 # A run can submit its jobs with its own copy of slurm_config.yaml (e.g. to
 # request faster GPUs) without changing the shared file.
@@ -120,7 +125,8 @@ EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
 # and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
 EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
-                "--model {} --variant_dir {VARIANT_DIR}")
+                "--model {} --variant_dir {VARIANT_DIR}"
+                + (f" --events {FRED_EVENTS}" if FRED_EVENTS else ""))
 
 SLURM_MIXT_INPUT_X = SEED_NETWORK
 SLURM_MIXT_INPUT_Y = os.path.join(VARIANT_DIR, "network_x.py")
@@ -130,7 +136,7 @@ SLURM_MIXT_TEMPERATURE = 0.1
 SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
 ISLAND_CONTROLLER_RUN_NAME = (f"fred_{SEED_FAMILY}_islands" if SEED_FAMILY in ("dfine", "rtdetr")
-                              else "fred_yolo11_islands")
+                              else "fred_yolo11_islands") + _RUN_SUFFIX
 ISLAND_CONTROLLER_NUM_ISLANDS = 1
 ISLAND_CONTROLLER_LLMS = LLM_MODEL
 ISLAND_CONTROLLER_PROMPT_GROUPS = DEFAULT_PROMPT_GROUP
