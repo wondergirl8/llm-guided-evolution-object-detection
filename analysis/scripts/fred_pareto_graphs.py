@@ -1,4 +1,4 @@
-"""3D Pareto front plots for the FRED YOLO11 LLM-GE run.
+"""Pareto front plots for the FRED YOLO11 LLM-GE run.
 
 Reads the global_gen_*.pkl files that run_improved.py saves after every
 generation, where each candidate's fitness is (mAP50, mAP50:95, params).
@@ -6,12 +6,14 @@ Both mAPs are maximized and parameter count minimized; the Pareto front is
 the set of candidates no other candidate beats on all three at once.
 Outputs (in --output):
 
-    pareto3d_final.png     3D front after the last generation
-    pareto3d_gen_<N>.png   3D front using every candidate up to generation N
-    pareto3d_fronts.gif    the per-generation plots as an animation
+    pareto2d_final.png     mAP50 vs params and mAP50:95 vs params after the last
+                           generation, each with its own 2D front (best score at
+                           a given size)
+    pareto2d_gen_<N>.png   the same using every candidate up to generation N
+    pareto2d_fronts.gif    the per-generation plots as an animation
     best_by_generation.png best mAP50 / mAP50:95 after each generation
     candidates.csv         every valid candidate, flagged if on the final front
-    pareto_models.csv      final front with model file paths
+    pareto_models.csv      final 3-objective front with model file paths
 
 Usage:
     uv run python analysis/scripts/fred_pareto_graphs.py
@@ -90,54 +92,49 @@ def load_seed(path):
     return {"mAP50": map50, "mAP50_95": map50_95, "params": params}
 
 
-def plot_front_3d(df, title, seed, limits, path, dpi=150):
-    fig = plt.figure(figsize=(11, 7))
-    # The 3D plot takes the left of the figure; the right holds the key table.
-    ax = fig.add_axes([0.0, 0.03, 0.68, 0.88], projection="3d")
-    front_mask = pareto_mask(df) & (df["gene_id"] != "seed")
-    others = df[(df["gene_id"] != "seed") & ~front_mask]
-    front = df[front_mask].sort_values("params").reset_index(drop=True)
-    for subset, style in ((others, dict(color="lightgray", edgecolor="gray", s=25,
-                                        label="Candidates", alpha=0.7)),
-                          (front, dict(color="crimson", edgecolor="black", s=60,
-                                       label="Pareto front"))):
-        ax.scatter(subset["params"], subset["mAP50"] * 100, subset["mAP50_95"] * 100,
-                   depthshade=False, **style)
-    # Drop lines to the floor make each front point's height readable. Front
-    # points get a number badge (fewest params = 1) and their metrics go in the
-    # key table, since full text labels overlap where points cluster.
-    dz = 0.04 * (limits["mAP50_95"][1] - limits["mAP50_95"][0])
-    key = [f"{'#':>2}  {'mAP50':>6}  {'mAP50:95':>8}  {'params':>9}"]
-    near = 0.03 * (limits["params"][1] - limits["params"][0])
-    for i, row in front.iterrows():
-        x, y, z = row["params"], row["mAP50"] * 100, row["mAP50_95"] * 100
-        ax.plot([x, x], [y, y], [limits["mAP50_95"][0], z], color="crimson", lw=0.8, alpha=0.5)
-        # Stack badges of front points with nearly the same params so none hides another.
-        stacked = (abs(front["params"][:i] - x) < near).sum()
-        ax.text(x, y, z + dz * (1 + 2.2 * stacked), str(i + 1), fontsize=8, fontweight="bold", color="white",
-                ha="center", va="bottom", zorder=10,
-                bbox=dict(boxstyle="circle,pad=0.25", facecolor="crimson", edgecolor="black"))
-        key.append(f"{i + 1:>2}  {y:5.1f}%  {z:7.1f}%  {int(x):>9,}")
-    if seed:
-        key.append(f"{'x':>2}  {seed['mAP50'] * 100:5.1f}%  {seed['mAP50_95'] * 100:7.1f}%  "
-                   f"{int(seed['params']):>9,}  (seed)")
-    fig.text(0.68, 0.5, "Pareto front\n\n" + "\n".join(key), family="monospace", fontsize=9,
-             va="center", bbox=dict(boxstyle="round,pad=0.6", facecolor="white",
-                                    edgecolor="crimson"))
-    if seed:
-        ax.scatter(seed["params"], seed["mAP50"] * 100, seed["mAP50_95"] * 100,
-                   color="black", marker="x", s=110, linewidths=2, label="Seed",
-                   depthshade=False)
-    ax.set_xlim(*limits["params"])
-    ax.set_ylim(*limits["mAP50"])
-    ax.set_zlim(*limits["mAP50_95"])
-    ax.set_xlabel("Number of parameters")
-    ax.set_ylabel("mAP50 %")
-    ax.set_zlabel("mAP50:95 %")
-    # Viewed so the best corner (few params, high mAP50 and mAP50:95) faces the viewer.
-    ax.view_init(elev=22, azim=-60)
-    ax.legend(loc="upper left")
+def front_2d(df, metric):
+    """Candidates no other beats on this metric with at most as many params, by params."""
+    rows = df.sort_values(["params", metric], ascending=[True, False])
+    front, best = [], -1.0
+    for _, row in rows.iterrows():
+        if row[metric] > best:
+            front.append(row)
+            best = row[metric]
+    return pd.DataFrame(front)
+
+
+def plot_fronts_2d(df, title, seed, limits, path, dpi=150):
+    """mAP50 vs params and mAP50:95 vs params, each with its own Pareto front."""
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    candidates = df[df["gene_id"] != "seed"]
+    for ax, (metric, label) in zip(axes, METRICS):
+        front = front_2d(candidates, metric)
+        others = candidates[~candidates["gene_id"].isin(front["gene_id"])]
+        ax.scatter(others["params"] / 1e6, others[metric] * 100, color="lightgray",
+                   edgecolor="gray", s=25, alpha=0.7, label="Candidates")
+        # Staircase: at any size, the best score reachable with at most that many params.
+        ax.step(front["params"] / 1e6, front[metric] * 100, where="post", color="crimson",
+                lw=1.2, alpha=0.7)
+        ax.scatter(front["params"] / 1e6, front[metric] * 100, color="crimson",
+                   edgecolor="black", s=55, zorder=3, label="Pareto front")
+        for i, (_, row) in enumerate(front.iterrows()):
+            ax.annotate(f"{row[metric] * 100:.1f}%, {row['params'] / 1e6:.2f}M",
+                        (row["params"] / 1e6, row[metric] * 100), fontsize=7.5,
+                        xytext=(6, -11 if i % 2 else 5), textcoords="offset points")
+        if seed:
+            ax.scatter(seed["params"] / 1e6, seed[metric] * 100, color="black", marker="x",
+                       s=90, linewidths=2, zorder=4, label="Seed")
+            ax.annotate(f"seed {seed[metric] * 100:.1f}%", (seed["params"] / 1e6, seed[metric] * 100),
+                        fontsize=7.5, xytext=(-8, 7), textcoords="offset points", ha="right")
+        ax.set_xlim(limits["params"][0] / 1e6, limits["params"][1] / 1e6)
+        ax.set_ylim(*limits[metric])
+        ax.set_xlabel("Parameters (millions)")
+        ax.set_ylabel(f"{label} %")
+        ax.set_title(f"{label} vs parameters")
+        ax.grid(True, linestyle=":", alpha=0.6)
+        ax.legend(loc="lower right")
     fig.suptitle(title)
+    fig.tight_layout()
     fig.savefig(path, dpi=dpi)
     plt.close(fig)
     return path
@@ -183,7 +180,7 @@ def n_candidates(df):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot 3D Pareto fronts for the FRED LLM-GE run")
+    parser = argparse.ArgumentParser(description="Plot Pareto fronts for the FRED LLM-GE run")
     parser.add_argument("--checkpoints", default=os.path.join(ROOT_DIR, "fred_yolo11_checkpoints"),
                         help="Folder with global_gen_*.pkl")
     parser.add_argument("--output", default=os.path.join(ROOT_DIR, "analysis", "results", "analysis", "fred_pareto"),
@@ -222,20 +219,20 @@ def main():
     frames, history = [], []
     for gen, df in by_gen:
         title = f"FRED {args.family} LLM-GE: generation {gen} ({n_candidates(df)} valid candidates)"
-        frames.append(plot_front_3d(df, title, seed, limits,
-                                    os.path.join(args.output, f"pareto3d_gen_{gen}.png")))
+        frames.append(plot_fronts_2d(df, title, seed, limits,
+                                     os.path.join(args.output, f"pareto2d_gen_{gen}.png")))
         history.append({"generation": gen, "mAP50": df["mAP50"].max(),
                         "mAP50_95": df["mAP50_95"].max()})
-    print(f"Saved {len(frames)} per-generation 3D plots to {args.output}")
+    print(f"Saved {len(frames)} per-generation plots to {args.output}")
 
     final_title = (f"FRED {args.family} LLM-GE: final Pareto front after generation {last_gen} "
                    f"({n_candidates(final)} valid candidates)")
-    print("Saved " + plot_front_3d(final, final_title, seed, limits,
-                                   os.path.join(args.output, "pareto3d_final.png"), dpi=300))
+    print("Saved " + plot_fronts_2d(final, final_title, seed, limits,
+                                    os.path.join(args.output, "pareto2d_final.png"), dpi=300))
 
     if not args.no_gif and len(frames) > 1:
-        make_gif(frames, os.path.join(args.output, "pareto3d_fronts.gif"))
-        print("Saved pareto3d_fronts.gif")
+        make_gif(frames, os.path.join(args.output, "pareto2d_fronts.gif"))
+        print("Saved pareto2d_fronts.gif")
     print(f"Saved {plot_best_by_generation(pd.DataFrame(history), seed, args.output)}")
 
     final = final.copy()
