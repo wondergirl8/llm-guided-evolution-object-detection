@@ -242,6 +242,8 @@ def main():
     parser.add_argument("--variant_dir", type=str, default=str(DEFAULT_SOTA_ROOT / "models"),
                         help="Directory where models are written by LLM-GE")
     parser.add_argument("--protocol", type=str, default=str(DEFAULT_PROTOCOL))
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Override only the training/evaluation random seed; baseline repeats use 0, 1, 2")
     parser.add_argument("--sota_root", type=str, default=str(DEFAULT_SOTA_ROOT),
                         help="Where results/ and trained_models/ are written")
     parser.add_argument("--device", type=str,
@@ -262,7 +264,12 @@ def main():
         write_failure_results(args.sota_root, gene_id, time.time(), f"gpu_unavailable: {message}")
         raise SystemExit(1)
 
-    run(gene_id, args.model, args.variant_dir, args.family, load_protocol(args.protocol),
+    protocol = load_protocol(args.protocol)
+    if args.seed is not None:
+        if args.seed < 0:
+            parser.error("--seed must be nonnegative")
+        protocol["proxy"]["seed"] = args.seed
+    run(gene_id, args.model, args.variant_dir, args.family, protocol,
         args.sota_root, args.device)
 
 
