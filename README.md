@@ -1,3 +1,9 @@
+## FRED custom-seed recovery handoff
+
+YOLO26n-P2 / D-FINE runtime corrections, checkpoint recovery, known limitations,
+and validation commands: [recovery handoff](sota/FRED_LLM_GE/phase1_detection/RECOVERY_HANDOFF.md).
+Additional 2D Pareto commands: [analysis README](analysis/README.md).
+
 ## Guided Evolution:
 
 <p align="left">

@@ -553,7 +553,9 @@ def submit_mixtral_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature=
     server_url = f"http://{llm_hostname}:{PORT}/generate"
     
     try:
-        response = requests.post(server_url, headers=headers, json=payload)
+        response = requests.post(server_url, headers=headers, json=payload,
+                                 timeout=((10, float(os.getenv("LLMGE_LLM_HTTP_TIMEOUT_SECONDS", "600")))
+                                          if globals().get('SEED_FAMILY') in ('yolo26_p2', 'dfine') else None))
         
         if response.status_code == 200:
             output_txt = response.json().get("generated_text", "No output received.")
@@ -584,7 +586,9 @@ def submit_deepseek_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature
     headers = {"Content-Type": "application/json"}
     
     try:
-        response = requests.post(server_url, headers=headers, json=payload)
+        response = requests.post(server_url, headers=headers, json=payload,
+                                 timeout=((10, float(os.getenv("LLMGE_LLM_HTTP_TIMEOUT_SECONDS", "600")))
+                                          if globals().get('SEED_FAMILY') in ('yolo26_p2', 'dfine') else None))
         
         if response.status_code == 200:
             output_txt = response.json().get("generated_text", "No output received.")

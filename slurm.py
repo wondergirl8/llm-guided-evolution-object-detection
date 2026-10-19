@@ -91,6 +91,14 @@ uv run python llm_crossover.py '{constants.SLURM_MIXT_INPUT_X}' '{constants.SLUR
     # Get LLM GPU constraint
     llm_gpu = sections.get("llm-gpu", "").strip()
 
+    # These recovery families must retain the device/MIG assignment from Slurm.
+    # Keep the existing template behavior for other experiment families.
+    cuda_visibility = (
+        '# Preserve CUDA_VISIBLE_DEVICES assigned by Slurm.'
+        if getattr(constants, 'SEED_FAMILY', None) in ('yolo26_p2', 'dfine')
+        else 'export CUDA_VISIBLE_DEVICES=0'
+    )
+
     # Generate python evaluation script template
     python_script = sections.get("python-bash-script", "") + f"""
 echo "Launching Python Evaluation"
@@ -98,7 +106,7 @@ hostname
 
 module load cuda
 module load uv
-export CUDA_VISIBLE_DEVICES=0
+{cuda_visibility}
 unset VIRTUAL_ENV
 export UV_CACHE_DIR="${{TMPDIR:-${{SLURM_TMPDIR:-/tmp}}}}/uv-cache-${{SLURM_JOB_ID:-$$}}"
 mkdir -p "$UV_CACHE_DIR"
@@ -115,7 +123,7 @@ hostname
 
 module load cuda
 module load uv
-export CUDA_VISIBLE_DEVICES=0
+{cuda_visibility}
 export UV_CACHE_DIR="${{TMPDIR:-${{SLURM_TMPDIR:-/tmp}}}}/uv-cache-${{SLURM_JOB_ID:-$$}}"
 mkdir -p "$UV_CACHE_DIR"
 echo "Using UV cache: $UV_CACHE_DIR"

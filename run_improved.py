@@ -252,6 +252,8 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
 
     if not LOCAL_LLM:
         return True
+    from src.fred_runtime import assert_llm_job_active
+    assert_llm_job_active()
     if LLM_SERVER_READY:
         return True
 
@@ -267,6 +269,7 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
     last_error = None
 
     while time.time() - start_time <= timeout:
+        assert_llm_job_active()
         if os.path.exists(HOSTNAME_DIR):
             try:
                 with open(HOSTNAME_DIR, 'r') as file:
@@ -298,6 +301,8 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
     print(f"\t☠ Timed out waiting for LLM server readiness after {timeout}s", flush=True)
     if last_error is not None:
         print(f"\t‣ Last readiness error: {last_error}", flush=True)
+    if os.getenv('LLMGE_SERVER_JOB_ID'):
+        raise RuntimeError('LLM readiness timed out; stopping this controller allocation')
     return False
 
 def submit_bash(file_path, **kwargs):
@@ -1129,6 +1134,19 @@ def remove_duplicates(population):
 
 # --- Checkpoint Functions --- #
 def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint_data=None):
+    from src.fred_session import enabled, save_pair
+    if enabled():
+        if global_path is None:
+            raise ValueError('Bounded sessions require a paired global checkpoint path')
+        data = checkpoint_data if checkpoint_data is not None else {'population': population, 'hof': hof}
+        state = {'GLOBAL_DATA': GLOBAL_DATA, 'GLOBAL_DATA_HIST': GLOBAL_DATA_HIST,
+                 'GLOBAL_DATA_ANCESTRY': GLOBAL_DATA_ANCESTRY}
+        if SEED_FAMILY == 'yolo26_p2':
+            if 'selection_version' in data:
+                require_yolo26_selection_version(data, folder_name)
+            data = {**data, 'selection_version': YOLO26_SELECTION_VERSION}
+            state['selection_version'] = YOLO26_SELECTION_VERSION
+        return save_pair(folder_name, global_path, gen, data, state, SEED_FAMILY)
     os.makedirs(folder_name, exist_ok=True)
     filename = os.path.join(folder_name, f'checkpoint_gen_{gen}.pkl')
     if SEED_FAMILY == 'yolo26_p2' and os.path.exists(filename):
@@ -1196,6 +1214,15 @@ def extract_generation(filename, kind):
     return int(matcher.group(1)) if matcher else None
 
 def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path="checkpoints", global_file=None):
+    from src.fred_session import enabled, latest_pair
+    if enabled():
+        if checkpoint_file is not None or global_file is not None:
+            raise ValueError('Bounded sessions resume the newest committed checkpoint pair')
+        data, start_gen, state = latest_pair(folder_name, global_path, SEED_FAMILY)
+        if data is not None:
+            require_yolo26_selection_version(data, folder_name)
+            require_yolo26_selection_version(state, global_path)
+        return data, start_gen, state
     if not os.path.exists(folder_name) or not os.path.exists(global_path):
         print("Path does not exist, returning none for checkpoints")
         return None, None, None
@@ -1340,6 +1367,12 @@ if __name__ == "__main__":
         box_print("Batch Checking Created Genes", print_bbox_len=60, new_line_end=False)
         delayed_creation_check(population)
         hof = tools.ParetoFront()
+
+        # Preserve the initial population and submitted worker identities before
+        # long evaluations. Generation zero is setup, not a completed search generation.
+        from src.fred_session import enabled
+        if enabled():
+            save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path)
 
     # Evaluate the entire population
     for ind in population:

@@ -13,6 +13,7 @@ import transformers
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from src.cfg.constants import *
+from src.fred_runtime import gpu_memory_budget
 
 app = FastAPI(title="LLM API", version="1.0")
 
@@ -57,8 +58,9 @@ class LLMModel:
             with cls._lock:
                 if cls._instance is None:
                     print(f"Loading model at {MODEL_PATH} for the first time", flush=True)
-                    cls._instance = super(LLMModel, cls).__new__(cls)
-                    cls._instance._initialize()
+                    instance = super(LLMModel, cls).__new__(cls)
+                    instance._initialize()
+                    cls._instance = instance
                     print('I created my instance', flush=True)
                     print(dir(cls._instance), flush=True)            
         return cls._instance
@@ -80,8 +82,11 @@ class LLMModel:
                 model_path = os.path.join(snapshots_dir, snapshot_dirs[-1])
                 print(f"Resolved HF cache to snapshot: {model_path}")
 
-        device_count = torch.cuda.device_count()
-        max_memory = {idx: "120GiB" for idx in range(device_count)} if device_count else None
+        if globals().get('SEED_FAMILY') in ('yolo26_p2', 'dfine'):
+            max_memory = gpu_memory_budget(torch)
+        else:
+            device_count = torch.cuda.device_count()
+            max_memory = {idx: "120GiB" for idx in range(device_count)} if device_count else None
         
         self.model = transformers.AutoModelForCausalLM.from_pretrained(
             model_path,

@@ -54,6 +54,13 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     if "{}" not in template_txt:
         raise ValueError(f"Prompt template {fname} must contain a literal {{}} code placeholder")
     txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
+    if globals().get('SEED_FAMILY') == 'yolo26_p2':
+        from src.fred_yolo26_proposals import generate_validated_section
+        generate_validated_section(input_filename, output_filename, parts, augment_idx,
+            txt2llm, lambda prompt: generate_augmented_code(prompt, augment_idx - 1,
+                apply_quality_control, top_p, llm_model, temperature), FRED_DIR)
+        print('Job Done', flush=True)
+        return
     code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
                                             top_p, llm_model, temperature)
     
