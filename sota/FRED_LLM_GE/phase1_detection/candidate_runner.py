@@ -29,7 +29,7 @@ try:
     from .adapters.dfine import DFINEAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
-    from .export_split import dataset_parts
+    from .export_split import dataset_parts, events_from_tag
     from .proxy_data import REVISION, load_exported_split, load_split
     from .result_contract import DetectionResult, write_results
 except ImportError:
@@ -37,7 +37,7 @@ except ImportError:
     from adapters.dfine import DFINEAdapter
     from adapters.tiny_yolo11 import TinyYolo11Adapter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
-    from export_split import dataset_parts
+    from export_split import dataset_parts, events_from_tag
     from proxy_data import REVISION, load_exported_split, load_split
     from result_contract import DetectionResult, write_results
 
@@ -238,6 +238,9 @@ def main():
     parser.add_argument("--variant_dir", type=str, default=str(DEFAULT_SOTA_ROOT / "models"),
                         help="Directory where models are written by LLM-GE")
     parser.add_argument("--protocol", type=str, default=str(DEFAULT_PROTOCOL))
+    parser.add_argument("--events", type=str, default=None,
+                        help='Event frames, e.g. "raw_w10000_polarity" (default: protocol\'s '
+                             "challenging.events)")
     parser.add_argument("--sota_root", type=str, default=str(DEFAULT_SOTA_ROOT),
                         help="Where results/ and trained_models/ are written")
     parser.add_argument("--device", type=str,
@@ -258,8 +261,10 @@ def main():
         write_failure_results(args.sota_root, gene_id, time.time(), message)
         raise SystemExit(1)
 
-    run(gene_id, args.model, args.variant_dir, args.family, load_protocol(args.protocol),
-        args.sota_root, args.device)
+    protocol = load_protocol(args.protocol)
+    if args.events:
+        protocol["challenging"]["events"] = events_from_tag(args.events)
+    run(gene_id, args.model, args.variant_dir, args.family, protocol, args.sota_root, args.device)
 
 
 if __name__ == "__main__":

@@ -21,4 +21,9 @@ run_tag="fred_yolo11"
 if [[ "${FRED_SEED_FAMILY:-yolo11}" == "dfine" ]]; then
   run_tag="fred_dfine"
 fi
+# FRED_EVENTS (e.g. raw_w10000_polarity) trains on other event frames; keep
+# that run's checkpoints apart too (src/cfg/constants_fred_yolo11.py).
+if [[ -n "${FRED_EVENTS:-}" ]]; then
+  run_tag="${run_tag}_${FRED_EVENTS}"
+fi
 uv run python run_improved.py --checkpoints "${run_tag}_checkpoints" --global_path "${run_tag}_checkpoints"
