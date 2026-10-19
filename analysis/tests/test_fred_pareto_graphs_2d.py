@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import pickle
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,8 +12,8 @@ import pytest
 from PIL import Image
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "fred_pareto_graphs.py"
-spec = importlib.util.spec_from_file_location("fred_pareto_graphs", SCRIPT)
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "fred_pareto_graphs_2d.py"
+spec = importlib.util.spec_from_file_location("fred_pareto_graphs_2d", SCRIPT)
 plots = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plots)
 
@@ -153,3 +154,35 @@ def test_missing_saved_generations_does_not_fabricate_a_front(tmp_path, monkeypa
     with pytest.raises(SystemExit, match="No global_gen_"):
         plots.main()
     assert not output.exists()
+
+
+def test_existing_3d_workflow_and_artifacts_are_preserved(tmp_path, monkeypatch):
+    checkpoints = tmp_path / "checkpoints"
+    checkpoints.mkdir()
+    for generation in (1, 2):
+        (checkpoints / f"global_gen_{generation}.pkl").write_bytes(pickle.dumps({
+            "GLOBAL_DATA": {row.gene_id: {"status": "completed",
+                "fitness": (row.mAP50, row.mAP50_95, row.params)}
+                for row in models().iloc[:generation].itertuples()}}))
+    seed = tmp_path / "seed.csv"
+    seed.write_text(".82,.58,2200000\n")
+    legacy_output = tmp_path / "analysis/results/analysis/fred_pareto"
+    legacy_script = SCRIPT.with_name("fred_pareto_graphs.py")
+    subprocess.run([sys.executable, str(legacy_script), "--checkpoints", str(checkpoints),
+        "--seed_results", str(seed), "--output", str(legacy_output)], check=True,
+        capture_output=True, text=True)
+    with Image.open(legacy_output / "pareto3d_final.png") as image:
+        assert image.width > 1000
+    with Image.open(legacy_output / "pareto3d_fronts.gif") as image:
+        assert image.n_frames == 2
+    hashes = {path: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in legacy_output.iterdir()}
+    monkeypatch.setattr(plots, "ROOT_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "--checkpoints", str(checkpoints),
+        "--seed_results", str(seed), "--no_gif"])
+    plots.main()
+    assert all(hashlib.sha256(path.read_bytes()).hexdigest() == value
+               for path, value in hashes.items())
+    output_2d = tmp_path / "analysis/results/analysis/fred_pareto_2d"
+    assert (output_2d / "pareto2d_mAP50_final.png").is_file()
+    assert (output_2d / "pareto2d_mAP50_95_final.png").is_file()
