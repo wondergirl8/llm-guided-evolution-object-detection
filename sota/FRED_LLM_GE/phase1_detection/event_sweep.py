@@ -35,6 +35,8 @@ SBATCH = """#!/bin/bash
 #SBATCH --job-name=event_sweep
 #SBATCH -t 4:00:00
 #SBATCH --gres=gpu:1
+# GPUs this PyTorch build supports (not Blackwell, not AMD).
+#SBATCH -C "H100|H200|A100-80GB|A100-40GB|L40S|A40"
 #SBATCH --mem 32G
 #SBATCH -c 12
 #SBATCH -N 1
