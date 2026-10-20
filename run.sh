@@ -20,6 +20,8 @@ mkdir -p run_job_outputs/{islands,evolution,evaluation,server}
 run_tag="fred_yolo11"
 if [[ "${FRED_SEED_FAMILY:-yolo11}" == "dfine" ]]; then
   run_tag="fred_dfine"
+elif [[ "${FRED_SEED_FAMILY:-yolo11}" == "renderer" ]]; then
+  run_tag="fred_renderer"
 fi
 # FRED_EVENTS (e.g. raw_w10000_polarity) trains on other event frames; keep
 # that run's checkpoints apart too (src/cfg/constants_fred_yolo11.py).

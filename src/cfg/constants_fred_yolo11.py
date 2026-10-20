@@ -5,7 +5,9 @@ a laptop or on PACE ICE. SEED_FAMILY picks the seed: "yolo11" evolves the
 Ultralytics YOLO11n model YAML (sota/FRED_LLM_GE/seeds/seed_yolo11n.yaml);
 "tiny_yolo11" evolves Ruhi's tutorial-sized DroneDetector
 (sota/FRED_LLM_GE/seeds/seed_yolo11.py); "dfine" selects the Event-only
-D-FINE-inspired seed. Every family is trained and
+D-FINE-inspired seed; "renderer" evolves how raw events are drawn into frames
+(sota/FRED_LLM_GE/seeds/seed_renderer.py), scored by
+phase1_detection/render_runner.py with a fixed YOLO11n. Every family is trained and
 scored by phase1_detection/candidate_runner.py under
 configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.csv.
 """
@@ -43,8 +45,17 @@ _FAMILIES = {
         "rules": "templates/FRED_DFINE/ConstantRules.txt",
         "eval_timeout": 3 * 60 * 60 + 30 * 60,
     },
+    "renderer": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "renderer"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_renderer.py"),
+        "prompt_group": "FRED_RENDER/Normal",
+        "rules": "templates/FRED_RENDER/ConstantRules.txt",
+        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+        "train_file": os.path.join(FRED_DIR, "phase1_detection", "render_runner.py"),
+    },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
+_RUN_NAME = {"dfine": "fred_dfine", "renderer": "fred_renderer"}.get(SEED_FAMILY, "fred_yolo11")
 # Event frames candidates train on: unset for FRED's released frames, or a tag
 # such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
 # keeps its genes, results, outputs and checkpoints apart from the released run.
@@ -55,7 +66,7 @@ DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
 SEED_NETWORK = _FAMILY["seed"]
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
-TRAIN_FILE = os.path.join(FRED_DIR, "phase1_detection", "candidate_runner.py")
+TRAIN_FILE = _FAMILY.get("train_file", os.path.join(FRED_DIR, "phase1_detection", "candidate_runner.py"))
 
 # run_improved.py resolves the prompt glob against ROOT_DIR and loads the
 # domain rules separately. Keep rules outside the selectable prompt glob.
@@ -64,8 +75,7 @@ PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
-OUTPUT_DIR = os.path.join(ROOT_DIR, ("fred_dfine_output" if SEED_FAMILY == "dfine"
-                                     else "fred_yolo11_output") + _RUN_SUFFIX)
+OUTPUT_DIR = os.path.join(ROOT_DIR, f"{_RUN_NAME}_output{_RUN_SUFFIX}")
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
 SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
@@ -112,9 +122,12 @@ EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
 # The generated candidate is named network_<gene_id>.py. The runner trains
 # and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
-EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
-                "--model {} --variant_dir {VARIANT_DIR}"
-                + (f" --events {FRED_EVENTS}" if FRED_EVENTS else ""))
+# A renderer gene draws its own frames, so it takes no family or --events.
+EVAL_RUNLINE = ((f"uv run python {{}} --sota_root {SOTA_ROOT} --model {{}} --variant_dir {{VARIANT_DIR}}")
+                if SEED_FAMILY == "renderer" else
+                (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
+                 "--model {} --variant_dir {VARIANT_DIR}"
+                 + (f" --events {FRED_EVENTS}" if FRED_EVENTS else "")))
 
 SLURM_MIXT_INPUT_X = SEED_NETWORK
 SLURM_MIXT_INPUT_Y = os.path.join(VARIANT_DIR, "network_x.py")
@@ -123,8 +136,7 @@ SLURM_MIXT_TOP_P = 0.15
 SLURM_MIXT_TEMPERATURE = 0.1
 SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
-ISLAND_CONTROLLER_RUN_NAME = ("fred_dfine_islands" if SEED_FAMILY == "dfine"
-                              else "fred_yolo11_islands") + _RUN_SUFFIX
+ISLAND_CONTROLLER_RUN_NAME = f"{_RUN_NAME}_islands{_RUN_SUFFIX}"
 ISLAND_CONTROLLER_NUM_ISLANDS = 1
 ISLAND_CONTROLLER_LLMS = LLM_MODEL
 ISLAND_CONTROLLER_PROMPT_GROUPS = DEFAULT_PROMPT_GROUP
@@ -136,7 +148,8 @@ PROB_EOT = 0.0
 NUM_EOT_ELITES = 1
 GENERATION = 0
 
-# CSV order expected by run_improved.py: mAP50, mAP50:95, parameter count.
+# CSV order expected by run_improved.py: mAP50, mAP50:95, parameter count
+# (for the renderer family: WINDOW_US, the microseconds of events per frame).
 FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
@@ -157,4 +170,8 @@ hof_size = 4
 max_gen_attempts = 5
 migration_gen = 0
 DNA_TXT = "FRED YOLO11"
-FORBIDDEN_PATTERNS = []
+# Renderers may only use numpy, already imported in the protected preamble.
+FORBIDDEN_PATTERNS = ([("import ", "renderer may not import modules"),
+                       ("open(", "renderer may not do file I/O"),
+                       ("exec(", "renderer may not run code"), ("eval(", "renderer may not run code")]
+                      if SEED_FAMILY == "renderer" else [])

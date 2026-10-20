@@ -1,0 +1,6 @@
+Make one focused change to how this renderer encodes events into the three image channels, such as splitting the window into time slices (one per channel), separating brighter and darker events, counting events per pixel, or brightening pixels whose last event was more recent.
+
+The current code:
+```python
+{}
+```

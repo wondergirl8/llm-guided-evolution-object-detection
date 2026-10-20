@@ -1,0 +1,6 @@
+Shorten WINDOW_US for this event-camera frame renderer, and change the encoding so the drone stays as easy to detect with fewer events, for example by using event counts or how recent each pixel's last event was.
+
+The current code:
+```python
+{}
+```
