@@ -55,14 +55,20 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     output_file.parent.mkdir(exist_ok=True, parents=True)
     policy = load_candidate_policy(globals())
     attempts = globals().get('max_gen_attempts', 5) if policy else 1
+    previous_error = None
     for attempt in range(attempts):
         candidate_parts = parts.copy()
         augment_idx = np.random.randint(1, len(parts))
         code2llm = parts[augment_idx]
         txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
+        if policy is not None and hasattr(policy, 'retry_prompt'):
+            txt2llm = policy.retry_prompt(txt2llm, previous_error, attempt)
+        retry_temperature = min(0.8, temperature + 0.1 * attempt) if policy else temperature
+        retry_top_p = min(0.9, top_p + 0.1 * attempt) if policy else top_p
         code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
-                                                top_p, llm_model, temperature)
+                                                retry_top_p, llm_model, retry_temperature)
         if not code_from_llm or code_from_llm == "ERROR":
+            previous_error = 'llm_unavailable: no usable YAML response'
             code_from_llm = code2llm.strip()
         else:
             if "dfine" in os.path.basename(input_filename) or "/dfine/" in input_filename:
@@ -70,23 +76,32 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
             valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
             if not valid_code:
                 print(f"Rejected generated chunk: {invalid_reason}.", flush=True)
+                previous_error = f'invalid_architecture: {invalid_reason}'
                 code_from_llm = code2llm.strip()
+        if policy is not None and hasattr(policy, 'repair_channel_values'):
+            code_from_llm = policy.repair_channel_values(code_from_llm)
         note_txt = extract_note(code2llm)
         candidate_parts[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
         output_file.write_text('# --OPTION--'.join(candidate_parts))
         if policy is None:
             break
         try:
+            if attempt > 0 and hasattr(policy, 'changed_layer_count'):
+                changed_layers = policy.changed_layer_count(output_file, input_filename)
+                if changed_layers != 1:
+                    raise ValueError(f'mutation must change one mutable layer, changed {changed_layers}')
             if policy.differs_from_parents(output_file, input_filename):
                 break
-            print(f"Mutation attempt {attempt + 1}: unchanged parent graph", flush=True)
+            previous_error = 'unchanged_parent: built graph matches the parent'
+            print(f"Mutation attempt {attempt + 1}: {previous_error}", flush=True)
         except ImportError:
             raise  # Missing model packages are environment failures, not proposals to retry.
         except Exception as exc:
-            print(f"Mutation attempt {attempt + 1}: invalid architecture: {exc}", flush=True)
+            previous_error = f'invalid_architecture: {exc}'
+            print(f"Mutation attempt {attempt + 1}: {previous_error}", flush=True)
     else:
         output_file.unlink(missing_ok=True)
-        raise RuntimeError(f"Mutation exhausted {attempts} architecture attempts")
+        raise RuntimeError(f"retry_exhausted: mutation exhausted {attempts} attempts; last={previous_error}")
 
         
     box_print(f"Python code saved to {os.path.basename(output_filename)}", print_bbox_len=120, new_line_end=False)
