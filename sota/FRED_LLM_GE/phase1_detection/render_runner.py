@@ -17,6 +17,7 @@ its own window, so WINDOW_US is the true amount of time each frame waits for.
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import multiprocessing
@@ -81,6 +82,60 @@ def render_frame(renderer, events, end_us):
         raise ValueError(f"render must return a uint8 array of shape ({HEIGHT}, {WIDTH}, 3), "
                          f"got {type(image).__name__} {getattr(image, 'dtype', '')} {shape}")
     return image, len(window)
+
+
+def code_key(path):
+    """The renderer's editable code without comments or blank lines: equal keys draw equal frames."""
+    code = Path(path).read_text().split("# --OPTION--", 1)[-1]
+    lines = (line.rstrip() for line in code.splitlines())
+    return "\n".join(line for line in lines if line.strip() and not line.lstrip().startswith("#"))
+
+
+def earlier_score(renderer_path, sota_root, variant_dir):
+    """(gene_id, render stats) of an already scored renderer with the same code, or None.
+
+    Rendering and training are deterministic (fixed seed), so LLM-GE's frequent
+    exact copies, e.g. crossovers of two identical parents, need not be retrained.
+    A twin that failed gives stats {"failed": True}.
+    """
+    key = code_key(renderer_path)
+    for done in sorted((Path(sota_root) / "results").glob("*_results.csv")):
+        gene = done.name[:-len("_results.csv")]
+        path = Path(variant_dir or "") / f"network_{gene}.py"
+        if done.read_text().strip().endswith(",999999999") and path.is_file() \
+                and Path(path) != Path(renderer_path) and code_key(path) == key:
+            return gene, {"failed": True}
+    for done in sorted((Path(sota_root) / "renders").glob("*.json")):
+        gene = done.stem
+        path = SEED_RENDERER if gene == "seed" else Path(variant_dir or "") / f"network_{gene}.py"
+        stats = json.loads(done.read_text())
+        if path.is_file() and Path(path) != Path(renderer_path) and "duplicate_of" not in stats \
+                and code_key(path) == key:
+            return gene, stats
+    return None
+
+
+def wait_for_twin(renderer_path, sota_root, gene_id, poll_s=30, max_wait_s=3 * 3600):
+    """Register this renderer as running; if an identical one is already being
+    scored, wait for it to finish. Returns the claim file to delete when done.
+
+    Twins submitted together both see each other's claim, so the one with the
+    smaller gene id runs and the other waits.
+    """
+    running = Path(sota_root) / "renders" / "running"
+    running.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(code_key(renderer_path).encode()).hexdigest()
+    claim = running / f"{gene_id}.{digest}"
+    claim.touch()
+    deadline = time.time() + max_wait_s
+    while time.time() < deadline:
+        twins = [c for c in running.glob(f"*.{digest}") if c.name.split(".")[0] < gene_id
+                 and time.time() - c.stat().st_mtime < max_wait_s]
+        if not twins:
+            break
+        print(f"waiting for identical renderer {twins[0].name.split('.')[0]}", flush=True)
+        time.sleep(poll_s)
+    return claim
 
 
 _renderer = None
@@ -159,6 +214,30 @@ def main():
     settings = protocol["families"]["renderer"]
     renderer_path = (SEED_RENDERER if args.model == "network"
                      else Path(args.variant_dir) / f"{args.model}.py")
+    try:
+        claim = wait_for_twin(renderer_path, args.sota_root, gene_id)
+    except Exception as e:
+        print(f"twin check skipped: {e!r}", flush=True)
+        claim = None
+    try:
+        earlier = earlier_score(renderer_path, args.sota_root, args.variant_dir)
+    except Exception as e:
+        print(f"duplicate check skipped: {e!r}", flush=True)
+        earlier = None
+    if earlier and earlier[1].get("failed"):
+        write_failure_results(args.sota_root, gene_id, start, f"same code as {earlier[0]}, which failed")
+        claim and claim.unlink(missing_ok=True)
+        return
+    if earlier:
+        twin, stats = earlier
+        claim and claim.unlink(missing_ok=True)
+        renders = Path(args.sota_root) / "renders"
+        (renders / f"{gene_id}.json").write_text(json.dumps(dict(stats, duplicate_of=twin)))
+        write_results(args.sota_root, gene_id,
+                      DetectionResult(stats["mAP50"], stats["mAP50_95"], stats["window_us"]))
+        print(f"same code as {twin}: reusing its fitness mAP50 {stats['mAP50']:.4f}, "
+              f"mAP50:95 {stats['mAP50_95']:.4f}, window {stats['window_us']} us", flush=True)
+        return
     workdir = Path(tempfile.mkdtemp(prefix=f"render_{gene_id}_", dir=os.environ.get("TMPDIR")))
     try:
         # This is LLM Guided Code: a broken renderer gets worst-case fitness.
@@ -197,6 +276,8 @@ def main():
               f"({time.time() - start:.0f} s)", flush=True)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+        if claim:
+            claim.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

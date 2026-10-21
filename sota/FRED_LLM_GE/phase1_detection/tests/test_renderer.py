@@ -97,3 +97,48 @@ def test_frames_drawn_from_sliced_events_match_frames_from_all_events():
     for end in ends:
         assert np.array_equal(render_runner.render_frame(seed, sliced, end)[0],
                               render_runner.render_frame(seed, ev, end)[0])
+
+
+def test_identical_renderers_reuse_the_earlier_score(tmp_path):
+    import json
+
+    models, renders = tmp_path / "models", tmp_path / "renders"
+    models.mkdir()
+    renders.mkdir()
+    body = "import numpy as np\n# --OPTION--\nWINDOW_US = 10000\ndef render(events, window_us):\n    return 1\n"
+    (models / "network_a.py").write_text(body)
+    (renders / "a.json").write_text(json.dumps({"mAP50": 0.8, "mAP50_95": 0.4, "window_us": 10000}))
+    # Same code with other comments and blank lines: a duplicate.
+    (models / "network_b.py").write_text(body.replace("WINDOW_US", "# a comment\n\nWINDOW_US", 1))
+    gene, stats = render_runner.earlier_score(models / "network_b.py", tmp_path, models)
+    assert gene == "a" and stats["mAP50"] == 0.8
+    # A real change: no reuse.
+    (models / "network_c.py").write_text(body.replace("10000", "8000"))
+    assert render_runner.earlier_score(models / "network_c.py", tmp_path, models) is None
+
+
+def test_a_twin_waits_for_the_identical_renderer_with_the_smaller_id(tmp_path):
+    import threading
+
+    path = renderer_file(tmp_path, "# --OPTION--\nWINDOW_US = 10000\n")
+    first = render_runner.wait_for_twin(path, tmp_path, "a", poll_s=0.05)
+    waited = []
+    second = threading.Thread(target=lambda: waited.append(
+        render_runner.wait_for_twin(path, tmp_path, "b", poll_s=0.05)))
+    second.start()
+    second.join(0.3)
+    assert second.is_alive()  # "b" waits while "a" runs
+    first.unlink()
+    second.join(2)
+    assert waited and not second.is_alive()
+
+
+def test_a_twin_of_a_failed_renderer_fails_without_rerunning(tmp_path):
+    models, results = tmp_path / "models", tmp_path / "results"
+    models.mkdir()
+    results.mkdir()
+    body = "import numpy as np\n# --OPTION--\nWINDOW_US = 10000\ndef render(events, window_us):\n    return 1\n"
+    (models / "network_a.py").write_text(body)
+    (results / "a_results.csv").write_text("0.000000,0.000000,999999999")
+    (models / "network_b.py").write_text(body)
+    assert render_runner.earlier_score(models / "network_b.py", tmp_path, models) == ("a", {"failed": True})
