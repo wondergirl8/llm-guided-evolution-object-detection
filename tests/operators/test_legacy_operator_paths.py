@@ -74,3 +74,27 @@ def test_crossover_without_policy_uses_legacy_template_once(legacy_root, monkeyp
     operator.augment_network(str(first), str(second), str(target))
     assert len(calls) == 1
     assert target.read_text().split("# --OPTION--")[1].strip() == "edited: true"
+
+
+def test_policy_mutation_retry_uses_feedback_and_higher_sampling(legacy_root, monkeypatch):
+    operator = _load_operator(monkeypatch, "llm_mutation.py", legacy_root)
+    source = legacy_root / "parent.py"
+    target = legacy_root / "child.py"
+    source.write_text("protected\n# --OPTION--\noriginal: true\n")
+    responses = []
+    policy = types.SimpleNamespace(
+        retry_prompt=lambda prompt, error, attempt: prompt if attempt == 0 else f'{prompt}\nERROR: {error}',
+        repair_channel_values=lambda chunk: chunk,
+        changed_layer_count=lambda *_: 1,
+        differs_from_parents=lambda *_: len(responses) == 2,
+    )
+    monkeypatch.setattr(operator, 'load_candidate_policy', lambda _: policy)
+    monkeypatch.setattr(operator, 'max_gen_attempts', 2, raising=False)
+    operator.generate_augmented_code = lambda prompt, _, qc, top_p, model, temperature: (
+        responses.append((prompt, top_p, temperature)) or 'edited: true')
+    operator.augment_network(str(source), str(target), "mutation.txt", top_p=.1,
+                             temperature=.2)
+    assert len(responses) == 2
+    assert 'unchanged_parent' in responses[1][0]
+    assert responses[1][1] > responses[0][1]
+    assert responses[1][2] > responses[0][2]
