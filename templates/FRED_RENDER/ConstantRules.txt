@@ -5,9 +5,14 @@ Follow every rule below. These rules are mandatory and take precedence over crea
 2. Return the whole block: the WINDOW_US assignment and the complete render(events, window_us) function, plus any small helper functions it uses. Keep the names WINDOW_US and render and the signature render(events, window_us).
 3. WINDOW_US is an int from 1000 to 50000: how many microseconds of events each frame uses. A shorter window is part of the fitness score, because the frame is ready sooner, but too few events can hide the drone.
 4. events is a numpy structured array of only the events inside the window, sorted by time, with fields x (uint16, 0..1279), y (uint16, 0..719), p (int16: 1 = pixel got brighter, 0 = pixel got darker) and t (int64, microseconds before the frame time, -window_us < t < 0). It can be empty.
-5. render must return a numpy uint8 array of shape (720, 1280, 3). Every channel can carry information: for example polarity, event counts, or how recent the last event was.
+5. render must return a numpy uint8 array of shape (720, 1280, 3): create it as np.zeros((HEIGHT, WIDTH, 3), np.uint8) and use HEIGHT and WIDTH, never the numbers 720 or 1280, in every shape. Every channel can carry information: for example polarity, event counts, or how recent the last event was.
 6. Never move the drone: no flipping, cropping, shifting, resizing, rotating or blurring across large areas. The box labels are fixed in pixel coordinates.
 7. Use only numpy, already imported as np, and the constants WIDTH = 1280 and HEIGHT = 720. Do not import anything, read or write files, or print.
 8. Be fast: render is called about 17,000 times per evaluation. Use vectorized numpy (fancy indexing, np.add.at, np.bincount, np.maximum.at). Never loop over events in Python.
 9. The detector's training randomly changes image hue, saturation and brightness, so information carried only by an exact colour value is fragile. Prefer strong, simple contrasts.
 10. Do not add a '# --OPTION--' marker.
+11. Always make a real change. Returning the current code unchanged wastes an evaluation.
+12. Do not scale counts or times by the frame's maximum: one flickering pixel then makes everything else, including the drone, nearly black. Use fixed scales, e.g. np.minimum(count * 64, 255).
+13. Pixels with no events must stay background (dark). If a channel shows how recent events are, make recent events bright and older ones dimmer, and leave pixels without events at the background value.
+14. events["x"] and events["y"] are uint16, so events["y"] * WIDTH overflows and scrambles the image. Index with image[events["y"], events["x"]] or np.add.at(counts, (events["y"], events["x"]), 1); if you need a flat index, convert first: events["y"].astype(np.int64) * WIDTH + events["x"].
+15. Never chain comparisons on arrays (a < t <= b fails); combine them as (a < t) & (t <= b).
