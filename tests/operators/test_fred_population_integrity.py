@@ -105,9 +105,103 @@ def test_evaluation_submission_requests_supported_gpu(tmp_path, monkeypatch):
     monkeypatch.setattr(evolution.subprocess, 'run', lambda args, **kwargs:
                         calls.append(args) or SimpleNamespace(
                             returncode=0, stdout='Submitted batch job 123', stderr=''))
-    evolution.submit_run('gene')
-    assert calls[0][:3] == ['sbatch', '-C', 'H200']
+    evolution.submit_run('gene', exclude_nodes=('bad-node-1', 'bad-node-2'))
+    assert calls[0][:5] == [
+        'sbatch', '-C', 'H200', '--exclude', 'bad-node-1,bad-node-2']
     assert evolution.GLOBAL_DATA['gene']['results_job'] == '123'
+
+
+@pytest.mark.parametrize('preserve_slurm_binding', [True, False])
+def test_evaluation_script_preserves_slurm_gpu_assignment_when_requested(
+        tmp_path, monkeypatch, preserve_slurm_binding):
+    (tmp_path / '0').mkdir()
+    monkeypatch.setattr(evolution, 'OUTPUT_DIR', str(tmp_path))
+    monkeypatch.setattr(evolution, 'LOCAL', False)
+    monkeypatch.setattr(evolution, 'RUN_COMMAND', 'sbatch')
+    monkeypatch.setattr(evolution, 'PRESERVE_SLURM_CUDA_VISIBLE_DEVICES',
+                        preserve_slurm_binding, raising=False)
+    monkeypatch.setattr(evolution, 'GLOBAL_DATA', {'gene': {'sub_flag': True}})
+    monkeypatch.setattr(evolution, 'load_yaml', lambda: {
+        'python_bash_script': (
+            '#!/bin/bash\n#SBATCH --gres=gpu:1\n'
+            'export CUDA_VISIBLE_DEVICES=0\n{}\n')})
+    monkeypatch.setattr(evolution.subprocess, 'run', lambda *_args, **_kwargs:
+                        SimpleNamespace(returncode=0, stdout='Submitted batch job 123',
+                                        stderr=''))
+
+    evolution.submit_run('gene')
+
+    script = (tmp_path / '0' / 'gene_model.sh').read_text()
+    assert '#SBATCH --gres=gpu:1' in script
+    assert 'candidate_runner.py' in script
+    if preserve_slurm_binding:
+        assert 'export CUDA_VISIBLE_DEVICES=0' not in script
+        assert 'SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-unset}' in script
+        assert 'CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}' in script
+    else:
+        assert 'export CUDA_VISIBLE_DEVICES=0' in script
+
+
+def test_gpu_unavailable_retry_preserves_failure_and_recovers(tmp_path, monkeypatch):
+    results = tmp_path / 'results'
+    results.mkdir()
+    logs = tmp_path / 'evaluation'
+    logs.mkdir()
+    (logs / 'slurm-111.out').write_text('job done\n')
+    (results / 'seed_results.csv').write_text(
+        '-inf,-inf,inf,gpu_unavailable: CUDA unavailable\n')
+    monkeypatch.setattr(evolution, 'LOCAL', False)
+    monkeypatch.setattr(evolution, 'SOTA_ROOT', str(tmp_path))
+    monkeypatch.setattr(evolution, 'SLURM_OUTPUT_PATH', f'{tmp_path}/')
+    monkeypatch.setattr(evolution, 'EVAL_GPU_RETRY_LIMIT', 2, raising=False)
+    monkeypatch.setattr(evolution, 'GLOBAL_DATA', {
+        'seed': {'results_job': '111', 'local_output': None,
+                 'status': 'running eval', 'fitness': None,
+                 'evaluation_cache_key': 'seed-key'}})
+    monkeypatch.setattr(evolution, 'EVAL_PENDING', {'seed-key': 'seed'})
+    monkeypatch.setattr(evolution, 'EVAL_CACHE', {})
+    monkeypatch.setattr(evolution.subprocess, 'run', lambda *_args, **_kwargs:
+                        SimpleNamespace(returncode=0, stdout='bad-node-1\n'))
+    submitted = []
+
+    def resubmit(gene_id, exclude_nodes=()):
+        submitted.append((gene_id, exclude_nodes))
+        evolution.GLOBAL_DATA[gene_id]['results_job'] = '222'
+
+    monkeypatch.setattr(evolution, 'submit_run', resubmit)
+    evolution.check4results('seed')
+    assert submitted == [('seed', ['bad-node-1'])]
+    assert evolution.GLOBAL_DATA['seed']['gpu_retry_count'] == 1
+    assert evolution.GLOBAL_DATA['seed']['gpu_retry_history'][0]['job_id'] == '111'
+    assert (results / 'seed_gpu_retry_1.csv').exists()
+    assert not (results / 'seed_results.csv').exists()
+    assert evolution.EVAL_PENDING == {'seed-key': 'seed'}
+
+    (logs / 'slurm-222.out').write_text('job done\n')
+    (results / 'seed_results.csv').write_text('0.7,0.3,2500000\n')
+    evolution.check4results('seed')
+    assert evolution.GLOBAL_DATA['seed']['fitness'] == (0.7, 0.3, 2_500_000)
+    assert evolution.EVAL_CACHE['seed-key']['gene_id'] == 'seed'
+    assert evolution.EVAL_PENDING == {}
+
+
+def test_gpu_unavailable_retry_limit_records_failure(tmp_path, monkeypatch):
+    (tmp_path / 'results').mkdir()
+    (tmp_path / 'results' / 'seed_results.csv').write_text(
+        '-inf,-inf,inf,gpu_unavailable: CUDA unavailable\n')
+    (tmp_path / 'evaluation').mkdir()
+    (tmp_path / 'evaluation' / 'slurm-333.out').write_text('job done\n')
+    monkeypatch.setattr(evolution, 'LOCAL', False)
+    monkeypatch.setattr(evolution, 'SOTA_ROOT', str(tmp_path))
+    monkeypatch.setattr(evolution, 'SLURM_OUTPUT_PATH', f'{tmp_path}/')
+    monkeypatch.setattr(evolution, 'EVAL_GPU_RETRY_LIMIT', 2, raising=False)
+    monkeypatch.setattr(evolution, 'GLOBAL_DATA', {
+        'seed': {'results_job': '333', 'local_output': None,
+                 'status': 'running eval', 'fitness': None, 'gpu_retry_count': 2}})
+    evolution.check4results('seed')
+    assert evolution.GLOBAL_DATA['seed']['fitness'] == evolution.INVALID_FITNESS_MAX
+    assert evolution.GLOBAL_DATA['seed']['failure_category'] == 'gpu_unavailable'
+    assert 'after 2 GPU retries' in evolution.GLOBAL_DATA['seed']['failure_reason']
 
 
 def test_server_window_stops_before_allocation_expires(monkeypatch):
@@ -151,5 +245,17 @@ def test_resume_identity_records_generation_limit(monkeypatch):
     first = evolution.run_fingerprint()
     assert first['evolution_settings']['num_generations'] == 11
     monkeypatch.setattr(evolution, 'num_generations', 21)
+    with pytest.raises(RuntimeError, match='changed during this run'):
+        evolution.run_fingerprint()
+
+
+def test_resume_identity_records_gpu_retry_policy(monkeypatch):
+    monkeypatch.setattr(protocol_fingerprint, 'compute_fingerprint',
+                        lambda *_: {'sha256': 'same-training-protocol'})
+    monkeypatch.setattr(evolution, '_ACTIVE_FINGERPRINT', None)
+    monkeypatch.setattr(evolution, 'EVAL_GPU_RETRY_LIMIT', 2, raising=False)
+    first = evolution.run_fingerprint()
+    assert first['evolution_settings']['eval_gpu_retry_limit'] == 2
+    monkeypatch.setattr(evolution, 'EVAL_GPU_RETRY_LIMIT', 3)
     with pytest.raises(RuntimeError, match='changed during this run'):
         evolution.run_fingerprint()

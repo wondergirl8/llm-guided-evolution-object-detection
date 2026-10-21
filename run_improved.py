@@ -480,12 +480,24 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
         print(f'Model Files for {gene_id} are Loaded') if job_done else print(f'Error Loading Model Files for {gene_id}', flush=True)
     return individual
 
-def submit_run(gene_id):
+def submit_run(gene_id, exclude_nodes=()):
     def write_bash_script_py(gene_id, train_file=f'{TRAIN_FILE}'):
         model_file_override = RUNLINE_TMP.format(MODEL, gene_id) 
         python_runline = EVAL_RUNLINE.format(train_file, model_file_override, VARIANT_DIR=VARIANT_DIR)
         config = load_yaml()
-        bash_script_content = fill_template_slots(config['python_bash_script'], python_runline)
+        template = config['python_bash_script']
+        if not LOCAL and globals().get('PRESERVE_SLURM_CUDA_VISIBLE_DEVICES', False):
+            # The FRED GPU job must use SLURM's per-job device assignment.
+            template = ''.join(
+                line for line in template.splitlines(keepends=True)
+                if not re.match(r'^[ \t]*(?:export[ \t]+)?CUDA_VISIBLE_DEVICES[ \t]*=', line)
+            )
+            python_runline = (
+                'echo "Evaluation GPU binding: SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-unset} '
+                'CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"\n'
+                + python_runline
+            )
+        bash_script_content = fill_template_slots(template, python_runline)
         return bash_script_content
 
     # This is for subbing the python code
@@ -503,6 +515,8 @@ def submit_run(gene_id):
         command = [RUN_COMMAND]
         if not LOCAL and globals().get('EVAL_GPU_CONSTRAINT'):
             command.extend(['-C', EVAL_GPU_CONSTRAINT])
+        if not LOCAL and exclude_nodes:
+            command.extend(['--exclude', ','.join(exclude_nodes)])
         command.append(file_path)
         result = subprocess.run(command, capture_output=True, text=True)
         if LOCAL:
@@ -646,6 +660,57 @@ def check4model2run(gene_id):
 
     submit_run(gene_id)
 
+def evaluation_job_node(job_id):
+    """Find the node of a one-node SLURM evaluation job, when available."""
+    if not job_id or LOCAL:
+        return None
+    try:
+        result = subprocess.run(
+            ['sacct', '-n', '-P', '-X', '-j', str(job_id), '-o', 'NodeList'],
+            capture_output=True, text=True)
+    except OSError:
+        return None
+    if result.returncode:
+        return None
+    lines = result.stdout.strip().splitlines()
+    node = lines[0].split('|')[0] if lines else ''
+    return node if re.fullmatch(r'[A-Za-z0-9._-]+', node) and node not in (
+        'None', 'Unknown', 'Pending') else None
+
+
+def retry_unavailable_gpu(gene_id, reason):
+    """Retry a FRED CUDA visibility failure, excluding its node when known."""
+    limit = globals().get('EVAL_GPU_RETRY_LIMIT', 0)
+    entry = GLOBAL_DATA[gene_id]
+    attempts = entry.get('gpu_retry_count', 0)
+    if LOCAL or attempts >= limit or not reason.startswith('gpu_unavailable:'):
+        return False
+
+    old_job = entry.get('results_job')
+    bad_node = evaluation_job_node(old_job)
+    excluded = set(entry.get('excluded_eval_nodes', ()))
+    if bad_node:
+        excluded.add(bad_node)
+    retry_number = attempts + 1
+    results_path = f'{SOTA_ROOT}/results/{gene_id}_results.csv'
+    archived_path = f'{SOTA_ROOT}/results/{gene_id}_gpu_retry_{retry_number}.csv'
+    try:
+        os.replace(results_path, archived_path)
+    except OSError as exc:
+        print(f'Cannot preserve failed GPU result for retry: {exc}', flush=True)
+        return False
+
+    entry.setdefault('gpu_retry_history', []).append({
+        'job_id': old_job, 'node': bad_node, 'reason': reason,
+        'result_csv': archived_path})
+    entry['gpu_retry_count'] = retry_number
+    entry['excluded_eval_nodes'] = sorted(excluded)
+    print(f'Retrying {gene_id} after {reason}; attempt {retry_number}/{limit}; '
+          f'excluding nodes {sorted(excluded)}', flush=True)
+    submit_run(gene_id, exclude_nodes=sorted(excluded))
+    return True
+
+
 def check4results(gene_id):
     def check4error(gene_id):
         job_id = GLOBAL_DATA[gene_id]['results_job']
@@ -689,7 +754,11 @@ def check4results(gene_id):
                           else 'candidate_failed: no reason supplied')
                 if is_unsupported_gpu_error(reason):
                     reason = f'gpu_unsupported: {reason}'
-                record_failure(gene_id, reason)
+                if not retry_unavailable_gpu(gene_id, reason):
+                    retries = GLOBAL_DATA[gene_id].get('gpu_retry_count', 0)
+                    if reason.startswith('gpu_unavailable:') and retries:
+                        reason += f' (after {retries} GPU retries)'
+                    record_failure(gene_id, reason)
             elif all(np.isfinite(value) for value in fitness):
                 if len(row) > len(FITNESS_WEIGHTS) and row[len(FITNESS_WEIGHTS)].strip():
                     raise ValueError('successful result has a failure reason')
@@ -1106,6 +1175,9 @@ def run_fingerprint():
         'num_elites': num_elites,
         'max_refill_attempts': globals().get('FRED_MAX_REFILL_ATTEMPTS'),
         'eval_gpu_constraint': globals().get('EVAL_GPU_CONSTRAINT'),
+        'eval_gpu_retry_limit': globals().get('EVAL_GPU_RETRY_LIMIT', 0),
+        'preserve_slurm_cuda_visible_devices': globals().get(
+            'PRESERVE_SLURM_CUDA_VISIBLE_DEVICES', False),
         'fred_events': globals().get('FRED_EVENTS', ''),
     }
     if _ACTIVE_FINGERPRINT is not None and identity != _ACTIVE_FINGERPRINT:

@@ -165,12 +165,18 @@ INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
 # run_improved.py checkpoints generation 0 (seed and initial candidates), then
-# runs generations 1-20. Resubmitting resumes from the latest
+# runs generations 1 through num_generations - 1. Resubmitting resumes from the latest
 # checkpoint in the configured run directory.
-num_generations = int(os.getenv('FRED_NUM_GENERATIONS', '21'))
+num_generations = int(os.getenv('FRED_NUM_GENERATIONS', '11'))
 if num_generations < 1:
     raise ValueError('FRED_NUM_GENERATIONS must include generation 0')
 EVAL_GPU_CONSTRAINT = os.getenv('FRED_EVAL_GPU_CONSTRAINT', 'H200')
+# Respect SLURM's per-job CUDA_VISIBLE_DEVICES instead of the shared template's
+# hard-coded 0. PACE may remap an allocated physical GPU to logical device 0.
+PRESERVE_SLURM_CUDA_VISIBLE_DEVICES = True
+# Retry a GPU allocation that CUDA cannot use; this is an infrastructure
+# failure, not evidence that the candidate architecture is invalid.
+EVAL_GPU_RETRY_LIMIT = 2
 FRED_MAX_REFILL_ATTEMPTS = 24
 start_population_size = 8
 # Six selected parents enter the operators; two unmodified elites bring the
