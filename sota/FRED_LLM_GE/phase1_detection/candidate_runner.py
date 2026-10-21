@@ -17,6 +17,8 @@ import argparse
 import hashlib
 import json
 import os
+import platform
+import re
 import statistics
 import subprocess
 import time
@@ -78,6 +80,57 @@ def load_protocol(path):
 
 def sha256_file(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def dfine_runtime_code_sha256():
+    """Identify the shared D-FINE training, data, and evaluation code, including local edits."""
+    digest = hashlib.sha256()
+    for name in ("phase1_detection/candidate_runner.py", "phase1_detection/adapters/dfine.py",
+                 "phase1_detection/fitness.py", "phase1_detection/map_reporter.py",
+                 "phase1_detection/proxy_data.py", "phase1_detection/export_split.py"):
+        digest.update(name.encode())
+        digest.update((FRED_DIR / name).read_bytes())
+    return digest.hexdigest()
+
+
+def target_boxes_sha256(data):
+    """Identify ordered frame IDs and approved original-pixel training/eval boxes."""
+    if len(data["sample_ids"]) != len(data["orig_boxes"]):
+        raise ValueError("sample IDs and target boxes must align")
+    digest = hashlib.sha256()
+    for sample_id, boxes in zip(data["sample_ids"], data["orig_boxes"]):
+        value = torch.as_tensor(boxes, dtype=torch.float32).cpu().contiguous()
+        digest.update(sample_id.encode())
+        digest.update(b"\0")
+        digest.update(str(tuple(value.shape)).encode())
+        digest.update(b"\0")
+        digest.update(value.numpy().tobytes())
+    return digest.hexdigest()
+
+
+def initial_weights_sha256(model):
+    """Hash the initial model state before the first optimizer step."""
+    digest = hashlib.sha256()
+    for name, tensor in sorted(model.state_dict().items()):
+        value = tensor.detach().cpu().contiguous()
+        digest.update(f'{name}:{value.dtype}:{tuple(value.shape)}\n'.encode())
+        digest.update(value.numpy().tobytes())
+    return digest.hexdigest()
+
+
+def runtime_environment(device):
+    """Record the execution stack used for a D-FINE training run."""
+    return {
+        "hardware": (torch.cuda.get_device_name(device) if torch.device(device).type == "cuda"
+                     else platform.processor() or platform.machine()),
+        "device": str(device),
+        "platform": platform.platform(),
+        "pytorch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "cudnn": torch.backends.cudnn.version(),
+        "cudnn_benchmark": torch.backends.cudnn.benchmark,
+        "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
+    }
 
 
 def code_revision():
@@ -237,6 +290,9 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
         return
 
     param_count = adapter.param_count(model)
+    initial_hash = initial_weights_sha256(model) if family == "dfine" else None
+    environment = runtime_environment(device) if family == "dfine" else None
+    runtime_code_hash = dfine_runtime_code_sha256() if family == "dfine" else None
 
     if load_val is None:
         train_data, val_data = proxy_data(proxy)
@@ -250,13 +306,15 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
     try:
         training_history = []
         final_frames = None
-        if training_arm is None:
-            adapter.train(model, train_data, proxy, device)
-        else:
+        if family == "dfine" or training_arm is not None:
             def record_epoch(epoch, train_loss, learning_rate):
                 nonlocal final_frames
                 point = {"epoch": epoch, "train_loss": train_loss, "lr": learning_rate}
-                if epoch == 1 or epoch % 5 == 0 or epoch == proxy["epochs"]:
+                if family == "dfine":
+                    point["order_sha256"] = adapter.training_epoch_order_sha256[-1]
+                    point.update(adapter.training_epoch_losses[-1])
+                if training_arm is not None and (epoch == 1 or epoch % 5 == 0
+                                                 or epoch == proxy["epochs"]):
                     frames = predict_frames(adapter, model, val_data, proxy, device)
                     score = evaluate_frames(frames, params=param_count,
                                             expected_sample_ids=val_data["sample_ids"])
@@ -266,6 +324,8 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
                 training_history.append(point)
 
             adapter.train(model, train_data, proxy, device, on_epoch_end=record_epoch)
+        else:
+            adapter.train(model, train_data, proxy, device)
 
         model_dir = Path(sota_root) / "trained_models"
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -277,6 +337,15 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
         metadata = report_metadata(adapter, proxy, config, variant_path, model_path)
         if family == "dfine":
             metadata["training_seed"] = proxy["seed"]
+            metadata["initial_weights_sha256"] = initial_hash
+            metadata["training_order_sha256"] = adapter.training_order_sha256
+            metadata["training_seconds"] = sum(adapter.training_epoch_seconds)
+            metadata["training_sample_ids_sha256"] = hashlib.sha256(
+                json.dumps(train_data["sample_ids"]).encode()).hexdigest()
+            metadata["runtime_environment"] = environment
+            metadata["runtime_code_sha256"] = runtime_code_hash
+            metadata["training_targets_sha256"] = target_boxes_sha256(train_data)
+            metadata["validation_targets_sha256"] = target_boxes_sha256(val_data)
             metadata["validation_sample_ids_sha256"] = hashlib.sha256(
                 json.dumps(val_data["sample_ids"]).encode()).hexdigest()
             recipe = dict(config, proxy={key: value for key, value in proxy.items()
@@ -285,6 +354,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
                 json.dumps(recipe, sort_keys=True).encode()).hexdigest()
             if training_arm is not None:
                 metadata["training_arm"] = training_arm
+                metadata["training_recipe"] = config
             if refinement_bins is not None:
                 metadata["refinement_bins"] = refinement_bins
                 training_settings = dict(adapter.settings, model={
@@ -295,6 +365,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
                     proxy={key: value for key, value in proxy.items() if key != "seed"})
                 metadata["model_ablation_protocol_identity"] = hashlib.sha256(
                     json.dumps(shared_config, sort_keys=True).encode()).hexdigest()
+            if diagnostics:
                 metadata["preloaded_inference_ms_per_frame"] = inference_ms_per_frame(
                     adapter, model, val_data, proxy, device)
                 metadata["inference_device"] = str(device)
@@ -304,7 +375,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
             "params": param_count,
             "expected_sample_ids": val_data["sample_ids"],
         }
-        if training_arm is not None:
+        if family == "dfine" or training_arm is not None:
             payload["training_history"] = training_history
         report_options = {"diagnostics": True} if diagnostics else {}
         result, report_path = map_reporter.report(payload, sota_root=sota_root,
@@ -338,6 +409,8 @@ def main():
                         help="include optional COCO diagnostic breakdowns in the report")
     parser.add_argument("--training-seed", type=int,
                         help="D-FINE confirmation seed; write diagnostics outside evolution results")
+    parser.add_argument("--repeat-id", type=str,
+                        help="D-FINE unchanged-seed repeat label, used with --training-seed")
     parser.add_argument("--dfine-training-arm", choices=("baseline", "longer_budget", "cosine_lr"),
                         help="D-FINE-only training comparison; requires --training-seed")
     parser.add_argument("--dfine-reg-max", type=int,
@@ -380,6 +453,12 @@ def main():
             protocol["challenging"]["search"]["epochs"] *= 2
         protocol["families"]["dfine"]["lr_schedule"] = (
             "cosine" if args.dfine_training_arm == "cosine_lr" else "constant")
+    if args.repeat_id is not None and (
+            args.family != "dfine" or args.model != "network" or args.training_seed is None
+            or args.dfine_training_arm is not None or args.dfine_reg_max is not None
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", args.repeat_id)):
+        parser.error("--repeat-id requires an unchanged D-FINE seed and --training-seed; "
+                     "use letters, digits, '_' or '-' in the label")
     if args.training_seed is not None:
         if args.family != "dfine" or args.training_seed < 0:
             parser.error("--training-seed requires --family dfine and a nonnegative seed")
@@ -390,9 +469,13 @@ def main():
         elif args.dfine_training_arm is None:
             sota_root = str(Path(sota_root) / "diagnostic_repeats" /
                             f"seed_{args.training_seed}")
+            if args.repeat_id is not None:
+                sota_root = str(Path(sota_root) / f"repeat_{args.repeat_id}")
         else:
             sota_root = str(Path(sota_root) / "training_ablations" /
                             args.dfine_training_arm / f"seed_{args.training_seed}")
+        if args.repeat_id is not None and Path(sota_root).exists():
+            parser.error(f"repeat output already exists: {sota_root}")
         if any((Path(sota_root) / folder / f"{gene_id}{suffix}").exists()
                for folder, suffix in (("results", "_evaluation.json"),
                                       ("results", "_results.csv"),

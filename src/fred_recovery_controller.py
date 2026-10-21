@@ -53,9 +53,11 @@ def main():
     from src.cfg import constants as cfg
     from src.fred_runtime import assert_llm_job_active
     import run_improved as controller
-    from src.fred_session import enabled, cancel_owned_jobs, latest_pair, server_deadline
+    from src.fred_session import (atomic_write, enabled, cancel_owned_jobs, latest_pair,
+                                  mark_cancelled_evaluations, server_deadline)
     os.chdir(ROOT)
     process = None
+    pending_cleanup = None
     bounded = enabled()
     stop = [False]
     if bounded:
@@ -73,6 +75,12 @@ def main():
         controller.wait_for_llm_server(timeout=1800)
         checkpoints = ('fred_yolo26_p2_map5095_v1_checkpoints' if cfg.SEED_FAMILY == 'yolo26_p2'
                        else 'fred_dfine_checkpoints')
+        if bounded and cfg.SEED_FAMILY == 'dfine':
+            pending_cleanup = ROOT / checkpoints / '.cleanup_pending'
+            if pending_cleanup.exists():
+                cancelled = cancel_owned_jobs(ROOT, exclude_jobs=(os.environ['LLMGE_SERVER_JOB_ID'],))
+                mark_cancelled_evaluations(pending_cleanup.parent, cancelled or [])
+                pending_cleanup.unlink()
         previous = latest_pair(ROOT / checkpoints, ROOT / checkpoints, cfg.SEED_FAMILY)[0] if bounded else None
         if previous is None:
             if bounded and (ROOT / 'recovery-smoke').exists():
@@ -82,6 +90,8 @@ def main():
             smoke_generation()
         if bounded and (stop[0] or time.time() >= float(os.environ['LLMGE_SESSION_DEADLINE'])):
             return
+        if pending_cleanup is not None:
+            atomic_write(pending_cleanup, b'cleanup required before another controller starts\n')
         process = subprocess.Popen([sys.executable, 'run_improved.py', '--checkpoints', checkpoints,
                                     '--global_path', checkpoints, '--prompt_group', cfg.DEFAULT_PROMPT_GROUP],
                                    start_new_session=bounded)
@@ -117,7 +127,10 @@ def main():
                     process.kill()
         try:
             if bounded:
-                cancel_owned_jobs(ROOT)
+                cancelled = cancel_owned_jobs(ROOT)
+                if pending_cleanup is not None:
+                    mark_cancelled_evaluations(pending_cleanup.parent, cancelled or [])
+                    pending_cleanup.unlink(missing_ok=True)
             else:
                 stop_own_server()
         except Exception as error:

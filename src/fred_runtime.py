@@ -2,6 +2,26 @@
 import os
 import re
 import subprocess
+import time
+
+
+SLURM_STATUS_ATTEMPTS = 3
+
+
+def slurm_status(command):
+    """Retry temporary scheduler transport errors, never a reported job state."""
+    for attempt in range(SLURM_STATUS_ATTEMPTS):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            if attempt == SLURM_STATUS_ATTEMPTS - 1:
+                raise RuntimeError(f'Slurm status request timed out after {SLURM_STATUS_ATTEMPTS} attempts')
+        else:
+            if result.returncode == 0 or 'timed out' not in (result.stderr + result.stdout).lower():
+                return result
+            if attempt == SLURM_STATUS_ATTEMPTS - 1:
+                return result
+        time.sleep(2)
 
 
 def gpu_memory_budget(torch):
@@ -41,8 +61,7 @@ def assert_llm_job_active():
         return
     if not re.fullmatch(r'\d+', job):
         raise RuntimeError('LLMGE_SERVER_JOB_ID must be a numeric Slurm job ID')
-    result = subprocess.run(['scontrol', 'show', 'job', job, '-o'],
-                            capture_output=True, text=True, timeout=10)
+    result = slurm_status(['scontrol', 'show', 'job', job, '-o'])
     if result.returncode:
         raise RuntimeError(f'Cannot verify LLM server job {job}; stopping: {result.stderr.strip()}')
     match = re.search(r'(?:^|\s)JobState=(\S+)', result.stdout)

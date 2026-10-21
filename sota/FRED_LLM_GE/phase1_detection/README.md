@@ -186,6 +186,94 @@ local interface check without downloading FRED, run:
 python -m pytest -q sota/FRED_LLM_GE/phase1_detection/tests/test_dfine_adapter.py
 ```
 
+Before ranking new D-FINE architectures, check whether the unchanged seed
+repeats. First score one saved seed checkpoint twice on the same search
+validation export:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/rescore_dfine.py \
+  --checkpoint PATH/TO/trained_models/seed.pt \
+  --reference-report PATH/TO/results/seed_evaluation.json \
+  --device cuda --output PATH/TO/seed_rescore.json
+```
+
+The command checks checkpoint, model source, postprocessing, and validation
+sample IDs against the original report. It reads the exported validation
+frames locally and does not query Hugging Face. Its two passes record mAP and
+a hash of all predictions. Then train the unchanged seed twice with the same seed,
+protocol, export, and hardware:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/candidate_runner.py \
+  --family dfine --model network --training-seed 0 --repeat-id a --device cuda
+uv run python sota/FRED_LLM_GE/phase1_detection/candidate_runner.py \
+  --family dfine --model network --training-seed 0 --repeat-id b --device cuda
+```
+
+These runs have separate output folders under
+`seeds/dfine/diagnostic_repeats/seed_0/` and refuse an existing repeat folder.
+Each report records initial-weight, training-order, training-sample, model,
+checkpoint, and recipe hashes; hardware and PyTorch/CUDA versions; and loss,
+learning rate, and frame order for every epoch. Compare these fields and the
+final metrics between the two reports. If the same checkpoint gives different
+predictions, investigate evaluation. If initial weights or frame order differ,
+investigate setup and seeding. If those match but early losses diverge,
+investigate training runtime and operations before attributing a score change
+to an architecture. The original results already show different first-epoch
+losses across nominally identical D-FINE candidates; they lack these new
+records, so they cannot identify the exact cause of the 19.14%–63.85% mAP50
+spread. Use the search-validation export for these checks.
+
+After both repeats, run the unchanged seed with two other training seeds
+(`--training-seed 1` and `--training-seed 2`, without `--repeat-id`). Review all
+three seeds with the two same-seed runs and the saved checkpoint re-score:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/compare_dfine_repeatability.py \
+  --rescore PATH/TO/seed_rescore.json \
+  --repeat PATH/TO/seed_0/repeat_a/results/seed_evaluation.json \
+           PATH/TO/seed_0/repeat_b/results/seed_evaluation.json \
+  --independent PATH/TO/seed_1/results/seed_evaluation.json \
+                PATH/TO/seed_2/results/seed_evaluation.json \
+  --output PATH/TO/seed_repeatability_review.json
+```
+
+The review identifies scoring, setup, or training-history divergence and
+reports the mAP range across independent seeds. `complete: true` means the
+same-seed run repeated and at least two additional seeds were compared; it
+does not mean the seed meets an accuracy target. Old reports without initial
+weights and epoch history are rejected rather than treated as repeatability
+evidence.
+
+Before changing D-FINE's detection or box logic, audit the search-validation
+Event export with a saved seed checkpoint. Keep the original FRED sequence ZIPs
+locally under `SOURCE_ZIPS/<hf_folder>/<sequence>.zip` so the audit can compare
+exported frame indices and clipped boxes with `coordinates.txt` without a
+download:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/audit_dfine_event_export.py \
+  --checkpoint PATH/TO/trained_models/seed.pt \
+  --reference-report PATH/TO/results/seed_evaluation.json \
+  --source-zips PATH/TO/SOURCE_ZIPS \
+  --device cuda --output-dir PATH/TO/seed_event_audit
+```
+
+The read-only audit checks every validation PNG's mode and size, marker/sample
+identity, pixel boxes, YOLO label round-trip, target hash, and prediction box
+coordinates. With source ZIPs it also checks source frame selection, one PNG's
+pixels per sequence, and original annotations against the export's current
+clipping behavior. `audit.json` lists any mismatch and counts clipped, dropped,
+or malformed annotations. The output folder contains green target and orange
+prediction overlays for small drones, empty frames, sequences with many misses,
+misses, and localization errors. Inspect these images manually. Missing source
+ZIPs or an older report without a validation-target hash leave `audit_complete`
+false. Clipped or dropped source boxes require a Phase 0 annotation-policy
+decision; this tool reports them and does not change labels or the dataset.
+The current D-FINE search export uses native-size images; the runner's inverse
+resize mapping is also checked with a nontrivial synthetic case in the audit
+test.
+
 To diagnose the D-FINE seed and leading candidates, train each on the same
 search-validation export with at least two independent `--training-seed` values
 (three are preferable if compute allows). For example, run the seed and a
@@ -214,6 +302,66 @@ and per-sequence results. Use only search validation for this analysis.
 Without the original export and model files, these measurements cannot be
 reconstructed from the screenshots.
 
+For Step 4, re-score the saved seed and selected D-FINE candidate checkpoints
+with `--diagnostics`. This adds AP75, small-object AP/recall, IoU-0.50 misses,
+IoU-0.50-to-0.75 localization misses, and per-sequence metrics to each output.
+The optional overlays draw ground-truth boxes in green and predictions in
+orange on up to three Event frames from each error category:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/rescore_dfine.py \
+  --checkpoint PATH/TO/trained_models/seed.pt \
+  --reference-report PATH/TO/reports/seed_evaluation.json \
+  --device cuda --diagnostics --examples-dir PATH/TO/review/seed_frames \
+  --output PATH/TO/review/seed_diagnostics.json
+uv run python sota/FRED_LLM_GE/phase1_detection/rescore_dfine.py \
+  --checkpoint PATH/TO/trained_models/CANDIDATE_ID.pt \
+  --reference-report PATH/TO/reports/CANDIDATE_ID_evaluation.json \
+  --model network_CANDIDATE_ID --variant-dir PATH/TO/models \
+  --device cuda --diagnostics --examples-dir PATH/TO/review/CANDIDATE_ID_frames \
+  --output PATH/TO/review/CANDIDATE_ID_diagnostics.json
+uv run python sota/FRED_LLM_GE/phase1_detection/compare_dfine_diagnostics.py \
+  --checkpoint-review PATH/TO/review/seed_diagnostics.json \
+  PATH/TO/review/CANDIDATE_ID_diagnostics.json
+```
+
+Use the same frozen validation export and protocol for every checkpoint. The
+comparison refuses mismatched sample IDs, evaluation settings, training
+recipes, and sequence ground truth. It prints each run, per-sequence results,
+source identity, and candidate-minus-seed differences. Higher AP/recall and
+fewer misses are better; a negative miss-count difference indicates
+improvement. Its single-checkpoint mode is exploratory until Step 3 establishes
+training repeatability; use the default comparison
+mode after independent-seed confirmations. The overlays show all postprocessed
+predictions and ground-truth boxes for the selected frame. The supplied result
+bundle has checkpoints and reports but no Event frame export, so image review
+must run where that export is available. Do not use challenging_test here.
+
+For Step 5, compare postprocessing without retraining. The sweep loads one
+saved checkpoint, evaluates confidence cutoffs 0.01, 0.05, and 0.10 with the
+current IoU-0.5 NMS and with NMS disabled, then rechecks the original baseline.
+It records mAP50, mAP50:95, AP75, small-object AP/recall, prediction count,
+and changes from the baseline for each setting:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/compare_dfine_postprocessing.py \
+  --checkpoint PATH/TO/trained_models/seed.pt \
+  --reference-report PATH/TO/reports/seed_evaluation.json \
+  --device cuda --output PATH/TO/review/seed_postprocessing.json
+uv run python sota/FRED_LLM_GE/phase1_detection/compare_dfine_postprocessing.py \
+  --checkpoint PATH/TO/trained_models/CANDIDATE_ID.pt \
+  --reference-report PATH/TO/reports/CANDIDATE_ID_evaluation.json \
+  --model network_CANDIDATE_ID --variant-dir PATH/TO/models \
+  --device cuda --output PATH/TO/review/CANDIDATE_ID_postprocessing.json
+```
+
+Run the seed and selected candidate checkpoints on the same search-validation
+export. Confirm both baseline checks pass before interpreting policy differences.
+Choose one policy only after reviewing the same metric tradeoffs across those
+fixed checkpoints; then freeze that choice in the protocol for subsequent
+comparisons. The current protocol stays at confidence 0.05 and IoU-0.5 NMS
+until those measurements exist. The held-out test is not used for this choice.
+
 For a D-FINE training comparison with the architecture fixed, run the same
 `--model` and `--training-seed` under three separate arms:
 
@@ -233,17 +381,74 @@ keeps 20 epochs and changes only the learning-rate schedule (cosine with a
 minimum of 10% of its starting value). These are provisional experiments,
 not a change to the evolution training recipe. Each run writes under
 `seeds/dfine/training_ablations/<arm>/seed_N/`. Its evaluation JSON contains
-training loss and learning rate for every epoch, search-validation mAP50 and
-mAP50:95 at epoch 1, every fifth epoch, and the final epoch, plus the usual
-final diagnostics. Compare arms for the **same model and seed** before judging
-the effect; inspect the curve for continued improvement or instability before
-choosing a training recipe. The original search export and model files are
-required for real measurements. Do not use the held-out test for this choice.
+total training loss, the five raw loss terms, and learning rate for every epoch;
+search-validation mAP50 and mAP50:95 at epoch 1, every fifth epoch, and the
+final epoch; final AP75 diagnostics; and training time in seconds. The total
+loss is `loss_cls + 5*loss_bbox + 2*loss_giou + loss_fgl + 0.5*loss_go_lsd`;
+the individual terms are reported before those weights. Training time sums
+epoch durations and excludes the interim validation checks.
 
-Step 6 has one opt-in localization experiment for the D-FINE seed. Run it only
-if the Step 4 diagnostics show that higher-IoU box accuracy is the main
-weakness. It compares the protocol's 16 refinement bins with 32, keeping the
-same model source, search split, training budget, loss weights, and seed:
+After running all three arms with seeds 0 and 1, compare their reports:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/compare_dfine_training_arms.py \
+  sota/FRED_LLM_GE/phase1_detection/seeds/dfine/training_ablations/{baseline,longer_budget,cosine_lr}/seed_{0,1}/results/seed_evaluation.json
+```
+
+The comparator requires complete paired seeds, the same model, data,
+postprocessing, runtime environment, initialization and frame order, and
+training settings that differ only in epochs or schedule. It reports each run,
+per-arm averages, and paired differences from the baseline. Inspect mAP50:95,
+AP75, the loss curves, seed spread, and training time before choosing a recipe;
+an apparent gain from one seed is insufficient. The original search export and
+model files are required for real measurements. Do not use the held-out test
+for this choice.
+
+Step 7 starts by measuring whether the seed's selected query locations reach
+the missed small drones. Run this on a saved checkpoint with the original
+search-validation Event export:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/analyze_dfine_queries.py \
+  --checkpoint PATH/TO/trained_models/seed.pt \
+  --reference-report PATH/TO/reports/seed_evaluation.json \
+  --device cuda --output PATH/TO/review/seed_query_coverage.json
+```
+
+The report counts small objects (original area under 32x32 pixels) and misses
+(no postprocessed prediction at IoU 0.5). `available` means *any* encoder
+token's spatial center is inside the GT box; `selected` means one of the
+decoder's top-ranked initial query centers is inside it. These are location-coverage
+diagnostics, not AP scores. If many missed small objects are available but not
+selected, test this single query-selection variant: half the fixed query slots
+are reserved for stride-4 tokens, while the total query and memory limits stay
+unchanged. The seed and its default training protocol are untouched.
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/make_dfine_p4_query_variant.py \
+  --output sota/FRED_LLM_GE/phase1_detection/variants/dfine/network_p4_quota.py
+uv run python sota/FRED_LLM_GE/phase1_detection/candidate_runner.py \
+  --family dfine --model network --training-seed 0 \
+  --sota_root sota/FRED_LLM_GE/phase1_detection/seeds/dfine/query_ablations
+uv run python sota/FRED_LLM_GE/phase1_detection/candidate_runner.py \
+  --family dfine --model network_p4_quota \
+  --variant_dir sota/FRED_LLM_GE/phase1_detection/variants/dfine \
+  --training-seed 0 \
+  --sota_root sota/FRED_LLM_GE/phase1_detection/seeds/dfine/query_ablations
+```
+
+Repeat both training commands with seed 1 and compare their diagnostic reports
+using `compare_dfine_diagnostics.py`. Check mAP50:95, AP75, small-object AP and
+recall, and the new checkpoint's query coverage. If selected coverage is already
+high, do not infer that query selection is the bottleneck; inspect the
+classification and localization losses and the box diagnostics first. If even
+all stride-4 token centers miss many GT boxes, this query variant cannot fix
+that spatial-coverage limit. Test one architecture idea at a time.
+
+The same step also has one opt-in localization experiment for the D-FINE seed.
+Run it if higher-IoU box accuracy is the main weakness. It compares the
+protocol's 16 refinement bins with 32, keeping the same model source, search
+split, training budget, loss weights, and seed:
 
 ```bash
 uv run python sota/FRED_LLM_GE/phase1_detection/candidate_runner.py \
@@ -264,6 +469,34 @@ AP75 for localization, with parameter count and inference time as resource
 checks. This experiment does not change the default D-FINE search recipe or
 select a model automatically. The original search export is required for
 actual scores; freeze the selected model before a single held-out evaluation.
+
+Step 8 confirms a real architecture change against the seed with paired
+training seeds and the same frozen search-validation data, recipe, and
+postprocessing. Use new confirmation runs: the earlier result bundle lacks
+the per-run timing and exact target/code hashes required by this check. For
+the stride-4 query variant, run both models with seeds 0,
+1, and preferably 2, then review their diagnostic reports:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/compare_dfine_diagnostics.py \
+  --confirm-gains \
+  --output sota/FRED_LLM_GE/phase1_detection/seeds/dfine/query_ablations/gain_review.json \
+  sota/FRED_LLM_GE/phase1_detection/seeds/dfine/query_ablations/diagnostic_repeats/seed_{0,1,2}/results/{seed,p4_quota}_evaluation.json
+```
+
+Use the same command with the actual candidate ID for another mutation. The
+confirmation check requires at least two paired seeds and identical code,
+training-frame identities, training order within each pair, evaluation setup,
+and hardware. Three seeds are preferable. It reports mAP50:95, AP75, small AP,
+and small recall for each pair. A metric passes its conservative variation
+screen only when every paired gain is positive and its mean gain exceeds the
+larger observed seed-to-seed range of the seed and candidate. This is a simple
+screen, not a significance test. The review also records parameter-count and
+preloaded inference-time changes; timing uses the same first validation frame,
+one warmup, and three measured passes. Review accuracy and resource cost before
+calling an architecture better or promoting it. No promotion happens
+automatically, and the held-out test is not used for this choice.
+
 After freezing the selected source and refinement-bin count from search
 validation, the existing final export can train D-FINE on challenging_train
 and score challenging_test once:

@@ -155,6 +155,44 @@ def test_mutation_worker_routes_real_section_through_validation_retry(tmp_path, 
     assert not replies and output.exists()
 
 
+@pytest.mark.parametrize('reply', ['ERROR', None, 'unchanged'])
+def test_dfine_mutation_rejects_failed_or_unchanged_proposal(tmp_path, monkeypatch, reply):
+    from src import llm_mutation
+    seed = FRED / 'seeds/seed_dfine.py'
+    monkeypatch.setattr(llm_mutation, 'SEED_FAMILY', 'dfine')
+    monkeypatch.setattr(llm_mutation.np.random, 'randint', lambda *a: 1)
+    if reply == 'unchanged':
+        reply = seed.read_text().split('# --OPTION--')[1].strip() + '\n'
+    monkeypatch.setattr(llm_mutation, 'generate_augmented_code', lambda *a, **k: reply)
+    template = tmp_path / 'prompt.txt'
+    template.write_text('Improve this section: {}')
+    output = tmp_path / 'candidate.py'
+
+    with pytest.raises(RuntimeError, match='ERROR proposal:'):
+        llm_mutation.augment_network(str(seed), str(output), str(template))
+
+    assert not output.exists()
+
+
+def test_dfine_crossover_rejects_failed_proposal(tmp_path, monkeypatch):
+    from src import llm_crossover
+    seed = FRED / 'seeds/seed_dfine.py'
+    monkeypatch.setattr(llm_crossover, 'SEED_FAMILY', 'dfine')
+    monkeypatch.setattr(llm_crossover, 'ROOT_DIR', str(tmp_path))
+    monkeypatch.setattr(llm_crossover, 'CONSTANT_RULES_PATH', None)
+    monkeypatch.setattr(llm_crossover, 'generate_augmented_code', lambda *a: 'ERROR')
+    templates = tmp_path / 'templates/CrossOver'
+    templates.mkdir(parents=True)
+    for name in ('crossover.txt', 'crossover_s.txt'):
+        (templates / name).write_text('Combine {} and {}')
+    output = tmp_path / 'candidate.py'
+
+    with pytest.raises(RuntimeError, match='ERROR proposal:'):
+        llm_crossover.augment_network(str(seed), str(seed), str(output))
+
+    assert not output.exists()
+
+
 def test_crossover_worker_preserves_first_parent_one_layer_contract(tmp_path, monkeypatch):
     from src import llm_crossover
     monkeypatch.setattr(llm_crossover, 'SEED_FAMILY', 'yolo26_p2')

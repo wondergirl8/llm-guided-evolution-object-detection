@@ -6,6 +6,7 @@ import glob
 import numpy as np
 import transformers
 import argparse
+import ast
 from pathlib import Path
 
 # Ensure repo root is on sys.path so `src` imports work even when launched from nested dirs
@@ -31,6 +32,25 @@ def validate_generated_chunk(code_from_llm):
     except NameError:
         #if FORBIDDEN_PATTERNS not defined return true
         return True, ""
+
+
+def validate_dfine_proposal(parent, proposal):
+    """Require one executable class that actually changes the parent section."""
+    if not proposal or proposal == "ERROR":
+        raise ValueError("LLM returned no valid code")
+    try:
+        original = ast.parse(parent).body
+        proposed = ast.parse(proposal).body
+    except SyntaxError as exc:
+        raise ValueError(f"invalid Python: {exc.msg}") from exc
+    if (len(original) != 1 or len(proposed) != 1
+            or not isinstance(original[0], ast.ClassDef)
+            or not isinstance(proposed[0], ast.ClassDef)
+            or proposed[0].name != original[0].name):
+        raise ValueError("proposal must contain only the selected architecture class")
+    if ast.dump(original[0], include_attributes=False) == ast.dump(
+            proposed[0], include_attributes=False):
+        raise ValueError("proposal leaves the architecture class unchanged")
 
 def augment_network(input_filename='network.py', output_filename='network_x.py', template_txt=None,
                     top_p=0.15, llm_model=LLM_DEEPSEEK, temperature=0.1, apply_quality_control=False):
@@ -64,7 +84,17 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
                                             top_p, llm_model, temperature)
     
-    if not code_from_llm or code_from_llm == "ERROR":
+    if globals().get('SEED_FAMILY') == 'dfine':
+        if code_from_llm and code_from_llm != "ERROR":
+            code_from_llm = strip_leading_imports(code_from_llm)
+            valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
+            if not valid_code:
+                raise RuntimeError(f"ERROR proposal: {invalid_reason}")
+        try:
+            validate_dfine_proposal(code2llm, code_from_llm)
+        except ValueError as exc:
+            raise RuntimeError(f"ERROR proposal: {exc}") from exc
+    elif not code_from_llm or code_from_llm == "ERROR":
         # Keep the parent's chunk rather than writing the prompt into the model
         code_from_llm = code2llm.strip()
     else:

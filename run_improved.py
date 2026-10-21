@@ -12,6 +12,7 @@ import yaml
 import numpy as np
 import re
 import math
+import ast
 import urllib.request
 import urllib.error
 from deap import base, creator, tools
@@ -437,12 +438,17 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
                                             top_p=0.1, temperature=temperature)
     GLOBAL_DATA[gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
                             'status':'subbed file', 'fitness':None, 'start_time':time.time()}
+    if SEED_FAMILY == 'dfine':
+        GLOBAL_DATA[gene_id]['parent_sources'] = [SEED_NETWORK]
+        if not successful_sub_flag:
+            record_dfine_proposal_failure(gene_id, 'LLM job submission failed')
     GLOBAL_DATA_ANCESTRY[gene_id] = {'GENES':[gene_id], 'MUTATE_TYPE':["CREATED"]}
     
     individual = container([gene_id])  # Assign a file ID
     
     if DELAYED_CHECK:
-        GLOBAL_DATA[gene_id]['status'] = 'DELAYED_CHECK'
+        if successful_sub_flag or SEED_FAMILY != 'dfine':
+            GLOBAL_DATA[gene_id]['status'] = 'DELAYED_CHECK'
         individual = creator.Individual([gene_id])
         return individual
     
@@ -453,6 +459,8 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
             print(f'Checking completion for {gene_id}', flush=True)
         job_done = check4job_completion(job_id=job_id, local_output=local_output, extension="evolution/")
         print(f'Model Files for {gene_id} are Loaded') if job_done else print(f'Error Loading Model Files for {gene_id}', flush=True)
+        if SEED_FAMILY == 'dfine' and not job_done:
+            record_dfine_proposal_failure(gene_id)
     return individual
 
 def submit_run(gene_id):
@@ -494,7 +502,18 @@ def submit_run(gene_id):
     
     out_dir = os.path.join(OUTPUT_DIR, str(GENERATION))
     file_path = os.path.join(out_dir, f'{gene_id}_model.sh')
+    from src.fred_session import enabled, eval_submission
+    journal = (SEED_FAMILY == 'dfine' and enabled() and not LOCAL
+               and CHECKPOINT_FOLDER is not None)
+    if journal:
+        eval_submission(CHECKPOINT_FOLDER, gene_id, state='intent',
+                        retry=GLOBAL_DATA[gene_id].get('infrastructure_retries', 0) > 0)
     successful_sub_flag, job_id, local_output = submit_bash_py(file_path, gene_id)
+    if journal:
+        if successful_sub_flag and not str(job_id).isdecimal():
+            raise RuntimeError(f'Cannot confirm evaluation job ID for {gene_id}: {job_id!r}')
+        eval_submission(CHECKPOINT_FOLDER, gene_id,
+                        state='submitted' if successful_sub_flag else 'failed', job_id=job_id)
     if not successful_sub_flag and SEED_FAMILY == 'dfine':
         reject_detection_fitness(gene_id, None,
                                  f'Evaluation job submission failed: {local_output}',
@@ -519,8 +538,7 @@ def check4model2run(gene_id):
     if not os.path.isfile(check_exist):
         print(f'\t☠ Model file does not exist for gene_id: {gene_id}, skipping evaluation.')
         if SEED_FAMILY == 'dfine':
-            reject_detection_fitness(gene_id, None, f'Missing model file: {check_exist}',
-                                     status='FAILED: MODEL FILE')
+            record_dfine_proposal_failure(gene_id, f'Missing generated model file: {check_exist}')
         else:
             GLOBAL_DATA[gene_id]['status'] = 'completed'
             GLOBAL_DATA[gene_id]['fitness'] = INVALID_FITNESS_MAX
@@ -533,6 +551,20 @@ def check4model2run(gene_id):
 
         protocol = load_protocol(DEFAULT_PROTOCOL)
         adapter = ADAPTERS[SEED_FAMILY](protocol['families'][SEED_FAMILY], FRED_DIR)
+        if SEED_FAMILY == 'dfine':
+            try:
+                with open(check_exist) as source:
+                    candidate_ast = ast.dump(ast.parse(source.read()), include_attributes=False)
+                for parent in GLOBAL_DATA[gene_id].get('parent_sources', [SEED_NETWORK]):
+                    with open(parent) as source:
+                        parent_ast = ast.dump(ast.parse(source.read()), include_attributes=False)
+                    if candidate_ast == parent_ast:
+                        record_dfine_proposal_failure(
+                            gene_id, f'Generated architecture is unchanged from {parent}')
+                        return
+            except (OSError, SyntaxError) as exc:
+                record_dfine_proposal_failure(gene_id, f'Invalid generated source: {exc}')
+                return
         if SEED_FAMILY == 'yolo26_p2':
             parent_id = GLOBAL_DATA[gene_id].get('parent_gene_id')
             parent_path = (f'{VARIANT_DIR}/{MODEL}_{parent_id}.py'
@@ -609,6 +641,22 @@ def reject_detection_fitness(gene_id, raw_fitness, reason, status='FAILED: INVAL
     record['fitness'] = INVALID_FITNESS_MAX
     record['status'] = status
     print(f'\t☠ {SEED_FAMILY} fitness rejected for {gene_id}: {reason}; raw={raw_fitness!r}', flush=True)
+
+
+def record_dfine_proposal_failure(gene_id, reason=None):
+    """Keep proposal failures distinct from training and evaluation failures."""
+    job_id = GLOBAL_DATA[gene_id].get('job_id')
+    log_path = f'{SLURM_OUTPUT_PATH}evolution/slurm-{job_id}.out' if job_id else None
+    if reason is None:
+        reason = 'LLM generation job failed'
+        if log_path and os.path.isfile(log_path):
+            with open(log_path) as log:
+                markers = [line.strip() for line in log if 'ERROR proposal:' in line]
+            if markers:
+                reason = markers[-1].split('ERROR proposal:', 1)[1].strip()
+    if log_path:
+        reason = f'{reason}; generation log: {log_path}'
+    reject_detection_fitness(gene_id, None, reason, status='FAILED: PROPOSAL')
 
 
 def valid_detection_population(population):
@@ -892,6 +940,8 @@ def update_individual(ind, new_gene_id, old_gene_id=None, process_success=True, 
     else:
         print(f'\t☠ Failed {operation}: {new_gene_id}')
         if new_gene_id in GLOBAL_DATA.keys():
+            if SEED_FAMILY == 'dfine':
+                GLOBAL_DATA_HIST[new_gene_id] = GLOBAL_DATA[new_gene_id].copy()
             del GLOBAL_DATA[new_gene_id]
         if old_gene_id is not None:
             ind[0] = old_gene_id
@@ -908,9 +958,15 @@ def delayed_mate_check(offspring):
                 GLOBAL_DATA[k]["status"]="subbed file"
                 successful_sub_flag = GLOBAL_DATA[k]["sub_flag"]
                 new_gene_id, job_id = k, GLOBAL_DATA[k]["job_id"]
+                if SEED_FAMILY == 'dfine' and not successful_sub_flag:
+                    record_dfine_proposal_failure(new_gene_id, 'LLM job submission failed')
                 print(f'Delayed Mating Check: {new_gene_id}, LLM Job ID: {job_id}')
-                print(f'\t‣ Checking for Crossover Job Completion: {job_id} for {new_gene_id}')
-                job_done = check4job_completion(job_id, extension="evolution/")
+                job_done = False
+                if successful_sub_flag:
+                    print(f'\t‣ Checking for Crossover Job Completion: {job_id} for {new_gene_id}')
+                    job_done = check4job_completion(job_id, extension="evolution/")
+                    if SEED_FAMILY == 'dfine' and not job_done:
+                        record_dfine_proposal_failure(new_gene_id)
 
                 if job_done:
                     print(f'\t‣ Model Files for {new_gene_id} are Loaded', flush=True) 
@@ -932,11 +988,16 @@ def delayed_creation_check(offspring):
             if k in GLOBAL_DATA and GLOBAL_DATA[k]["status"] == "DELAYED_CHECK":
                 GLOBAL_DATA[k]["status"]="subbed file"
                 successful_sub_flag = GLOBAL_DATA[k]["sub_flag"]
+                if SEED_FAMILY == 'dfine' and not successful_sub_flag:
+                    record_dfine_proposal_failure(k, 'LLM job submission failed')
+                job_done = False
                 if successful_sub_flag:
                     gene_id = k
                     job_id = GLOBAL_DATA[k]["job_id"]
                     print(f'Checking for Job Completion: {job_id} for {gene_id}', flush=True)
                     job_done = check4job_completion(job_id, extension="evolution/")
+                    if SEED_FAMILY == 'dfine' and not job_done:
+                        record_dfine_proposal_failure(gene_id)
                   
     return offspring
 
@@ -960,12 +1021,17 @@ def delayed_mutate_check(offspring):
             if k in GLOBAL_DATA and GLOBAL_DATA[k]["status"] == "DELAYED_CHECK":
                 GLOBAL_DATA[k]["status"]="subbed file"
                 successful_sub_flag = GLOBAL_DATA[k]["sub_flag"]
+                if SEED_FAMILY == 'dfine' and not successful_sub_flag:
+                    record_dfine_proposal_failure(k, 'LLM job submission failed')
+                job_done = False
                 if successful_sub_flag:
                     new_gene_id = k
                     job_id = GLOBAL_DATA[k]["job_id"]
                     print(f'Delayed Mutation Check: {new_gene_id}, LLM Job ID: {job_id}', flush=True)
                     print(f'\t‣ Checking for Creation Job Completion: {job_id} for {new_gene_id}')
                     job_done = check4job_completion(job_id, extension="evolution/")
+                    if SEED_FAMILY == 'dfine' and not job_done:
+                        record_dfine_proposal_failure(new_gene_id)
                     if job_done:
                         print(f'\t‣ Model Files for {new_gene_id} are Loaded') 
                     else: 
@@ -1012,6 +1078,11 @@ def customCrossover(ind1, ind2, llm_model):
         # Update global data for the new individual
         GLOBAL_DATA[new_gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
                                     'status':'subbed file', 'fitness':None, 'start_time':time.time()}
+        if SEED_FAMILY == 'dfine':
+            GLOBAL_DATA[new_gene_id]['parent_sources'] = [
+                f'{VARIANT_DIR}/{MODEL}_{gene_id_1}.py',
+                f'{VARIANT_DIR}/{MODEL}_{gene_id_2}.py',
+            ]
         if SEED_FAMILY == 'yolo26_p2':
             GLOBAL_DATA[new_gene_id]['parent_gene_id'] = gene_id_1
         
@@ -1022,12 +1093,16 @@ def customCrossover(ind1, ind2, llm_model):
         if successful_sub_flag:
             print(f'\t‣ Checking for Crossover Job Completion: {job_id} for {new_gene_id}')
             job_done = check4job_completion(job_id, local_output, extension="evolution/")
+            if SEED_FAMILY == 'dfine' and not job_done:
+                record_dfine_proposal_failure(new_gene_id)
             if job_done:
                 print(f'\t‣ Model Files for {new_gene_id} are Loaded')
             else: 
                 print(f'\t‣ Error Loading Model Files for {new_gene_id}!!')
 
-        failed_process = True if (successful_sub_flag is False) or (job_done is False) else False
+        if SEED_FAMILY == 'dfine' and not successful_sub_flag:
+            record_dfine_proposal_failure(new_gene_id, 'LLM job submission failed')
+        failed_process = not (successful_sub_flag and job_done)
         # Return the new gene ID
         return new_gene_id, failed_process
     
@@ -1095,6 +1170,9 @@ def customMutation(individual, llm_model, indpb, temp_min=0.02, temp_max=0.35):
     # Update the global data with the new task
     GLOBAL_DATA[new_gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
                                 'status':'subbed file', 'fitness':None, 'start_time':time.time()}
+    if SEED_FAMILY == 'dfine':
+        GLOBAL_DATA[new_gene_id]['parent_sources'] = [
+            f'{VARIANT_DIR}/{MODEL}_{old_gene_id}.py']
     if SEED_FAMILY == 'yolo26_p2':
         GLOBAL_DATA[new_gene_id]['parent_gene_id'] = old_gene_id
     
@@ -1108,11 +1186,15 @@ def customMutation(individual, llm_model, indpb, temp_min=0.02, temp_max=0.35):
     if successful_sub_flag:
         print(f'\t‣ Checking for Mutation Job Completion: {job_id} for {new_gene_id}')
         job_done = check4job_completion(job_id, local_output, extension="evolution/")
+        if SEED_FAMILY == 'dfine' and not job_done:
+            record_dfine_proposal_failure(new_gene_id)
         if job_done:
             print(f'\t‣ Model Files for {new_gene_id} are Loaded')
         else: 
             print(f'\t☠ Error Loading Model Files for {new_gene_id}')
     
+    if SEED_FAMILY == 'dfine' and not successful_sub_flag:
+        record_dfine_proposal_failure(new_gene_id, 'LLM job submission failed')
     failed_process = not (successful_sub_flag and job_done)
 
     individual = update_individual(individual, new_gene_id, old_gene_id,
@@ -1214,7 +1296,7 @@ def extract_generation(filename, kind):
     return int(matcher.group(1)) if matcher else None
 
 def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path="checkpoints", global_file=None):
-    from src.fred_session import enabled, latest_pair
+    from src.fred_session import enabled, eval_submission, latest_pair
     if enabled():
         if checkpoint_file is not None or global_file is not None:
             raise ValueError('Bounded sessions resume the newest committed checkpoint pair')
@@ -1222,6 +1304,22 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         if data is not None:
             require_yolo26_selection_version(data, folder_name)
             require_yolo26_selection_version(state, global_path)
+            if SEED_FAMILY == 'dfine':
+                for individual in data['population']:
+                    gene_id = individual[0]
+                    record = state['GLOBAL_DATA'].get(gene_id)
+                    if not record or record['status'] not in ('subbed file', 'running eval'):
+                        continue
+                    submission = eval_submission(folder_name, gene_id)
+                    if submission and submission['state'] == 'submitted':
+                        record.update(status='running eval', results_job=submission['job_id'],
+                                      eval_start_time=submission['at'], local_output=None)
+                    elif submission and submission['state'] == 'cancelled':
+                        record.update(status='subbed file', results_job=None, local_output=None)
+                    elif submission:
+                        record.update(status='FAILED: INFRASTRUCTURE', fitness=INVALID_FITNESS_MAX,
+                                      failure_reason='Evaluation submission was interrupted or failed; '
+                                                     'job identity could not be confirmed')
         return data, start_gen, state
     if not os.path.exists(folder_name) or not os.path.exists(global_path):
         print("Path does not exist, returning none for checkpoints")
@@ -1319,6 +1417,7 @@ GLOBAL_DATA = {}
 GLOBAL_DATA_HIST = {}
 GLOBAL_DATA_ANCESTRY = {}
 GLOBAL_DATA_ANCESTRY[MODEL] = {'GENES':[MODEL], 'MUTATE_TYPE':["CREATED"]}
+CHECKPOINT_FOLDER = None
 
 # Main Evolution Loop
 if __name__ == "__main__":
@@ -1335,6 +1434,7 @@ if __name__ == "__main__":
     # Parse the arguments
     args = parser.parse_args()
     llm_model = args.llm_model
+    CHECKPOINT_FOLDER = args.checkpoints
 
     PROMPT_GLOB = resolve_prompt_glob(args.prompt_group)
 

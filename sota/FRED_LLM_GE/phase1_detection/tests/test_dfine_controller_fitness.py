@@ -15,6 +15,8 @@ from sota.FRED_LLM_GE.phase1_detection import candidate_runner
 @pytest.fixture
 def dfine_state(monkeypatch, tmp_path):
     monkeypatch.setattr(controller, "SEED_FAMILY", "dfine")
+    monkeypatch.setattr(controller, "SEED_NETWORK",
+                        str(candidate_runner.FRED_DIR / "seeds" / "seed_dfine.py"))
     monkeypatch.setattr(controller, "SOTA_ROOT", str(tmp_path))
     monkeypatch.setattr(controller, "GLOBAL_DATA", {})
     monkeypatch.setattr(controller, "GLOBAL_DATA_HIST", {})
@@ -88,7 +90,11 @@ def test_dfine_preflight_rejects_invalid_candidates_before_submission(
             '        if self.training: raise RuntimeError("training-only failure")\n'
             "        tokens, coordinates = self._tokens(features)", 1,
         ),
-        "good": seed,
+        "unchanged": seed.replace("class EventBackbone", "\nclass EventBackbone", 1),
+        "good": seed.replace(
+            "self.max_memory_tokens = max(256, 4 * num_queries)",
+            "self.max_memory_tokens = max(384, 4 * num_queries)", 1,
+        ),
     }
     for gene_id, source in candidates.items():
         controller.GLOBAL_DATA[gene_id] = {"status": "subbed file", "fitness": None}
@@ -96,11 +102,33 @@ def test_dfine_preflight_rejects_invalid_candidates_before_submission(
         controller.check4model2run(gene_id)
 
     assert submitted == ["good"]
+    assert controller.GLOBAL_DATA["unchanged"]["status"] == "FAILED: PROPOSAL"
+    assert "unchanged" in controller.GLOBAL_DATA["unchanged"]["failure_reason"]
     for gene_id, cause in (("bad_constructor", "kernel_size"),
                            ("bad_training", "training-only failure")):
         assert controller.GLOBAL_DATA[gene_id]["status"] == "FAILED: PREFLIGHT"
         assert cause in controller.GLOBAL_DATA[gene_id]["failure_reason"]
     assert controller.GLOBAL_DATA["good"]["status"] == "subbed file"
+
+
+def test_failed_dfine_generation_records_proposal_reason(dfine_state, monkeypatch, tmp_path):
+    monkeypatch.setattr(controller, "DELAYED_CHECK", True)
+    monkeypatch.setattr(controller, "SLURM_OUTPUT_PATH", str(tmp_path) + "/")
+    log = tmp_path / "evolution" / "slurm-123.out"
+    log.parent.mkdir()
+    log.write_text("ERROR proposal: proposal leaves the architecture class unchanged\n")
+    controller.GLOBAL_DATA["bad"] = {
+        "sub_flag": True, "job_id": "123", "status": "DELAYED_CHECK",
+        "fitness": None, "start_time": time.time(),
+    }
+    monkeypatch.setattr(controller, "check4job_completion", lambda *args, **kwargs: False)
+
+    controller.delayed_creation_check([_candidate("bad")])
+
+    record = controller.GLOBAL_DATA["bad"]
+    assert record["status"] == "FAILED: PROPOSAL"
+    assert "leaves the architecture class unchanged" in record["failure_reason"]
+    assert str(log) in record["failure_reason"]
 
 
 def test_dfine_gpu_job_keeps_slurm_assignment(monkeypatch):

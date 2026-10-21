@@ -6,8 +6,10 @@ candidate, and applies the shared proxy confidence/NMS settings at inference.
 """
 
 import ast
+import hashlib
 import importlib.util
 import re
+import time
 from pathlib import Path
 
 import torch
@@ -166,9 +168,18 @@ class DFINEAdapter(FamilyAdapter):
             if schedule == "cosine" else None)
         generator = torch.Generator().manual_seed(proxy["seed"])
         workers = self.settings.get("workers", 0)
+        order_digest = hashlib.sha256()
+        self.training_epoch_order_sha256 = []
+        self.training_epoch_losses = []
+        self.training_epoch_seconds = []
+        loss_terms = ("loss_cls", "loss_bbox", "loss_giou", "loss_fgl", "loss_go_lsd")
         for epoch in range(epochs):
+            epoch_start = time.perf_counter()
             model.train()
             order = torch.randperm(len(images), generator=generator)
+            order_bytes = order.numpy().tobytes()
+            order_digest.update(order_bytes)
+            self.training_epoch_order_sha256.append(hashlib.sha256(order_bytes).hexdigest())
             groups = [order[start:start + batch_size] for start in range(0, len(order), batch_size)]
             # Workers decode upcoming PNG frames while the GPU trains; the
             # frame order and optimizer steps are the same as without them.
@@ -177,9 +188,11 @@ class DFINEAdapter(FamilyAdapter):
                 pin_memory=torch.device(device).type == "cuda",
             )
             total = 0.0
+            term_totals = {name: 0.0 for name in loss_terms}
             for group, group_images in loader:
                 optimizer.zero_grad(set_to_none=True)
                 batch_loss = 0.0
+                batch_terms = {name: 0.0 for name in loss_terms}
                 for offset in range(0, len(group), microbatch):
                     selected = group[offset:offset + microbatch]
                     raw = group_images[offset:offset + microbatch]
@@ -193,19 +206,28 @@ class DFINEAdapter(FamilyAdapter):
                     (losses["loss_total"] * weight).backward()
                     # Kept on the GPU so each microbatch does not wait for a sync.
                     batch_loss = batch_loss + losses["loss_total"].detach() * weight
+                    for name in loss_terms:
+                        batch_terms[name] = batch_terms[name] + losses[name].detach() * weight
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), self.settings.get("grad_clip", 0.1),
                     error_if_nonfinite=True,
                 )
                 optimizer.step()
                 total += batch_loss * len(group)
+                for name in loss_terms:
+                    term_totals[name] = term_totals[name] + batch_terms[name] * len(group)
             train_loss = float(total) / len(images)
+            self.training_epoch_losses.append({
+                name: float(value) / len(images) for name, value in term_totals.items()
+            })
+            self.training_epoch_seconds.append(time.perf_counter() - epoch_start)
             learning_rate = optimizer.param_groups[0]["lr"]
             print(f"epoch {epoch + 1}/{epochs}: D-FINE loss {train_loss:.4f}", flush=True)
             if scheduler is not None:
                 scheduler.step()
             if on_epoch_end is not None:
                 on_epoch_end(epoch + 1, train_loss, learning_rate)
+        self.training_order_sha256 = order_digest.hexdigest()
 
     def predict(self, model, images, proxy, device):
         if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[1] != 3:
@@ -213,8 +235,8 @@ class DFINEAdapter(FamilyAdapter):
         if images.dtype != torch.uint8:
             raise ValueError("D-FINE inference images must be uint8")
         threshold, nms_iou = proxy["eval_conf"], proxy["nms_iou"]
-        if not 0 <= threshold <= 1 or not 0 <= nms_iou <= 1:
-            raise ValueError("D-FINE proxy confidence and NMS IoU must be in [0,1]")
+        if not 0 <= threshold <= 1 or (nms_iou is not None and not 0 <= nms_iou <= 1):
+            raise ValueError("D-FINE confidence must be in [0,1]; NMS IoU must be in [0,1] or None")
         model.eval()
         model.confidence_threshold = threshold
         output = []
@@ -238,9 +260,11 @@ class DFINEAdapter(FamilyAdapter):
                             or (boxes[:, 2] > width).any() or (boxes[:, 3] > height).any()
                             or (boxes[:, 2:] <= boxes[:, :2]).any()):
                         raise ValueError("D-FINE prediction contains invalid boxes or scores")
-                    selected = _nms(boxes, scores, nms_iou)
+                    selected = (_nms(boxes, scores, nms_iou) if nms_iou is not None
+                                else torch.arange(len(boxes)))
                     output.append((boxes[selected], scores[selected]))
         return output
 
     def postprocessing(self, proxy):
-        return f"D-FINE conf={proxy['eval_conf']} nms_iou={proxy['nms_iou']}"
+        nms = "none" if proxy["nms_iou"] is None else proxy["nms_iou"]
+        return f"D-FINE conf={proxy['eval_conf']} nms_iou={nms}"

@@ -6,6 +6,9 @@ import pytest
 
 from sota.FRED_LLM_GE.phase1_detection import candidate_runner
 from sota.FRED_LLM_GE.phase1_detection.compare_dfine_diagnostics import compare
+from sota.FRED_LLM_GE.phase1_detection.compare_dfine_training_arms import (
+    compare as compare_training_arms,
+)
 
 
 def _report(path, gene, seed, score):
@@ -37,6 +40,55 @@ def _report(path, gene, seed, score):
     }
     path.write_text(json.dumps(report))
     return path
+
+
+def _arm_report(path, arm, seed, score):
+    _report(path, "seed", seed, score)
+    report = json.loads(path.read_text())
+    metadata = report["metadata"]
+    metadata.update(training_arm=arm, training_seconds=100 if arm != "longer_budget" else 200,
+                    initial_weights_sha256=f"initial-{seed}",
+                    training_sample_ids_sha256="train-ids", code_revision="revision",
+                    runtime_environment={"device": "same-gpu"})
+    epochs = 40 if arm == "longer_budget" else 20
+    metadata["training_recipe"] = {
+        "family": "dfine", "proxy": {"seed": seed, "epochs": epochs},
+        "family_settings": {"lr_schedule": (
+            "cosine" if arm == "cosine_lr" else "constant")},
+    }
+    report["training_history"] = [
+        {"epoch": epoch, "lr": 0.001 if arm != "cosine_lr" else 0.001 / epoch,
+         "order_sha256": f"order-{seed}-{epoch}",
+         **{name: 0.1 for name in (
+             "loss_cls", "loss_bbox", "loss_giou", "loss_fgl", "loss_go_lsd")}}
+        for epoch in range(1, epochs + 1)]
+    path.write_text(json.dumps(report))
+    return path
+
+
+def test_training_arm_comparison_uses_complete_paired_seeds(tmp_path):
+    paths = [_arm_report(tmp_path / f"{arm}_{seed}.json", arm, seed,
+                         0.2 + 0.02 * seed + 0.01 * index)
+             for seed in (0, 1)
+             for index, arm in enumerate(("baseline", "longer_budget", "cosine_lr"))]
+    result = compare_training_arms(paths)
+    assert result["seeds"] == [0, 1]
+    assert result["arm_means"]["cosine_lr"]["mAP50_95"] == pytest.approx(0.23)
+    assert result["arm_means"]["longer_budget"]["training_seconds"] == 200
+    assert result["paired_deltas_vs_baseline"][0]["mAP75"] == pytest.approx(0.01)
+
+    with pytest.raises(ValueError, match="all three training arms"):
+        compare_training_arms(paths[:-1])
+    altered = json.loads(paths[1].read_text())
+    altered["metadata"]["training_recipe"]["family_settings"]["lr"] = 0.01
+    paths[1].write_text(json.dumps(altered))
+    with pytest.raises(ValueError, match="settings differ"):
+        compare_training_arms(paths)
+    altered["metadata"]["training_recipe"]["family_settings"].pop("lr")
+    altered["metadata"]["initial_weights_sha256"] = "different"
+    paths[1].write_text(json.dumps(altered))
+    with pytest.raises(ValueError, match="initialization and frame order"):
+        compare_training_arms(paths)
 
 
 def test_confirmation_seed_uses_separate_root_and_enables_diagnostics(tmp_path, monkeypatch):
@@ -137,3 +189,69 @@ def test_comparison_checks_protocol_and_exposes_seed_spread(tmp_path):
     paths[-1].write_text(json.dumps(changed))
     with pytest.raises(ValueError, match="same training seeds"):
         compare(paths)
+
+
+def test_checkpoint_review_compares_single_seed_without_ranking(tmp_path):
+    paths = [_report(tmp_path / f"{gene}.json", gene, 0, score)
+             for gene, score in (("seed", 0.1), ("candidate", 0.3))]
+
+    result = compare(paths, checkpoint_review=True)
+
+    assert len(result["runs"]) == 2
+    assert result["runs"][0]["mAP75"] == pytest.approx(0.2)
+    assert result["runs"][0]["same_model_source_as_seed"] is False
+    assert result["deltas_vs_seed"][0]["mAP75"] == pytest.approx(0.2)
+    assert result["deltas_vs_seed"][0]["false_negatives_iou50"] == 0
+    assert "before ranking" in result["comparison_scope"]
+
+
+def _confirmation_report(path, gene, seed, score):
+    _report(path, gene, seed, score)
+    report = json.loads(path.read_text())
+    report["metadata"].update({
+        "code_revision": "same-revision",
+        "runtime_code_sha256": "same-runtime-code",
+        "training_sample_ids_sha256": "same-training-frames",
+        "training_targets_sha256": "same-training-labels",
+        "validation_targets_sha256": "same-validation-labels",
+        "training_order_sha256": f"order-{seed}",
+        "runtime_environment": {"hardware": "same-gpu", "pytorch": "same-version"},
+        "inference_device": "cuda",
+        "preloaded_inference_ms_per_frame": 2.0 if gene == "seed" else 2.5,
+    })
+    if gene != "seed":
+        report["metrics"]["params"] = 900000
+    path.write_text(json.dumps(report))
+    return path
+
+
+def test_gain_confirmation_requires_paired_improvement_beyond_variation(tmp_path):
+    paths = [_confirmation_report(tmp_path / f"{gene}_{seed}.json", gene, seed,
+                                  0.30 + 0.005 * seed + gain)
+             for gene, gain in (("seed", 0), ("candidate", 0.04))
+             for seed in (0, 1, 2)]
+    result = compare(paths, confirm_gains=True)["gain_confirmation"]
+    candidate = result["candidates"]["candidate"]
+    assert candidate["gain_confirmed_for_review"] is True
+    assert candidate["metrics"]["mAP50_95"]["mean_gain"] == pytest.approx(0.04)
+    assert candidate["metrics"]["mAP50_95"]["observed_variation"] == pytest.approx(0.01)
+    assert candidate["delta_params"] == 50000
+    assert candidate["delta_inference_ms_per_frame"] == pytest.approx(0.5)
+
+    weak_paths = [_confirmation_report(tmp_path / f"weak_{gene}_{seed}.json", gene, seed,
+                                       0.30 + 0.005 * seed + gain)
+                  for gene, gain in (("seed", 0), ("candidate", 0.002))
+                  for seed in (0, 1, 2)]
+    weak = compare(weak_paths, confirm_gains=True)["gain_confirmation"]
+    assert weak["candidates"]["candidate"]["gain_confirmed_for_review"] is False
+
+    changed = json.loads(paths[-1].read_text())
+    changed["metadata"]["runtime_environment"]["hardware"] = "other-gpu"
+    paths[-1].write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="hardware differs"):
+        compare(paths, confirm_gains=True)
+    changed["metadata"]["runtime_environment"]["hardware"] = "same-gpu"
+    changed["metadata"]["validation_targets_sha256"] = "different-labels"
+    paths[-1].write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="labels"):
+        compare(paths, confirm_gains=True)

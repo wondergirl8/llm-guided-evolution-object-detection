@@ -89,19 +89,55 @@ def latest_pair(folder, global_folder, family):
     return None, None, None
 
 
-def cancel_owned_jobs(root):
+def eval_submission(folder, gene_id, state=None, job_id=None, retry=False):
+    """Keep a small durable record around each D-FINE evaluation submission."""
+    if not re.fullmatch(r'[A-Za-z0-9_]+', gene_id):
+        raise ValueError('Invalid candidate ID for evaluation journal')
+    path = Path(folder) / f'eval_submission_{gene_id}.json'
+    attempts = json.loads(path.read_text()) if path.exists() else []
+    if state is None:
+        return attempts[-1] if attempts else None
+    if state == 'intent':
+        if attempts and attempts[-1]['state'] in ('intent', 'submitted') and not retry:
+            raise RuntimeError(f'Unresolved evaluation submission for {gene_id}; refusing duplicate')
+        attempts.append({'state': 'intent', 'at': time.time()})
+    else:
+        if not attempts or attempts[-1]['state'] != 'intent':
+            raise RuntimeError(f'No pending evaluation submission for {gene_id}')
+        attempts[-1].update(state=state, job_id=job_id)
+    atomic_write(path, json.dumps(attempts).encode())
+    return attempts[-1]
+
+
+def mark_cancelled_evaluations(folder, cancelled_jobs):
+    """Allow a resumed controller to resubmit work the session cleaned up."""
+    cancelled_jobs = set(cancelled_jobs)
+    for path in Path(folder).glob('eval_submission_*.json'):
+        attempts = json.loads(path.read_text())
+        last = attempts[-1]
+        if last['state'] == 'submitted' and last['job_id'] in cancelled_jobs:
+            last['state'] = 'cancelled'
+            atomic_write(path, json.dumps(attempts).encode())
+
+
+def cancel_owned_jobs(root, exclude_jobs=()):
     """Cancel only the current user's jobs whose WorkDir is this exact checkout."""
     root = Path(root).resolve()
+    from src.fred_runtime import slurm_status
     user, own = os.environ['USER'], os.environ.get('SLURM_JOB_ID')
-    jobs = subprocess.check_output(['squeue', '-h', '-u', user, '-o', '%i'], text=True).split()
+    def listed_jobs():
+        result = slurm_status(['squeue', '-h', '-u', user, '-o', '%i'])
+        if result.returncode:
+            raise RuntimeError(f'Cannot list jobs for safe cleanup: {result.stderr.strip()}')
+        return result.stdout.split()
+    jobs = listed_jobs()
     cancel = []
     for job in jobs:
-        if job == own:
+        if job == own or job in exclude_jobs:
             continue
-        result = subprocess.run(['scontrol', 'show', 'job', job, '-o'], text=True,
-                                capture_output=True, timeout=10)
+        result = slurm_status(['scontrol', 'show', 'job', job, '-o'])
         if result.returncode:
-            fresh = subprocess.check_output(['squeue', '-h', '-u', user, '-o', '%i'], text=True).split()
+            fresh = listed_jobs()
             if job in fresh:
                 raise RuntimeError(f'Cannot inspect active job {job}; refusing unverified cancellation')
             continue
@@ -111,6 +147,12 @@ def cancel_owned_jobs(root):
             cancel.append(job)
     if cancel:
         subprocess.run(['scancel', *cancel], check=True, timeout=30)
+        for _ in range(3):
+            if not set(cancel).intersection(listed_jobs()):
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError(f'Cannot confirm cancellation of jobs: {cancel}')
     return cancel
 
 
