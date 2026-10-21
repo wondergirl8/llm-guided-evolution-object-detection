@@ -1,4 +1,6 @@
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,6 +12,17 @@ from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Ada
 
 FRED_DIR = Path(candidate_runner.__file__).resolve().parents[1]
 TRAIN_EVAL = FRED_DIR / "phase1_detection" / "seeds" / "yolo11" / "train_eval.py"
+
+
+def test_direct_script_imports_adapters_without_pythonpath(tmp_path):
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [sys.executable, str(Path(candidate_runner.__file__)), "--help"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "--family" in completed.stdout
 
 
 @pytest.mark.parametrize("events_tag", [None, "raw_w10000_polarity"])

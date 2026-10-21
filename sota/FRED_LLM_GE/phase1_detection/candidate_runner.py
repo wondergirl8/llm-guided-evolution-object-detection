@@ -19,13 +19,14 @@ import json
 import math
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import torch
 import yaml
 
-try:
+if __package__:
     from . import map_reporter
     from .adapters.dfine import DFINEAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
@@ -33,14 +34,17 @@ try:
     from .export_split import dataset_parts, events_from_tag
     from .proxy_data import REVISION, load_exported_split, load_split
     from .result_contract import DetectionResult, write_results
-except ImportError:
-    import map_reporter
-    from adapters.dfine import DFINEAdapter
-    from adapters.tiny_yolo11 import TinyYolo11Adapter
-    from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
-    from export_split import dataset_parts, events_from_tag
-    from proxy_data import REVISION, load_exported_split, load_split
-    from result_contract import DetectionResult, write_results
+else:
+    # SLURM invokes this file directly. Make the repository namespace package
+    # importable so adapters retain their relative imports in that mode too.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from sota.FRED_LLM_GE.phase1_detection import map_reporter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.dfine import DFINEAdapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Adapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
+    from sota.FRED_LLM_GE.phase1_detection.export_split import dataset_parts, events_from_tag
+    from sota.FRED_LLM_GE.phase1_detection.proxy_data import REVISION, load_exported_split, load_split
+    from sota.FRED_LLM_GE.phase1_detection.result_contract import DetectionResult, write_results
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
