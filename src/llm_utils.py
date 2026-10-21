@@ -37,6 +37,18 @@ def clean_code_from_llm(code_from_llm):
     for block in blocks:
         if block.strip():
             return block.strip()
+    # Llama sometimes opens with an empty pair ("```python\n```code...") and then
+    # repeats fences, so every block above is empty. Fall back to the text between
+    # two fences: the first piece that is complete, valid Python (so neither prose
+    # nor code cut off at the token limit).
+    for piece in (code_from_llm or "").split("```")[1:-1]:
+        piece = re.sub(r"\A[A-Za-z]*\n", "", piece).strip()
+        if piece:
+            try:
+                compile(piece, "<llm>", "exec")
+            except SyntaxError:
+                continue
+            return piece
     # Print an error message if the code extraction fails
     print("Runtime Error: No code was generated or the format is incorrect.")
     return "ERROR"  # Return ERROR
@@ -127,6 +139,17 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
     print(code_from_llm)
     
     return code_from_llm 
+
+# Renderer genes (FRED_SEED_FAMILY=renderer) are short numpy functions. With the
+# near-greedy sampling the run asks for, the LLM mostly rewrote the parent, so
+# they sample more freely.
+RENDERER_SAMPLING = {"temperature": 0.7, "top_p": 0.9}
+
+
+def is_renderer_gene(path):
+    """True for seed_renderer.py and the genes in seeds/renderer/models/."""
+    return "renderer" in os.path.basename(path) or "/renderer/" in str(path)
+
 
 def strip_leading_imports(code):
     """Drop import lines the LLM puts above a class.
