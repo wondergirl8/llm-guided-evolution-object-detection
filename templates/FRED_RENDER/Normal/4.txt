@@ -1,0 +1,8 @@
+Replace this renderer with a time-slice encoding, so a fixed YOLO11n can see which way a tiny drone moves.
+
+Split the window into three equal slices by event time t (oldest third, middle third, newest third). Start from np.zeros((HEIGHT, WIDTH, 3), np.uint8) and, for slice k, set image[y, x, k] = 255 for the events in that slice, using boolean masks on events["t"] (no Python loop over events). Choose WINDOW_US between 5000 and 20000.
+
+The current code:
+```python
+{}
+```
