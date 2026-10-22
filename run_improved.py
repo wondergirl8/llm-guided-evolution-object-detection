@@ -1361,9 +1361,11 @@ def write_depleted_status(generation, found, target, attempts):
 
 def refill_initial_population(individuals, target, llm_model):
     """Start YOLO11 generation 0 with distinct built graphs or stop clearly."""
+    global GEN_COUNT
     policy = load_candidate_policy(globals())
     if policy is None:
         return individuals
+    GEN_COUNT = 0  # Refill mutations need lineage; EoT remains disabled at generation 0.
     generation = 0
     population = distinct_built_population(individuals, policy)
     limit = globals().get('FRED_MAX_REFILL_ATTEMPTS', 3 * target)
@@ -1487,6 +1489,14 @@ if __name__ == "__main__":
         GLOBAL_DATA = global_data["GLOBAL_DATA"]
         GLOBAL_DATA_HIST = global_data["GLOBAL_DATA_HIST"]
         GLOBAL_DATA_ANCESTRY = global_data["GLOBAL_DATA_ANCESTRY"]
+        if load_candidate_policy(globals()) is not None:
+            from sota.FRED_LLM_GE.phase1_detection.ancestry_recovery import recover_population_ancestry
+            GLOBAL_DATA_ANCESTRY, repaired = recover_population_ancestry(
+                population_data["population"], GLOBAL_DATA_ANCESTRY, ROOT_DIR, OUTPUT_DIR,
+                VARIANT_DIR, MODEL, PROMPT_GLOB, CONSTANT_RULES_PATH)
+            if repaired:
+                print(f"Recovered ancestry for generation-0 refill candidates: {repaired}",
+                      flush=True)
         EVAL_CACHE = global_data.get("EVAL_CACHE", {})
         EVAL_PENDING = {}
         population = population_data["population"]

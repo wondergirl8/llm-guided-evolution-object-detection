@@ -55,16 +55,61 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     output_file.parent.mkdir(exist_ok=True, parents=True)
     policy = load_candidate_policy(globals())
     attempts = globals().get('max_gen_attempts', 5) if policy else 1
+    # YOLO11 can inspect every complete YAML block in a reply. Hold its chosen
+    # section fixed so feedback on a rejected proposal remains applicable.
+    inspect_blocks = policy is not None and hasattr(policy, 'candidate_chunks')
+    selected_idx = np.random.randint(1, len(parts)) if inspect_blocks else None
     previous_error = None
     for attempt in range(attempts):
         candidate_parts = parts.copy()
-        augment_idx = np.random.randint(1, len(parts))
+        augment_idx = selected_idx if inspect_blocks else np.random.randint(1, len(parts))
         code2llm = parts[augment_idx]
         txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
-        if policy is not None and hasattr(policy, 'retry_prompt'):
+        if policy is not None and hasattr(policy, 'mutation_prompt'):
+            txt2llm = policy.mutation_prompt(txt2llm, previous_error, attempt)
+        elif policy is not None and hasattr(policy, 'retry_prompt'):
             txt2llm = policy.retry_prompt(txt2llm, previous_error, attempt)
         retry_temperature = min(0.8, temperature + 0.1 * attempt) if policy else temperature
         retry_top_p = min(0.9, top_p + 0.1 * attempt) if policy else top_p
+        if inspect_blocks:
+            raw_response = generate_augmented_code(
+                txt2llm, augment_idx-1, apply_quality_control, retry_top_p,
+                llm_model, retry_temperature, return_raw=True)
+            proposals = policy.candidate_chunks(raw_response)
+            if not proposals:
+                previous_error = ('llm_unavailable: no response from the LLM server'
+                                  if not raw_response else
+                                  'invalid_architecture: no complete fenced YAML section')
+                print(f"Mutation attempt {attempt + 1}: {previous_error}", flush=True)
+                continue
+            for block_idx, proposal in enumerate(proposals, start=1):
+                valid_code, invalid_reason = validate_generated_chunk(proposal)
+                if not valid_code:
+                    previous_error = f'invalid_architecture: {invalid_reason}'
+                else:
+                    repaired = policy.repair_channel_values(proposal)
+                    note_txt = extract_note(code2llm)
+                    candidate_parts[augment_idx] = f"\n{note_txt}{repaired}\n"
+                    output_file.write_text('# --OPTION--'.join(candidate_parts))
+                    try:
+                        changed_layers = policy.changed_layer_count(output_file, input_filename)
+                        if changed_layers != 1:
+                            raise ValueError(
+                                f'mutation must change one mutable layer, changed {changed_layers}')
+                        if policy.differs_from_parents(output_file, input_filename):
+                            print(f"Mutation accepted YAML block {block_idx} of {len(proposals)}",
+                                  flush=True)
+                            break
+                        previous_error = 'unchanged_parent: built graph matches the parent'
+                    except ImportError:
+                        raise  # Missing model packages are environment failures.
+                    except Exception as exc:
+                        previous_error = f'invalid_architecture: {exc}'
+                print(f"Mutation attempt {attempt + 1}, YAML block {block_idx}: "
+                      f"{previous_error}", flush=True)
+            else:
+                continue
+            break
         code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
                                                 retry_top_p, llm_model, retry_temperature)
         if not code_from_llm or code_from_llm == "ERROR":

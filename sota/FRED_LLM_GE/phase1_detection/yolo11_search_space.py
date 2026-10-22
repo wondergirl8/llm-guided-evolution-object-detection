@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import re
 import tempfile
 from pathlib import Path
 
@@ -103,6 +104,22 @@ def retry_prompt(prompt, error, attempt):
             'Change exactly one mutable layer in this section. Preserve its from link, '
             'the layer count, and frozen layers. Return the complete YAML section in '
             'one fenced yaml block.')
+
+
+def mutation_prompt(prompt, error, attempt):
+    """End each YOLO11 mutation request with the required response contract."""
+    prompt = retry_prompt(prompt, error, attempt)
+    return (f'{prompt}\n\nNow return exactly one complete fenced yaml block. '
+            'Change exactly one mutable layer from the supplied section; do not '
+            'repeat it unchanged or list alternative versions. Include the whole '
+            'replacement backbone or head section and no explanation.')
+
+
+def candidate_chunks(response):
+    """Return complete YAML blocks in output order, leaving validation to the caller."""
+    return [block.strip() for block in re.findall(
+        r'```(?:yaml|yml)[ \t]*\r?\n(.*?)```', response or '', re.IGNORECASE | re.DOTALL
+    ) if block.strip()]
 
 
 def repair_channel_values(chunk):
