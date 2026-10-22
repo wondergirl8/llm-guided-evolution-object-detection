@@ -16,6 +16,7 @@ if REPO_ROOT not in sys.path:
 
 from cfg.constants import *
 from utils.print_utils import box_print
+from candidate_policy import load_candidate_policy
 
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, generate_augmented_code, 
@@ -58,9 +59,6 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     print(f'Loading {input_filename} code')
     print('Using')
     parts = split_file(input_filename)
-    augment_idx = np.random.randint(1, len(parts))
-    # select code to be augmented randomly 
-    code2llm = parts[augment_idx]
     # prompt_templates = glob.glob(f'{ROOT_DIR}/templates/FixedPrompts/*/*.txt')
     # template_path = np.random.choice(prompt_templates)
     # template_path = f'{ROOT_DIR}/templates/{fname}'
@@ -73,47 +71,123 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     # Using str.format would treat JSON/dict examples in the prompt as fields.
     if "{}" not in template_txt:
         raise ValueError(f"Prompt template {fname} must contain a literal {{}} code placeholder")
-    txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
-    if globals().get('SEED_FAMILY') == 'yolo26_p2':
-        from src.fred_yolo26_proposals import generate_validated_section
-        generate_validated_section(input_filename, output_filename, parts, augment_idx,
-            txt2llm, lambda prompt: generate_augmented_code(prompt, augment_idx - 1,
-                apply_quality_control, top_p, llm_model, temperature), FRED_DIR)
-        print('Job Done', flush=True)
-        return
-    code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
-                                            top_p, llm_model, temperature)
-    
-    if globals().get('SEED_FAMILY') == 'dfine':
-        if code_from_llm and code_from_llm != "ERROR":
+    output_file = Path(output_filename)
+    output_file.parent.mkdir(exist_ok=True, parents=True)
+    policy = (None if globals().get('SEED_FAMILY') in ('dfine', 'yolo26_p2')
+              else load_candidate_policy(globals()))
+    attempts = globals().get('max_gen_attempts', 5) if policy else 1
+    # YOLO11 can inspect every complete YAML block in a reply. Hold its chosen
+    # section fixed so feedback on a rejected proposal remains applicable.
+    inspect_blocks = policy is not None and hasattr(policy, 'candidate_chunks')
+    selected_idx = np.random.randint(1, len(parts)) if inspect_blocks else None
+    previous_error = None
+    for attempt in range(attempts):
+        candidate_parts = parts.copy()
+        augment_idx = selected_idx if inspect_blocks else np.random.randint(1, len(parts))
+        code2llm = parts[augment_idx]
+        txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
+        if policy is not None and hasattr(policy, 'mutation_prompt'):
+            txt2llm = policy.mutation_prompt(txt2llm, previous_error, attempt)
+        elif policy is not None and hasattr(policy, 'retry_prompt'):
+            txt2llm = policy.retry_prompt(txt2llm, previous_error, attempt)
+        if globals().get('SEED_FAMILY') == 'yolo26_p2':
+            from src.fred_yolo26_proposals import generate_validated_section
+            generate_validated_section(
+                input_filename, output_filename, parts, augment_idx, txt2llm,
+                lambda prompt: generate_augmented_code(
+                    prompt, augment_idx - 1, apply_quality_control, top_p,
+                    llm_model, temperature), FRED_DIR)
+            print('Job Done', flush=True)
+            return
+        retry_temperature = min(0.8, temperature + 0.1 * attempt) if policy else temperature
+        retry_top_p = min(0.9, top_p + 0.1 * attempt) if policy else top_p
+        if inspect_blocks:
+            raw_response = generate_augmented_code(
+                txt2llm, augment_idx-1, apply_quality_control, retry_top_p,
+                llm_model, retry_temperature, return_raw=True)
+            proposals = policy.candidate_chunks(raw_response)
+            if not proposals:
+                previous_error = ('llm_unavailable: no response from the LLM server'
+                                  if not raw_response else
+                                  'invalid_architecture: no complete fenced YAML section')
+                print(f"Mutation attempt {attempt + 1}: {previous_error}", flush=True)
+                continue
+            for block_idx, proposal in enumerate(proposals, start=1):
+                valid_code, invalid_reason = validate_generated_chunk(proposal)
+                if not valid_code:
+                    previous_error = f'invalid_architecture: {invalid_reason}'
+                else:
+                    repaired = policy.repair_channel_values(proposal)
+                    note_txt = extract_note(code2llm)
+                    candidate_parts[augment_idx] = f"\n{note_txt}{repaired}\n"
+                    output_file.write_text('# --OPTION--'.join(candidate_parts))
+                    try:
+                        changed_layers = policy.changed_layer_count(output_file, input_filename)
+                        if changed_layers != 1:
+                            raise ValueError(
+                                f'mutation must change one mutable layer, changed {changed_layers}')
+                        if policy.differs_from_parents(output_file, input_filename):
+                            print(f"Mutation accepted YAML block {block_idx} of {len(proposals)}",
+                                  flush=True)
+                            break
+                        previous_error = 'unchanged_parent: built graph matches the parent'
+                    except ImportError:
+                        raise  # Missing model packages are environment failures.
+                    except Exception as exc:
+                        previous_error = f'invalid_architecture: {exc}'
+                print(f"Mutation attempt {attempt + 1}, YAML block {block_idx}: "
+                      f"{previous_error}", flush=True)
+            else:
+                continue
+            break
+        code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
+                                                retry_top_p, llm_model, retry_temperature)
+        if globals().get('SEED_FAMILY') == 'dfine':
+            if not code_from_llm or code_from_llm == "ERROR":
+                raise RuntimeError("ERROR proposal: LLM returned no valid code")
             code_from_llm = strip_leading_imports(code_from_llm)
             valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
             if not valid_code:
                 raise RuntimeError(f"ERROR proposal: {invalid_reason}")
-        try:
-            validate_dfine_proposal(code2llm, code_from_llm)
-        except ValueError as exc:
-            raise RuntimeError(f"ERROR proposal: {exc}") from exc
-    elif not code_from_llm or code_from_llm == "ERROR":
-        # Keep the parent's chunk rather than writing the prompt into the model
-        code_from_llm = code2llm.strip()
-    else:
-        if "dfine" in os.path.basename(input_filename) or "/dfine/" in input_filename:
-            code_from_llm = strip_leading_imports(code_from_llm)
-        valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
-        if not valid_code:
-            print(f"Rejected generated chunk: {invalid_reason}. Falling back to parent chunk.", flush=True)
+            try:
+                validate_dfine_proposal(code2llm, code_from_llm)
+            except ValueError as exc:
+                raise RuntimeError(f"ERROR proposal: {exc}") from exc
+        if not code_from_llm or code_from_llm == "ERROR":
+            previous_error = 'llm_unavailable: no usable YAML response'
             code_from_llm = code2llm.strip()
-
-    note_txt = extract_note(code2llm)
-    parts[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
-    # prompt_log = f'# Parent Prompt: {template_path} Root Code: {input_filename}\n'
-    # python_network_txt = prompt_log + '# --OPTION--'.join(parts)
-    python_network_txt = '# --OPTION--'.join(parts)
-    # Write the text to the file
-    output_file = Path(output_filename)
-    output_file.parent.mkdir(exist_ok=True, parents=True)
-    output_file.write_text(python_network_txt)
+        else:
+            if "dfine" in os.path.basename(input_filename) or "/dfine/" in input_filename:
+                code_from_llm = strip_leading_imports(code_from_llm)
+            valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
+            if not valid_code:
+                print(f"Rejected generated chunk: {invalid_reason}.", flush=True)
+                previous_error = f'invalid_architecture: {invalid_reason}'
+                code_from_llm = code2llm.strip()
+        if policy is not None and hasattr(policy, 'repair_channel_values'):
+            code_from_llm = policy.repair_channel_values(code_from_llm)
+        note_txt = extract_note(code2llm)
+        candidate_parts[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
+        output_file.write_text('# --OPTION--'.join(candidate_parts))
+        if policy is None:
+            break
+        try:
+            if attempt > 0 and hasattr(policy, 'changed_layer_count'):
+                changed_layers = policy.changed_layer_count(output_file, input_filename)
+                if changed_layers != 1:
+                    raise ValueError(f'mutation must change one mutable layer, changed {changed_layers}')
+            if policy.differs_from_parents(output_file, input_filename):
+                break
+            previous_error = 'unchanged_parent: built graph matches the parent'
+            print(f"Mutation attempt {attempt + 1}: {previous_error}", flush=True)
+        except ImportError:
+            raise  # Missing model packages are environment failures, not proposals to retry.
+        except Exception as exc:
+            previous_error = f'invalid_architecture: {exc}'
+            print(f"Mutation attempt {attempt + 1}: {previous_error}", flush=True)
+    else:
+        output_file.unlink(missing_ok=True)
+        raise RuntimeError(f"retry_exhausted: mutation exhausted {attempts} attempts; last={previous_error}")
 
         
     box_print(f"Python code saved to {os.path.basename(output_filename)}", print_bbox_len=120, new_line_end=False)

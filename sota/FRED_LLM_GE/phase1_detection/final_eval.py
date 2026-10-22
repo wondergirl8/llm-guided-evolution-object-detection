@@ -36,6 +36,7 @@ try:
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from .adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from .candidate_runner import code_revision, load_protocol, sha256_file
+    from .export_split import events_from_tag, events_suffix
     from .fred_splits import challenging_split, sequence_frames
     from .proxy_data import REVISION, STEP_US, load_annotations, load_exported_split
     from .result_contract import validate_gene_id
@@ -45,6 +46,7 @@ except ImportError:
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
     from candidate_runner import code_revision, load_protocol, sha256_file
+    from export_split import events_from_tag, events_suffix
     from fred_splits import challenging_split, sequence_frames
     from proxy_data import REVISION, STEP_US, load_annotations, load_exported_split
     from result_contract import validate_gene_id
@@ -81,7 +83,8 @@ def predict_test_split(adapter, model, test, settings, device, report_dir):
         annotations, count = None, 0
         report = report_dir / f"bad_timestamps_test_{sequence}.csv"
         for image, timestamp in sequence_frames(folder, sequence, report,
-                                                settings["test_frame_step"], report_dir / "downloads"):
+                                                settings["test_frame_step"], report_dir / "downloads",
+                                                events=settings.get("events")):
             image = image.convert("RGB")
             if annotations is None:
                 annotations = load_annotations(folder, sequence, *image.size)
@@ -112,6 +115,9 @@ def main():
     parser.add_argument("--dfine-reg-max", type=int,
                         help="Frozen D-FINE refinement-bin count selected on search validation")
     parser.add_argument("--protocol", default=str(DEFAULT_PROTOCOL))
+    parser.add_argument("--events", default=None,
+                        help='Event frames, e.g. "raw_w10000_polarity" (default: protocol\'s '
+                             "challenging.events)")
     parser.add_argument("--epochs", type=int, default=None, help="Override protocol final.epochs")
     parser.add_argument("--seed", type=int, default=None,
                         help="Training seed (default protocol proxy.seed); repeat with others to confirm")
@@ -136,7 +142,9 @@ def main():
     if args.family == "dfine" and args.dfine_reg_max is not None:
         protocol["families"]["dfine"]["model"]["reg_max"] = args.dfine_reg_max
     data_root = FRED_DIR / challenging["data_root"]
-    data_yaml = data_root / f"final_train_step{final['train_frame_step']}" / "data.yaml"
+    events = events_from_tag(args.events) if args.events else challenging.get("events")
+    data_yaml = (data_root / f"final_train_step{final['train_frame_step']}{events_suffix(events)}"
+                 / "data.yaml")
     if not data_yaml.is_file():
         raise SystemExit(f"{data_yaml} missing: run export_split.py --set final "
                          "(all shards, then --finalize)")
@@ -172,10 +180,11 @@ def main():
             seed=seed, deterministic=True, pretrained=args.weights or False,
             device=_ultralytics_device(args.device), workers=adapter.settings.get("workers", 8),
             project=str(out), name="train", exist_ok=True, val=False, plots=False, verbose=False,
+            **adapter.training_options(),
         )
         model.save(checkpoint)
 
-    settings = {"img_width": final["img_width"], "eval_conf": proxy["eval_conf"],
+    settings = {"events": events, "img_width": final["img_width"], "eval_conf": proxy["eval_conf"],
                 "nms_iou": proxy["nms_iou"], "batch_size": final["batch_size"],
                 "test_frame_step": final["test_frame_step"]}
     frames, expected = predict_test_split(adapter, model, test, settings, args.device, out)

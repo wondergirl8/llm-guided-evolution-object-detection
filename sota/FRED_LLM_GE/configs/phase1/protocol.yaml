@@ -69,6 +69,30 @@ challenging:
   # Training frames Ultralytics validates on after its last epoch; not used
   # for any reported score.
   trainer_val_frames: 256
+  # How event frames are made, for export_split.py and final_eval.py.
+  # released: FRED's Event/Frames PNGs (fixed 33.3 ms window); window_us and
+  #   encoding are ignored.
+  # raw: rendered from each sequence's events.hdf5 (data/fred_events.py) at
+  #   the released frame times, using events in the window_us before each.
+  #   encoding palette looks like the released frames; polarity sets red for
+  #   positive and green for negative events. raw, 33333, palette reproduces
+  #   the released frames exactly. Exports go to folders suffixed
+  #   _raw_w<window_us>_<encoding>, so settings do not overwrite each other.
+  events:
+    source: released
+    window_us: 33333
+    encoding: palette
+  # Raw settings compared by phase1_detection/event_sweep.py, exported together
+  # by export_split.py --sweep. The released frames are always the control, so
+  # raw 33333 palette (identical to them) is not listed.
+  event_sweep:
+    - {source: raw, window_us: 10000, encoding: palette}
+    - {source: raw, window_us: 20000, encoding: palette}
+    - {source: raw, window_us: 50000, encoding: palette}
+    - {source: raw, window_us: 10000, encoding: polarity}
+    - {source: raw, window_us: 20000, encoding: polarity}
+    - {source: raw, window_us: 33333, encoding: polarity}
+    - {source: raw, window_us: 50000, encoding: polarity}
 
 families:
   dfine:
@@ -100,6 +124,37 @@ families:
     # Train and score candidates on the challenging search split above.
     data: challenging_search
     workers: 8
+    # Fixed SGD recipe: values match Ultralytics 8.4.175 defaults except that
+    # optimizer was "auto" and is now deliberately fixed to SGD.
+    # The seed baseline and every evolved candidate use this same recipe.
+    training:
+      optimizer: SGD
+      lr0: 0.01
+      momentum: 0.937
+      weight_decay: 0.0005
+      lrf: 0.01
+      cos_lr: false
+      warmup_epochs: 3.0
+      warmup_momentum: 0.8
+      warmup_bias_lr: 0.1
+      nbs: 64
+      amp: true
+      augmentation:
+        hsv_h: 0.015
+        hsv_s: 0.7
+        hsv_v: 0.4
+        degrees: 0.0
+        translate: 0.1
+        scale: 0.5
+        shear: 0.0
+        perspective: 0.0
+        flipud: 0.0
+        fliplr: 0.5
+        bgr: 0.0
+        mosaic: 1.0
+        mixup: 0.0
+        cutmix: 0.0
+        close_mosaic: 10
   yolo26_p2:
     # Isolated YOLO26n-P2 prototype; uses the same Event export and evaluator.
     seed_file: seeds/seed_yolo26n_p2.yaml

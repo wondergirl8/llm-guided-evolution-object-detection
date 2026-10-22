@@ -15,6 +15,18 @@ def test_writes_exact_orchestrator_csv_row(tmp_path):
     assert output.read_text() == "0.800000,0.600000,123456\n"
 
 
+def test_failure_row_has_invalid_fitness_and_reason(tmp_path):
+    import csv
+    import math
+
+    failed = DetectionResult(-math.inf, -math.inf, math.inf)
+    output = write_results(tmp_path, "bad_gene", failed, reason="build_failed: bad, YAML")
+    with output.open(newline="") as file:
+        assert next(csv.reader(file)) == ["-inf", "-inf", "inf", "build_failed: bad, YAML"]
+    with pytest.raises(ValueError, match="requires a reason"):
+        write_results(tmp_path, "bad_gene", failed)
+
+
 @pytest.mark.parametrize("gene_id", ["", "../escape", "bad/name", " space"])
 def test_rejects_unsafe_gene_ids(gene_id):
     with pytest.raises(ValueError):

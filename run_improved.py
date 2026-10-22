@@ -3,11 +3,13 @@ import copy
 import glob
 import time
 import json
+import csv
 import string
 import random
 import pickle
 import argparse
 import subprocess
+import shutil
 import yaml
 import numpy as np
 import re
@@ -20,6 +22,8 @@ from deap.tools import HallOfFame, ParetoFront
 from functools import partial
 from src.utils.print_utils import print_population, print_scores, box_print, print_job_info
 from src.llm_utils import split_file, retrieve_base_code
+from src.candidate_policy import load_candidate_policy
+from sota.FRED_LLM_GE.phase1_detection.protocol_fingerprint import verify_fingerprint
 from src.cfg.constants import *
 from src.cfg import constants
 import glob
@@ -47,6 +51,43 @@ def require_yolo26_selection_version(data, path):
             'with separate checkpoint paths.'
         )
 
+
+
+class ServerWindowClosed(RuntimeError):
+    """The paired LLM allocation has too little time left for another operator."""
+
+
+def check_server_window():
+    """Use SLURM's remaining time when the launch supplies its server job ID."""
+    job_id = os.getenv('LLMGE_SERVER_JOB_ID')
+    if not job_id:
+        return
+    if not job_id.isdecimal():
+        raise ValueError('LLMGE_SERVER_JOB_ID must be a numeric SLURM job ID')
+    result = subprocess.run(['squeue', '-h', '-j', job_id, '-o', '%L'],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f'Cannot check LLM server job {job_id}: {result.stderr.strip()}')
+    remaining = result.stdout.strip()
+    if not remaining:
+        write_run_status({'status': 'paused_for_server_refresh', 'server_job_id': job_id,
+                          'server_seconds_left': 0})
+        raise ServerWindowClosed(f'LLM server job {job_id} is no longer in squeue')
+    days = 0
+    if '-' in remaining:
+        day_text, remaining = remaining.split('-', 1)
+        days = int(day_text)
+    parts = remaining.split(':')
+    if len(parts) != 3 or not all(part.isdecimal() for part in parts):
+        raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
+    hours, minutes, seconds = map(int, parts)
+    seconds_left = days * 86400 + hours * 3600 + minutes * 60 + seconds
+    margin = int(os.getenv('LLMGE_MIN_SERVER_REMAINING_SECONDS', '3600'))
+    if seconds_left < margin:
+        write_run_status({'status': 'paused_for_server_refresh', 'server_job_id': job_id,
+                          'server_seconds_left': seconds_left})
+        raise ServerWindowClosed(f'LLM server job {job_id} has {seconds_left}s left; '
+                                 f'require at least {margin}s before another operator')
 
 def print_ancestry(data):
     for gene in data.keys():
@@ -256,13 +297,14 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
     from src.fred_runtime import assert_llm_job_active
     assert_llm_job_active()
     if LLM_SERVER_READY:
-        return True
+        timeout = 15  # A previously healthy server may have reached its wall time.
+        check_interval = 5
 
     env_timeout = os.getenv("LLM_SERVER_READY_TIMEOUT")
     env_interval = os.getenv("LLM_SERVER_READY_CHECK_INTERVAL")
-    if env_timeout:
+    if env_timeout and not LLM_SERVER_READY:
         timeout = int(env_timeout)
-    if env_interval:
+    if env_interval and not LLM_SERVER_READY:
         check_interval = int(env_interval)
 
     start_time = time.time()
@@ -300,6 +342,7 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
         time.sleep(check_interval)
 
     print(f"\t☠ Timed out waiting for LLM server readiness after {timeout}s", flush=True)
+    LLM_SERVER_READY = False
     if last_error is not None:
         print(f"\t‣ Last readiness error: {last_error}", flush=True)
     if os.getenv('LLMGE_SERVER_JOB_ID'):
@@ -311,8 +354,10 @@ def submit_bash(file_path, **kwargs):
         successful_sub_flag 
         job_id
     """
+    if load_candidate_policy(globals()) is not None:
+        check_server_window()
     if not wait_for_llm_server():
-        return False, None, None
+        return False, None, 'llm_unavailable: server not ready'
 
     create_bash_file(file_path, **kwargs)
     result = subprocess.run([RUN_COMMAND, file_path], capture_output=True, text=True)
@@ -331,6 +376,7 @@ def submit_bash(file_path, **kwargs):
         print("\t‣ Failed to Submit Script.\n\t‣ Error:", result.stderr.strip(), flush=True)
         successful_sub_flag = False
         job_id = None
+        local_output = f'operator_submission_failed: {result.stderr.strip()}'
     return successful_sub_flag, job_id, local_output
 
 def check_contents_for_error(contents):
@@ -437,7 +483,8 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
                                             job_name="create_individual",
                                             top_p=0.1, temperature=temperature)
     GLOBAL_DATA[gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
-                            'status':'subbed file', 'fitness':None, 'start_time':time.time()}
+                            'status':'subbed file', 'fitness':None, 'start_time':time.time(),
+                            'operator_type': 'creation', 'local_output': local_output}
     if SEED_FAMILY == 'dfine':
         GLOBAL_DATA[gene_id]['parent_sources'] = [SEED_NETWORK]
         if not successful_sub_flag:
@@ -463,12 +510,24 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
             record_dfine_proposal_failure(gene_id)
     return individual
 
-def submit_run(gene_id):
+def submit_run(gene_id, exclude_nodes=()):
     def write_bash_script_py(gene_id, train_file=f'{TRAIN_FILE}'):
         model_file_override = RUNLINE_TMP.format(MODEL, gene_id) 
         python_runline = EVAL_RUNLINE.format(train_file, model_file_override, VARIANT_DIR=VARIANT_DIR)
         config = load_yaml()
-        bash_script_content = fill_template_slots(config['python_bash_script'], python_runline)
+        template = config['python_bash_script']
+        if not LOCAL and globals().get('PRESERVE_SLURM_CUDA_VISIBLE_DEVICES', False):
+            # The FRED GPU job must use SLURM's per-job device assignment.
+            template = ''.join(
+                line for line in template.splitlines(keepends=True)
+                if not re.match(r'^[ \t]*(?:export[ \t]+)?CUDA_VISIBLE_DEVICES[ \t]*=', line)
+            )
+            python_runline = (
+                'echo "Evaluation GPU binding: SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-unset} '
+                'CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"\n'
+                + python_runline
+            )
+        bash_script_content = fill_template_slots(template, python_runline)
         return bash_script_content
 
     # This is for subbing the python code
@@ -483,12 +542,18 @@ def submit_run(gene_id):
         job_id = None
         successful_sub_flag = False
         local_output = None
-        result = subprocess.run([RUN_COMMAND, file_path], capture_output=True, text=True)
+        command = [RUN_COMMAND]
+        if not LOCAL and globals().get('EVAL_GPU_CONSTRAINT'):
+            command.extend(['-C', EVAL_GPU_CONSTRAINT])
+        if not LOCAL and exclude_nodes:
+            command.extend(['--exclude', ','.join(exclude_nodes)])
+        command.append(file_path)
+        result = subprocess.run(command, capture_output=True, text=True)
         if LOCAL:
             local_output = result.stdout.strip() + '\n' + result.stderr.strip()
             print("\t‣ Output:", local_output, flush=True)
             job_id = None
-            successful_sub_flag = True
+            successful_sub_flag = result.returncode == 0
         elif result.returncode == 0:
             print("\t‣ Script Submitted Successfully.\n\t‣ Output:", result.stdout.strip())
             successful_sub_flag = True
@@ -518,6 +583,11 @@ def submit_run(gene_id):
         reject_detection_fitness(gene_id, None,
                                  f'Evaluation job submission failed: {local_output}',
                                  status='FAILED: INFRASTRUCTURE')
+    elif not successful_sub_flag:
+        reason = ('evaluation_process_failed: local command returned an error' if LOCAL else
+                  'evaluation_submission_failed: sbatch rejected the job')
+        record_failure(gene_id, reason)
+    if not successful_sub_flag:
         return
     GLOBAL_DATA[gene_id]['status'] = 'running eval'
     GLOBAL_DATA[gene_id]['results_job'] = job_id
@@ -530,6 +600,97 @@ def evalModel(individual):
     # Initially, we don't have a fitness value
     return None
 
+def record_failure(gene_id, reason):
+    """Give an unsuccessful candidate the same invalid fitness in every path."""
+    entry = GLOBAL_DATA[gene_id]
+    if (load_candidate_policy(globals()) is not None and
+            entry.get('status') == 'completed' and
+            entry.get('failure_reason') is None and
+            entry.get('fitness') not in (None, INVALID_FITNESS_MAX)):
+        raise RuntimeError(f"Refusing to replace successful result for {gene_id}: {reason}")
+    entry.update(status='completed', fitness=INVALID_FITNESS_MAX,
+                 failure_reason=str(reason), failure_category=str(reason).split(':', 1)[0])
+    key = entry.get('evaluation_cache_key')
+    if key and EVAL_PENDING.get(key) == gene_id:
+        del EVAL_PENDING[key]
+    if "RUN_CHECKPOINT_DIR" in globals():
+        from sota.FRED_LLM_GE.phase1_detection.result_contract import DetectionResult, write_results
+        write_results(SOTA_ROOT, gene_id, DetectionResult(*INVALID_FITNESS_MAX), reason=str(reason))
+
+
+def operator_failure_reason(gene_id, operation):
+    """Report the last concrete operator error and its source operation."""
+    entry = GLOBAL_DATA[gene_id]
+    output_file = f'{SLURM_OUTPUT_PATH}evolution/slurm-{entry.get("job_id")}.out'
+    try:
+        with open(output_file, encoding='utf-8', errors='replace') as stream:
+            contents = stream.read()
+    except OSError:
+        contents = entry.get('local_output') or ''
+    last_errors = re.findall(r'last=(invalid_architecture|unchanged_parent|llm_unavailable)', contents)
+    if last_errors:
+        category = last_errors[-1]
+        entry['retry_exhausted'] = True
+    elif 'Connection refused' in contents or 'ReadTimeout' in contents or 'llm_unavailable' in contents:
+        category = 'llm_unavailable'
+    elif not entry.get('sub_flag') and not entry.get('job_id'):
+        category = 'operator_submission_failed'
+    elif 'gpu_unsupported' in contents or 'not compatible with the current PyTorch installation' in contents:
+        category = 'gpu_unsupported'
+    elif 'unchanged_parent' in contents:
+        category = 'unchanged_parent'
+    elif 'invalid_architecture' in contents:
+        category = 'invalid_architecture'
+    else:
+        category = 'retry_exhausted'
+    return f'{category}: {operation}: operator job {entry.get("job_id")}'
+
+
+def is_unsupported_gpu_error(message):
+    """Recognize the CUDA/PyTorch mismatch seen on Blackwell allocations."""
+    message = message.lower()
+    return ('not compatible with the current pytorch installation' in message or
+            'no kernel image is available for execution on the device' in message or
+            'sm_120 is not compatible' in message)
+
+def log_failure_counts(generation, individuals):
+    """Print failures among this generation's evaluated individuals, by cause."""
+    counts = {}
+    for gene_id in {ind[0] for ind in individuals}:
+        reason = GLOBAL_DATA.get(gene_id, {}).get('failure_reason')
+        if reason:
+            category = reason.split(':', 1)[0]
+            counts[category] = counts.get(category, 0) + 1
+    print(f"Generation {generation} failures: {sum(counts.values())} "
+          f"of {len({ind[0] for ind in individuals})}; by reason: {counts}", flush=True)
+
+def candidate_preflight(gene_id, policy):
+    """Check the generated architecture before asking SLURM to train it."""
+    path = f'{VARIANT_DIR}/{MODEL}_{gene_id}.py'
+    try:
+        architecture_hash, params = policy.built_architecture(path)
+    except ImportError:
+        raise  # A missing Ultralytics installation is an environment failure.
+    except Exception as exc:
+        record_failure(gene_id, f'invalid_architecture: {type(exc).__name__}: {exc}')
+        return False
+    key = policy.evaluation_cache_key(architecture_hash, run_fingerprint())
+    GLOBAL_DATA[gene_id].update(architecture_hash=architecture_hash,
+                                architecture_params=params, evaluation_cache_key=key)
+    hit = EVAL_CACHE.get(key)
+    if hit:
+        fitness = tuple(hit['fitness'])
+        policy.write_cached_fitness(SOTA_ROOT, gene_id, fitness)
+        GLOBAL_DATA[gene_id].update(status='completed', fitness=fitness,
+                                    cache_source=hit['gene_id'], failure_reason=None)
+        print(f'Cached fitness for {gene_id} from {hit["gene_id"]}', flush=True)
+        return False
+    if key in EVAL_PENDING:
+        record_failure(gene_id, f'duplicate_graph: evaluation pending for {EVAL_PENDING[key]}')
+        return False
+    EVAL_PENDING[key] = gene_id
+    return True
+
 def check4model2run(gene_id):
     print(f'Checking for: SOTA_ROOT {VARIANT_DIR}/{MODEL}_{gene_id}.py')
     check_exist = f'{VARIANT_DIR}/{MODEL}_{gene_id}.py'
@@ -539,9 +700,11 @@ def check4model2run(gene_id):
         print(f'\t☠ Model file does not exist for gene_id: {gene_id}, skipping evaluation.')
         if SEED_FAMILY == 'dfine':
             record_dfine_proposal_failure(gene_id, f'Missing generated model file: {check_exist}')
+        elif SEED_FAMILY == 'yolo26_p2':
+            reject_detection_fitness(gene_id, None, f'Missing generated model file: {check_exist}',
+                                     status='FAILED: MISSING MODEL')
         else:
-            GLOBAL_DATA[gene_id]['status'] = 'completed'
-            GLOBAL_DATA[gene_id]['fitness'] = INVALID_FITNESS_MAX
+            record_failure(gene_id, 'missing_model: generated model file is absent')
         return
 
     if SEED_FAMILY in ('yolo26_p2', 'dfine'):
@@ -590,18 +753,64 @@ def check4model2run(gene_id):
                 return
         submit_run(gene_id)
         return
+        return
 
-    model_path = os.path.join(OUTPUT_DIR, str(GENERATION), f'{gene_id}_model.txt')
+    policy = load_candidate_policy(globals())
+    if policy is not None and not candidate_preflight(gene_id, policy):
+        return
 
-    # Proceed only if the model hasn't been evaluated yet
-    if GLOBAL_DATA[gene_id]['status'] != 'running eval':
-        submit_run(gene_id)
+    submit_run(gene_id)
 
-    print(f'Checking for: SOTA_ROOT {VARIANT_DIR}/{MODEL}_{gene_id}.py')
-    model_path = f'{VARIANT_DIR}/{MODEL}_{gene_id}.py'
-    if os.path.exists(model_path):
-        if GLOBAL_DATA[gene_id]['status'] != 'running eval':
-            submit_run(gene_id)
+def evaluation_job_node(job_id):
+    """Find the node of a one-node SLURM evaluation job, when available."""
+    if not job_id or LOCAL:
+        return None
+    try:
+        result = subprocess.run(
+            ['sacct', '-n', '-P', '-X', '-j', str(job_id), '-o', 'NodeList'],
+            capture_output=True, text=True)
+    except OSError:
+        return None
+    if result.returncode:
+        return None
+    lines = result.stdout.strip().splitlines()
+    node = lines[0].split('|')[0] if lines else ''
+    return node if re.fullmatch(r'[A-Za-z0-9._-]+', node) and node not in (
+        'None', 'Unknown', 'Pending') else None
+
+
+def retry_unavailable_gpu(gene_id, reason):
+    """Retry a FRED CUDA visibility failure, excluding its node when known."""
+    limit = globals().get('EVAL_GPU_RETRY_LIMIT', 0)
+    entry = GLOBAL_DATA[gene_id]
+    attempts = entry.get('gpu_retry_count', 0)
+    if LOCAL or attempts >= limit or not reason.startswith('gpu_unavailable:'):
+        return False
+
+    old_job = entry.get('results_job')
+    bad_node = evaluation_job_node(old_job)
+    excluded = set(entry.get('excluded_eval_nodes', ()))
+    if bad_node:
+        excluded.add(bad_node)
+    retry_number = attempts + 1
+    results_path = f'{SOTA_ROOT}/results/{gene_id}_results.csv'
+    archived_path = f'{SOTA_ROOT}/results/{gene_id}_gpu_retry_{retry_number}.csv'
+    try:
+        os.replace(results_path, archived_path)
+    except OSError as exc:
+        print(f'Cannot preserve failed GPU result for retry: {exc}', flush=True)
+        return False
+
+    entry.setdefault('gpu_retry_history', []).append({
+        'job_id': old_job, 'node': bad_node, 'reason': reason,
+        'result_csv': archived_path})
+    entry['gpu_retry_count'] = retry_number
+    entry['excluded_eval_nodes'] = sorted(excluded)
+    print(f'Retrying {gene_id} after {reason}; attempt {retry_number}/{limit}; '
+          f'excluding nodes {sorted(excluded)}', flush=True)
+    submit_run(gene_id, exclude_nodes=sorted(excluded))
+    return True
+
 
 
 def find_yolo26_duplicate(gene_id, digest, adapter):
@@ -766,41 +975,72 @@ def check4results(gene_id):
         # results_path = os.path.join(out_dir, f'{gene_id}_results.csv')
         results_path = f'{SOTA_ROOT}/results/{gene_id}_results.csv'
         try:
-            with open(results_path, 'r') as file:
-                lines = file.readlines()
-            # The candidate runner writes one CSV row without a header.
-            results = lines[-1].strip() if len(lines) > 1 else lines[0].strip()
-            fitness = [float(r.strip()) for r in results.split(',')]
-            # TODO: get all features later
-            fitness = tuple(fitness[i] for i in range(len(FITNESS_WEIGHTS)))
-        except (OSError, ValueError, IndexError) as exc:
-            if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES:
-                raise
-            reject_detection_fitness(gene_id, None, f'Cannot read {results_path}: {exc}',
-                                     status='FAILED: RESULT FILE')
-            return
-        if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
-            normalized = normalize_detection_fitness(fitness)
-            if normalized == INVALID_FITNESS_MAX:
-                reason = f'Invalid result in {results_path}'
-                if SEED_FAMILY == 'dfine':
-                    prefix = 'ERROR evaluating generated model: '
-                    reason = next((line.removeprefix(prefix) for line in job_output.splitlines()
-                                   if line.startswith(prefix)), reason)
-                reject_detection_fitness(gene_id, fitness, reason)
+            with open(results_path, newline='') as file:
+                rows = list(csv.reader(file))
+            row = rows[-1]
+            if len(row) not in (len(FITNESS_WEIGHTS), len(FITNESS_WEIGHTS) + 1):
+                raise ValueError('wrong number of result columns')
+            fitness = tuple(float(value) for value in row[:len(FITNESS_WEIGHTS)])
+            failure_reason = (row[len(FITNESS_WEIGHTS)].strip()
+                              if len(row) > len(FITNESS_WEIGHTS) else '')
+            if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                normalized = normalize_detection_fitness(fitness)
+                if normalized == INVALID_FITNESS_MAX:
+                    reason = failure_reason or f'Invalid result in {results_path}'
+                    if SEED_FAMILY == 'dfine' and not failure_reason:
+                        prefix = 'ERROR evaluating generated model: '
+                        reason = next((line.removeprefix(prefix) for line in
+                                       (job_output or '').splitlines() if line.startswith(prefix)),
+                                      reason)
+                    if retry_unavailable_gpu(gene_id, reason):
+                        return
+                    reject_detection_fitness(gene_id, fitness, reason)
+                    return
+                if failure_reason:
+                    raise ValueError('successful result has a failure reason')
+                fitness = normalized
+            elif fitness == INVALID_FITNESS_MAX:
+                reason = failure_reason or 'candidate_failed: no reason supplied'
+                if is_unsupported_gpu_error(reason):
+                    reason = f'gpu_unsupported: {reason}'
+                if retry_unavailable_gpu(gene_id, reason):
+                    return
+                retries = GLOBAL_DATA[gene_id].get('gpu_retry_count', 0)
+                if reason.startswith('gpu_unavailable:') and retries:
+                    reason += f' (after {retries} GPU retries)'
+                record_failure(gene_id, reason)
                 return
-            fitness = normalized
-        
-        GLOBAL_DATA[gene_id]['status'] = 'completed'
-        GLOBAL_DATA[gene_id]['fitness'] = fitness
+            elif not all(np.isfinite(value) for value in fitness) or failure_reason:
+                raise ValueError('non-finite result or failure reason outside failure sentinel')
+            GLOBAL_DATA[gene_id].update(status='completed', fitness=fitness,
+                                        failure_reason=None)
+            key = GLOBAL_DATA[gene_id].get('evaluation_cache_key')
+            if key:
+                EVAL_CACHE[key] = {'fitness': fitness, 'gene_id': gene_id}
+                EVAL_PENDING.pop(key, None)
+        except (OSError, ValueError, IndexError, csv.Error) as exc:
+            if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                reject_detection_fitness(gene_id, None, f'Cannot read {results_path}: {exc}',
+                                         status='FAILED: RESULT FILE')
+            else:
+                record_failure(gene_id, f'invalid_result: {exc}')
         # print(f'Model from Gene: {gene_id} Evaluated')
     elif job_done is False:
         if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
             reject_detection_fitness(gene_id, None, 'Evaluation job failed; see job log',
                                      status='FAILED: EVALUATION JOB')
         else:
-            GLOBAL_DATA[gene_id]['status'] = 'completed'
-            GLOBAL_DATA[gene_id]['fitness'] = INVALID_FITNESS_MAX
+            job_id = GLOBAL_DATA[gene_id].get('results_job')
+            output_file = f'{SLURM_OUTPUT_PATH}evaluation/slurm-{job_id}.out'
+            try:
+                with open(output_file, encoding='utf-8', errors='replace') as stream:
+                    output = stream.read()
+            except OSError:
+                output = GLOBAL_DATA[gene_id].get('local_output') or ''
+            if is_unsupported_gpu_error(output):
+                record_failure(gene_id, 'gpu_unsupported: evaluation GPU unsupported by PyTorch')
+            else:
+                record_failure(gene_id, 'evaluation_job_failed: SLURM or process error')
         # print(f'Model from Gene: {gene_id} Failed to Run')
     else:
         # print('Job Has Not Finished Running Yet...', flush=True)
@@ -851,8 +1091,10 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                                                  'Candidate submission failed', status='FAILED: SUBMISSION')
                     ind.fitness.values = INVALID_FITNESS_MAX
                     continue
-                ind.fitness.values = INVALID_FITNESS_MAX # Max error
-                GLOBAL_DATA[gene_id]['status'] == "completed"      
+                if not GLOBAL_DATA[gene_id].get('failure_reason'):
+                    record_failure(gene_id, 'submission_failed: no job was submitted')
+                ind.fitness.values = INVALID_FITNESS_MAX
+                continue
             if ind.fitness.values == PLACEHOLDER_FITNESS:  # If fitness not assigned
                 # check for gene_id_model.txt file
                 if GLOBAL_DATA[gene_id]['status'] == 'subbed file':
@@ -864,8 +1106,8 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                     no_error_flag = check4results(gene_id) # here we look for the results file for gene_id
                     if no_error_flag == False:
                         print(f"LLM Failed for Gene: {gene_id}")
-                        ind.fitness.values = INVALID_FITNESS_MAX 
-                        GLOBAL_DATA[gene_id]['status'] = 'completed'
+                        record_failure(gene_id, 'evaluation_job_failed: SLURM or process error')
+                        ind.fitness.values = INVALID_FITNESS_MAX
                 
                 
                 if GLOBAL_DATA[gene_id]['status'] == "completed":
@@ -887,15 +1129,17 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                     print(f"Timeout for gene ID {gene_id} after {timeout} seconds without evaluation result")
                     cancel_eval_job(gene_id, f"no evaluation result for {timeout} seconds")
                     ind.fitness.values = INVALID_FITNESS_MAX
-                    GLOBAL_DATA[gene_id]['fitness'] = INVALID_FITNESS_MAX
-                    GLOBAL_DATA[gene_id]['status'] = 'FAILED: TIMEOUT'
-                    if SEED_FAMILY == 'dfine':
-                        GLOBAL_DATA[gene_id]['failure_reason'] = f'No evaluation result after {timeout}s'
+                    if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                        reject_detection_fitness(gene_id, None,
+                                                 f'No evaluation result after {timeout}s',
+                                                 status='FAILED: TIMEOUT')
+                    else:
+                        record_failure(gene_id, f'evaluation_timeout: no result after {timeout}s')
                 else:
                     if 'results_job' not in GLOBAL_DATA[gene_id].keys():
-                        ind.fitness.values = INVALID_FITNESS_MAX # Max error
+                        record_failure(gene_id, 'submission_failed: no evaluation job id')
+                        ind.fitness.values = INVALID_FITNESS_MAX
                         print(f'\t☠ No Placeholder Fitness for: {gene_id}')
-                        GLOBAL_DATA[gene_id]['status'] == "completed"
                     else:
                         print(f"\t‣ Still Waiting On: Gene: {gene_id}", flush=True)
                         print_job_info(GLOBAL_DATA[gene_id])
@@ -934,7 +1178,8 @@ def update_individual(ind, new_gene_id, old_gene_id=None, process_success=True, 
     if process_success:
         ind[0] = new_gene_id
         ind = creator.Individual([new_gene_id])
-        if old_gene_id is not None and old_gene_id in GLOBAL_DATA.keys():
+        if (load_candidate_policy(globals()) is None and old_gene_id is not None and
+                old_gene_id in GLOBAL_DATA):
             del GLOBAL_DATA[old_gene_id]
         print(f'\t☑ {operation}: {new_gene_id}')
     else:
@@ -974,6 +1219,9 @@ def delayed_mate_check(offspring):
                     print(f'\t‣ Error Loading Model Files for {new_gene_id}!!', flush=True)
 
                 failed_process = not (successful_sub_flag and job_done)
+                if failed_process and load_candidate_policy(globals()) is not None:
+                    record_failure(new_gene_id, operator_failure_reason(new_gene_id, 'crossover'))
+                    continue
                 # Same as delayed_mutate_check: on failure update_individual drops
                 # the child and restores the parent.
                 individual = update_individual(individual, new_gene_id, old_gene_id=LINKED_GENES[k],
@@ -998,6 +1246,10 @@ def delayed_creation_check(offspring):
                     job_done = check4job_completion(job_id, extension="evolution/")
                     if SEED_FAMILY == 'dfine' and not job_done:
                         record_dfine_proposal_failure(gene_id)
+                    elif not job_done and load_candidate_policy(globals()) is not None:
+                        record_failure(gene_id, operator_failure_reason(gene_id, 'creation'))
+                elif load_candidate_policy(globals()) is not None:
+                    record_failure(k, operator_failure_reason(k, 'creation'))
                   
     return offspring
 
@@ -1039,8 +1291,13 @@ def delayed_mutate_check(offspring):
 
                     failed_process = not (successful_sub_flag and job_done)
                     old_gene_id = LINKED_GENES[k]
+                    if failed_process and load_candidate_policy(globals()) is not None:
+                        record_failure(new_gene_id, operator_failure_reason(new_gene_id, 'mutation'))
+                        continue
                     individual = update_individual(individual, new_gene_id, old_gene_id=old_gene_id,
                                                    process_success=not failed_process, process_type='Mutation')
+                elif load_candidate_policy(globals()) is not None:
+                    record_failure(k, operator_failure_reason(k, 'mutation'))
                   
     return offspring
 
@@ -1077,7 +1334,8 @@ def customCrossover(ind1, ind2, llm_model):
 
         # Update global data for the new individual
         GLOBAL_DATA[new_gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
-                                    'status':'subbed file', 'fitness':None, 'start_time':time.time()}
+                                    'status':'subbed file', 'fitness':None, 'start_time':time.time(),
+                                    'operator_type': 'crossover', 'local_output': local_output}
         if SEED_FAMILY == 'dfine':
             GLOBAL_DATA[new_gene_id]['parent_sources'] = [
                 f'{VARIANT_DIR}/{MODEL}_{gene_id_1}.py',
@@ -1169,7 +1427,8 @@ def customMutation(individual, llm_model, indpb, temp_min=0.02, temp_max=0.35):
     # individual[0] = new_gene_id
     # Update the global data with the new task
     GLOBAL_DATA[new_gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
-                                'status':'subbed file', 'fitness':None, 'start_time':time.time()}
+                                'status':'subbed file', 'fitness':None, 'start_time':time.time(),
+                                'operator_type': 'mutation', 'local_output': local_output}
     if SEED_FAMILY == 'dfine':
         GLOBAL_DATA[new_gene_id]['parent_sources'] = [
             f'{VARIANT_DIR}/{MODEL}_{old_gene_id}.py']
@@ -1215,7 +1474,36 @@ def remove_duplicates(population):
     return unique_individuals
 
 # --- Checkpoint Functions --- #
+_ACTIVE_FINGERPRINT = None
+
+def run_fingerprint():
+    """Identify the FRED protocol and inputs that must stay fixed across resume."""
+    global _ACTIVE_FINGERPRINT
+    if SEED_FAMILY != 'yolo11' or "RUN_CHECKPOINT_DIR" not in globals():
+        return None
+
+    from sota.FRED_LLM_GE.phase1_detection.protocol_fingerprint import compute_fingerprint
+    identity = compute_fingerprint(ROOT_DIR, SEED_FAMILY, RUN_TAG, SEED_NETWORK)
+    identity['evolution_settings'] = {
+        'num_generations': num_generations,
+        'start_population_size': start_population_size,
+        'population_size': population_size,
+        'offspring_size': offspring_size,
+        'num_elites': num_elites,
+        'max_refill_attempts': globals().get('FRED_MAX_REFILL_ATTEMPTS'),
+        'eval_gpu_constraint': globals().get('EVAL_GPU_CONSTRAINT'),
+        'eval_gpu_retry_limit': globals().get('EVAL_GPU_RETRY_LIMIT', 0),
+        'preserve_slurm_cuda_visible_devices': globals().get(
+            'PRESERVE_SLURM_CUDA_VISIBLE_DEVICES', False),
+        'fred_events': globals().get('FRED_EVENTS', ''),
+    }
+    if _ACTIVE_FINGERPRINT is not None and identity != _ACTIVE_FINGERPRINT:
+        raise RuntimeError('FRED protocol changed during this run; refusing checkpoint update')
+    _ACTIVE_FINGERPRINT = identity
+    return identity
+
 def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint_data=None):
+    fingerprint = run_fingerprint() if globals().get("RUN_CHECKPOINT_DIR") else None
     from src.fred_session import enabled, save_pair
     if enabled():
         if global_path is None:
@@ -1228,12 +1516,19 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                 require_yolo26_selection_version(data, folder_name)
             data = {**data, 'selection_version': YOLO26_SELECTION_VERSION}
             state['selection_version'] = YOLO26_SELECTION_VERSION
+        if fingerprint is not None:
+            data = dict(data, protocol_fingerprint=fingerprint)
+            state['protocol_fingerprint'] = fingerprint
+        if load_candidate_policy(globals()) is not None:
+            state['EVAL_CACHE'] = EVAL_CACHE
         return save_pair(folder_name, global_path, gen, data, state, SEED_FAMILY)
     os.makedirs(folder_name, exist_ok=True)
     filename = os.path.join(folder_name, f'checkpoint_gen_{gen}.pkl')
-    if SEED_FAMILY == 'yolo26_p2' and os.path.exists(filename):
+    if os.path.exists(filename):
         with open(filename, 'rb') as file:
-            require_yolo26_selection_version(pickle.load(file), filename)
+            stored_checkpoint = pickle.load(file)
+        require_yolo26_selection_version(stored_checkpoint, filename)
+        verify_fingerprint(stored_checkpoint, filename, fingerprint)
 
     if global_path is not None:
         os.makedirs(global_path, exist_ok=True)
@@ -1244,6 +1539,7 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                     stored_global_data = pickle.load(file)
                 except EOFError:
                     stored_global_data = {}  
+            verify_fingerprint(stored_global_data, global_file, fingerprint)
         else:
             stored_global_data = {}
 
@@ -1258,15 +1554,21 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
             stored_global_data["GLOBAL_DATA"].update(GLOBAL_DATA)
             stored_global_data["GLOBAL_DATA_HIST"].update(GLOBAL_DATA_HIST)
             stored_global_data["GLOBAL_DATA_ANCESTRY"].update(GLOBAL_DATA_ANCESTRY)
+            if load_candidate_policy(globals()) is not None:
+                stored_global_data.setdefault("EVAL_CACHE", {}).update(EVAL_CACHE)
         else:
             print("No global data found, saving to a new file")
             stored_global_data = {
                 "GLOBAL_DATA": GLOBAL_DATA,
                 "GLOBAL_DATA_HIST": GLOBAL_DATA_HIST,
-                "GLOBAL_DATA_ANCESTRY": GLOBAL_DATA_ANCESTRY
+                "GLOBAL_DATA_ANCESTRY": GLOBAL_DATA_ANCESTRY,
             }
+            if load_candidate_policy(globals()) is not None:
+                stored_global_data["EVAL_CACHE"] = EVAL_CACHE
         if SEED_FAMILY == 'yolo26_p2':
             stored_global_data['selection_version'] = YOLO26_SELECTION_VERSION
+        if fingerprint is not None:
+            stored_global_data['protocol_fingerprint'] = fingerprint
 
         with open(global_file, 'wb') as file:
             pickle.dump(stored_global_data, file)
@@ -1281,6 +1583,8 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
         if 'selection_version' in checkpoint_data:
             require_yolo26_selection_version(checkpoint_data, filename)
         checkpoint_data = {**checkpoint_data, 'selection_version': YOLO26_SELECTION_VERSION}
+    if fingerprint is not None:
+        checkpoint_data = dict(checkpoint_data, protocol_fingerprint=fingerprint)
     with open(filename, 'wb') as file:
         pickle.dump(checkpoint_data, file)
     print(f"Population data saved as {filename}")
@@ -1296,6 +1600,7 @@ def extract_generation(filename, kind):
     return int(matcher.group(1)) if matcher else None
 
 def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path="checkpoints", global_file=None):
+    fingerprint = run_fingerprint() if globals().get("RUN_CHECKPOINT_DIR") else None
     from src.fred_session import enabled, eval_submission, latest_pair
     if enabled():
         if checkpoint_file is not None or global_file is not None:
@@ -1304,6 +1609,8 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         if data is not None:
             require_yolo26_selection_version(data, folder_name)
             require_yolo26_selection_version(state, global_path)
+            verify_fingerprint(data, folder_name, fingerprint)
+            verify_fingerprint(state, global_path, fingerprint)
             if SEED_FAMILY == 'dfine':
                 for individual in data['population']:
                     gene_id = individual[0]
@@ -1321,6 +1628,8 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
                                       failure_reason='Evaluation submission was interrupted or failed; '
                                                      'job identity could not be confirmed')
         return data, start_gen, state
+    if fingerprint is not None and os.path.exists(folder_name) != os.path.exists(global_path):
+        raise RuntimeError('FRED checkpoint is incomplete: population and global paths must both exist')
     if not os.path.exists(folder_name) or not os.path.exists(global_path):
         print("Path does not exist, returning none for checkpoints")
         return None, None, None
@@ -1338,6 +1647,7 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         with open(filepath, 'rb') as file:
             population_data = pickle.load(file)
         require_yolo26_selection_version(population_data, filepath)
+        verify_fingerprint(population_data, filepath, fingerprint)
         print(f"Loaded population data from {filepath}")
         start_gen = extract_generation(checkpoint_file, "checkpoint") + 1
 
@@ -1350,7 +1660,14 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         with open(filepath, 'rb') as file:
             global_data = pickle.load(file)
         require_yolo26_selection_version(global_data, filepath)
+        verify_fingerprint(global_data, filepath, fingerprint)
         print(f"Loaded global data from {filepath}")
+
+    if fingerprint is not None and bool(population_data) != bool(global_data):
+        raise RuntimeError('FRED checkpoint is incomplete: population and global data must both exist')
+    if fingerprint is not None and checkpoint_file and global_file:
+        if extract_generation(checkpoint_file, 'checkpoint') != extract_generation(global_file, 'global'):
+            raise RuntimeError('FRED checkpoint generations do not match')
 
     return population_data, start_gen, global_data
 
@@ -1394,6 +1711,100 @@ def create_population(n, llm_model):
     individual_func = partial(toolbox.individual, llm_model=llm_model)
     return tools.initRepeat(list, individual_func, n)
 
+
+def distinct_built_population(individuals, policy):
+    """Keep one successful individual per effective built graph, in input order."""
+    unique = []
+    seen = set()
+    for individual in individuals:
+        entry = GLOBAL_DATA.get(individual[0], {})
+        if entry.get('fitness') in (None, INVALID_FITNESS_MAX) or entry.get('failure_reason'):
+            continue
+        graph_hash = entry.get('architecture_hash')
+        if graph_hash is None:
+            path = f'{VARIANT_DIR}/{MODEL}_{individual[0]}.py'
+            graph_hash, params = policy.built_architecture(path)
+            entry.update(architecture_hash=graph_hash, architecture_params=params)
+        if graph_hash not in seen:
+            seen.add(graph_hash)
+            unique.append(individual)
+    return unique
+
+
+def write_run_status(status):
+    run_root = globals().get('RUN_ROOT')
+    if run_root:
+        os.makedirs(run_root, exist_ok=True)
+        with open(os.path.join(run_root, 'status.json'), 'w') as stream:
+            json.dump(status, stream, indent=2)
+
+
+def write_depleted_status(generation, found, target, attempts):
+    message = (f'depleted: generation {generation} has {found}/{target} distinct successful '
+               f'built graphs after {attempts} refill attempts')
+    write_run_status({'status': 'depleted', 'generation': generation, 'distinct_graphs': found,
+                      'target': target, 'refill_attempts': attempts})
+    raise RuntimeError(message)
+
+
+def refill_initial_population(individuals, target, llm_model):
+    """Start YOLO11 generation 0 with distinct built graphs or stop clearly."""
+    global GEN_COUNT
+    policy = load_candidate_policy(globals())
+    if policy is None:
+        return individuals
+    GEN_COUNT = 0  # Refill mutations need lineage; EoT remains disabled at generation 0.
+    generation = 0
+    population = distinct_built_population(individuals, policy)
+    limit = globals().get('FRED_MAX_REFILL_ATTEMPTS', 3 * target)
+    attempts = 0
+    all_fresh = []
+    while len(population) < target and attempts < limit:
+        if not population:
+            log_failure_counts(generation, [*individuals, *all_fresh])
+            write_depleted_status(generation, 0, target, attempts)
+        count = min(target - len(population), limit - attempts)
+        fresh = []
+        for _ in range(count):
+            child = toolbox.clone(random.choice(population))
+            fresh.append(toolbox.mutate(individual=child, llm_model=llm_model))
+        attempts += count
+        delayed_mutate_check(fresh)
+        for child in fresh:
+            child.fitness.values = PLACEHOLDER_FITNESS
+        check_and_update_fitness(fresh)
+        all_fresh.extend(fresh)
+        population = distinct_built_population([*population, *fresh], policy)
+        print(f'Generation {generation} distinct graphs: {len(population)}/{target}; '
+              f'refill attempts: {attempts}/{limit}', flush=True)
+    if len(population) < target:
+        log_failure_counts(generation, [*individuals, *all_fresh])
+        write_depleted_status(generation, len(population), target, attempts)
+    log_failure_counts(generation, [*individuals, *all_fresh])
+    return population
+
+
+def add_stock_seed_to_initial_population(population):
+    """Give a FRED stock seed a normal candidate ID and evaluation job.
+
+    The copy is byte-for-byte, so Python seeds and YAML seeds use the same
+    candidate_runner path as their LLM-created descendants. The standalone
+    three-seed baseline remains independent of this single-seed GE individual.
+    """
+    if "SEED_FAMILY" not in globals():
+        return population
+    gene_id = "seed"
+    os.makedirs(VARIANT_DIR, exist_ok=True)
+    target = os.path.join(VARIANT_DIR, f"{MODEL}_{gene_id}.py")
+    if os.path.exists(target) or gene_id in GLOBAL_DATA:
+        raise RuntimeError(f"Stock seed already exists in a fresh run: {target}; use a fresh run tag")
+    shutil.copyfile(SEED_NETWORK, target)
+    GLOBAL_DATA[gene_id] = {"sub_flag": True, "job_id": None,
+                            "status": "subbed file", "fitness": None,
+                            "start_time": time.time(), "origin": "stock_seed"}
+    GLOBAL_DATA_ANCESTRY[gene_id] = {"GENES": [gene_id], "MUTATE_TYPE": ["STOCK_SEED"]}
+    return [creator.Individual([gene_id]), *population]
+
 # Define the problem
 creator.create("FitnessMulti", base.Fitness, weights=FITNESS_WEIGHTS)  # Adjust weights as needed
 creator.create("Individual", list, fitness=creator.FitnessMulti, file_id=None)
@@ -1415,6 +1826,8 @@ TOP_N_GENES = None
 LINKED_GENES = {}
 GLOBAL_DATA = {}
 GLOBAL_DATA_HIST = {}
+EVAL_CACHE = {}
+EVAL_PENDING = {}
 GLOBAL_DATA_ANCESTRY = {}
 GLOBAL_DATA_ANCESTRY[MODEL] = {'GENES':[MODEL], 'MUTATE_TYPE':["CREATED"]}
 CHECKPOINT_FOLDER = None
@@ -1436,11 +1849,25 @@ if __name__ == "__main__":
     llm_model = args.llm_model
     CHECKPOINT_FOLDER = args.checkpoints
 
+    # run.sh supplies legacy checkpoint names. An explicit FRED run tag keeps
+    # both checkpoint files in the same experiment-specific directory.
+    if "RUN_CHECKPOINT_DIR" in globals():
+        if not RUN_CHECKPOINT_DIR:
+            parser.error(
+                "set a fresh FRED_RUN_TAG, e.g. yolo11_20261017_eot0_trial1"
+            )
+        args.checkpoints = RUN_CHECKPOINT_DIR
+        args.global_path = RUN_CHECKPOINT_DIR
+        print(f"FRED run tag: {RUN_TAG}; checkpoints: {RUN_CHECKPOINT_DIR}", flush=True)
+
     PROMPT_GLOB = resolve_prompt_glob(args.prompt_group)
 
     print(DNA_TXT)
     print("ISLAND llm_model: ", llm_model)
     print(f"Prompt glob: {PROMPT_GLOB}")
+    if load_candidate_policy(globals()) is not None:
+        print(f"FRED generation limit: {num_generations - 1} evolutionary generations; "
+              f"LLM server job: {os.getenv('LLMGE_SERVER_JOB_ID', '<not supplied>')}", flush=True)
 
     if AVAILABLE_LLM_MODELS and (not llm_model or llm_model not in AVAILABLE_LLM_MODELS):
         print("Error in Island Generation: No LLM specified. Exiting script")
@@ -1452,6 +1879,16 @@ if __name__ == "__main__":
         GLOBAL_DATA = global_data["GLOBAL_DATA"]
         GLOBAL_DATA_HIST = global_data["GLOBAL_DATA_HIST"]
         GLOBAL_DATA_ANCESTRY = global_data["GLOBAL_DATA_ANCESTRY"]
+        if load_candidate_policy(globals()) is not None:
+            from sota.FRED_LLM_GE.phase1_detection.ancestry_recovery import recover_population_ancestry
+            GLOBAL_DATA_ANCESTRY, repaired = recover_population_ancestry(
+                population_data["population"], GLOBAL_DATA_ANCESTRY, ROOT_DIR, OUTPUT_DIR,
+                VARIANT_DIR, MODEL, PROMPT_GLOB, CONSTANT_RULES_PATH)
+            if repaired:
+                print(f"Recovered ancestry for generation-0 refill candidates: {repaired}",
+                      flush=True)
+        EVAL_CACHE = global_data.get("EVAL_CACHE", {})
+        EVAL_PENDING = {}
         population = population_data["population"]
         hof = population_data["hof"]
         if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
@@ -1463,9 +1900,13 @@ if __name__ == "__main__":
         # Create an initial population
         start_gen = 1
         box_print("CREATING POPULATION FROM SEED CODE")
-        population = toolbox.population(n=start_population_size, llm_model=llm_model)
+        initial_mutations = start_population_size - int("SEED_FAMILY" in globals())
+        if initial_mutations < 0:
+            raise ValueError("start_population_size must include a slot for the stock seed")
+        population = toolbox.population(n=initial_mutations, llm_model=llm_model)
         box_print("Batch Checking Created Genes", print_bbox_len=60, new_line_end=False)
         delayed_creation_check(population)
+        population = add_stock_seed_to_initial_population(population)
         hof = tools.ParetoFront()
 
         # Preserve the initial population and submitted worker identities before
@@ -1479,8 +1920,27 @@ if __name__ == "__main__":
         ind.fitness.values = PLACEHOLDER_FITNESS
         
     check_and_update_fitness(population)
+    if not population_data:
+        log_failure_counts(0, population)
+        if "SEED_FAMILY" in globals():
+            if GLOBAL_DATA["seed"]["fitness"] == INVALID_FITNESS_MAX:
+                raise RuntimeError("Stock seed failed evaluation; generation 0 was not checkpointed")
+            if load_candidate_policy(globals()) is not None:
+                population = refill_initial_population(
+                    population, start_population_size, llm_model)
+            hof.update(population)
+            save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path)
     # Evolution
+    paused_for_server = False
     for gen in range(start_gen, num_generations if migration_gen == 0 else ((start_gen + migration_gen - 1) // migration_gen) * migration_gen + 1):
+        if load_candidate_policy(globals()) is not None:
+            try:
+                check_server_window()
+            except ServerWindowClosed as exc:
+                print(f'paused_for_server_refresh: {exc}; resume from the previous checkpoint',
+                      flush=True)
+                paused_for_server = True
+                break
         GEN_COUNT = gen
         if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES:
             TOP_N_GENES = tools.selSPEA2(population, NUM_EOT_ELITES)
@@ -1505,6 +1965,17 @@ if __name__ == "__main__":
         box_print("CURRENT POPULATION SIZE:", len(population))
         while SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES and len(population) < num_elites:
             print("MINIMUM NUMBER OF IND NOT ACHIEVED, TRYING AGAIN")
+            if "SEED_FAMILY" in globals():
+                fresh = toolbox.population(
+                    n=max(start_population_size - len(population), num_elites - len(population)),
+                    llm_model=llm_model)
+                delayed_creation_check(fresh)
+                for ind in fresh:
+                    ind.fitness.values = PLACEHOLDER_FITNESS
+                check_and_update_fitness(fresh)
+                log_failure_counts(gen, fresh)
+                population.extend(ind for ind in fresh if ind.fitness.values != INVALID_FITNESS_MAX)
+                continue
             GEN_COUNT = -1
             TOP_N_GENES = None
             LINKED_GENES = {}
@@ -1517,6 +1988,7 @@ if __name__ == "__main__":
             for ind in population:
                 ind.fitness.values = PLACEHOLDER_FITNESS
             check_and_update_fitness(population)
+            log_failure_counts(gen, population)
             population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
             box_print("CURRENT POPULATION SIZE:", len(population))
 
@@ -1528,12 +2000,9 @@ if __name__ == "__main__":
         elites = select_elites(population, num_elites)
 
         # Select the next generation's parents
-        if len(population) < population_size:
-            print(f"Selecting {len(population)} offspring")
-            offspring = toolbox.select(population, len(population))
-        else:
-            print(f"Selecting {population_size} offspring")
-            offspring = toolbox.select(population, population_size)
+        offspring_count = min(len(population), globals().get("offspring_size", population_size))
+        print(f"Selecting {offspring_count} offspring")
+        offspring = toolbox.select(population, offspring_count)
         
         print_population(offspring, GLOBAL_DATA)
         
@@ -1558,6 +2027,9 @@ if __name__ == "__main__":
         # Apply mutation on the offspring
         box_print("Mutating", print_bbox_len=60, new_line_end=False)
         for mutant in offspring:
+            if (load_candidate_policy(globals()) is not None and
+                    GLOBAL_DATA.get(mutant[0], {}).get('failure_reason')):
+                continue
             if random.random() < mutation_probability:
                 toolbox.mutate(individual=mutant, llm_model=llm_model)
                 del mutant.fitness.values
@@ -1594,6 +2066,7 @@ if __name__ == "__main__":
 
         GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
         check_and_update_fitness(offspring)
+        log_failure_counts(gen, offspring)
         GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
         # Replace the old population with the offspring
         population[:] = (valid_detection_population(offspring)
@@ -1606,6 +2079,7 @@ if __name__ == "__main__":
             print(f'Generation {gen} has no valid {SEED_FAMILY} candidates; '
                   'refill on resume/next generation', flush=True)
         save_checkpoint(gen, folder_name=args.checkpoints, global_path=args.global_path)
+        write_run_status({'status': 'running', 'last_completed_generation': gen})
         LINKED_GENES = {}
         # mutate x prompts
         # mutate_prompts()
@@ -1617,4 +2091,6 @@ if __name__ == "__main__":
             print(f"Best Individual: {best_ind}")
             print(f"Best Fitness: {best_ind.fitness.values}")
         
-    print("-- End of Era --")
+    if not paused_for_server:
+        write_run_status({'status': 'complete', 'last_completed_generation': num_generations - 1})
+    print("-- Paused for server refresh --" if paused_for_server else "-- End of Era --")

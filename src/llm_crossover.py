@@ -10,6 +10,7 @@ if REPO_ROOT not in sys.path:
 
 from cfg.constants import *
 from utils.print_utils import box_print
+from candidate_policy import load_candidate_policy
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, extract_note, generate_augmented_code, 
                        clean_code_from_llm, retrieve_base_code, strip_leading_imports)
@@ -48,10 +49,18 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     for x, y, augment_idx in parts:
         if x.strip() != y.strip():
             break
+    else:
+        if not parts:
+            raise ValueError('crossover has no mutable sections')
+        # Legacy crossover used the last section when parents were identical.
+        # Keep that behavior unless an architecture policy requests retries.
+        x, y, augment_idx = random.choice(parts) if globals().get('SEED_FAMILY') == 'yolo11' and load_candidate_policy(globals()) else parts[-1]
 
     # Select a template file
     template_fname = random.choice(['crossover.txt', 'crossover_s.txt'])
-    template_path = f'{ROOT_DIR}/templates/CrossOver/{template_fname}'
+    template_group = (globals().get('CROSSOVER_TEMPLATE_DIR', 'templates/CrossOver')
+                      if globals().get('SEED_FAMILY') == 'yolo11' else 'templates/CrossOver')
+    template_path = os.path.join(ROOT_DIR, template_group, template_fname)
     with open(template_path, 'r') as file:
         template_txt = file.read()
 
@@ -72,32 +81,52 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
         print('Job Done', flush=True)
         return
     # Generate augmented code (retrieve_base_code indexes the mutable chunks from 0)
-    code_from_llm = generate_augmented_code(txt2llm, augment_idx - 1, apply_quality_control,
-                                            top_p, llm_model, temperature)
-    
-    if globals().get("SEED_FAMILY") == "dfine":
-        if not code_from_llm or code_from_llm == "ERROR":
-            raise RuntimeError("ERROR proposal: LLM returned no valid code")
-        code_from_llm = strip_leading_imports(code_from_llm)
-        valid, reason = validate_generated_chunk(code_from_llm)
-        if not valid:
-            raise RuntimeError(f"ERROR proposal: {reason}")
+    policy = (None if globals().get('SEED_FAMILY') in ('dfine', 'yolo26_p2')
+              else load_candidate_policy(globals()))
+    attempts = globals().get('max_gen_attempts', 5) if policy else 1
+    previous_error = None
+    for attempt in range(attempts):
+        prompt = policy.retry_prompt(txt2llm, previous_error, attempt) if policy and hasattr(policy, 'retry_prompt') else txt2llm
+        retry_temperature = min(0.8, temperature + 0.1 * attempt) if policy else temperature
+        retry_top_p = min(0.9, top_p + 0.1 * attempt) if policy else top_p
+        code_from_llm = generate_augmented_code(prompt, augment_idx - 1, apply_quality_control,
+                                                retry_top_p, llm_model, retry_temperature)
+        if globals().get('SEED_FAMILY') == 'dfine':
+            if not code_from_llm or code_from_llm == "ERROR":
+                raise RuntimeError("ERROR proposal: LLM returned no valid code")
+            code_from_llm = strip_leading_imports(code_from_llm)
+            valid, reason = validate_generated_chunk(code_from_llm)
+            if not valid:
+                raise RuntimeError(f"ERROR proposal: {reason}")
+            try:
+                validate_dfine_proposal(x, code_from_llm)
+                validate_dfine_proposal(y, code_from_llm)
+            except ValueError as exc:
+                raise RuntimeError(f"ERROR proposal: {exc}") from exc
+        elif not code_from_llm or code_from_llm == "ERROR":
+            previous_error = 'llm_unavailable: no usable YAML response'
+            code_from_llm = x.strip()
+        if policy is not None and hasattr(policy, 'repair_channel_values'):
+            code_from_llm = policy.repair_channel_values(code_from_llm)
+        candidate_parts = parts_x.copy()
+        note_txt = extract_note(parts_x[augment_idx])
+        candidate_parts[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
+        write_augmented_code(output_filename, candidate_parts, parts_y)
+        if policy is None:
+            break
         try:
-            validate_dfine_proposal(x, code_from_llm)
-            validate_dfine_proposal(y, code_from_llm)
-        except ValueError as exc:
-            raise RuntimeError(f"ERROR proposal: {exc}") from exc
-    elif not code_from_llm or code_from_llm == "ERROR":
-        # Keep the first parent's chunk rather than writing the prompt into the model
-        code_from_llm = x.strip()
-
-    # Insert note if present
-    temp_txt = parts_x[augment_idx]
-    note_txt = extract_note(temp_txt)
-    # Update the part with augmented code
-    parts_x[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
-    # Prepare and write the augmented code to output file
-    write_augmented_code(output_filename, parts_x, parts_y)
+            if policy.differs_from_parents(output_filename, input_filename_x, input_filename_y):
+                break
+            previous_error = 'unchanged_parent: built graph matches a parent'
+            print(f"Crossover attempt {attempt + 1}: {previous_error}", flush=True)
+        except ImportError:
+            raise
+        except Exception as exc:
+            previous_error = f'invalid_architecture: {exc}'
+            print(f"Crossover attempt {attempt + 1}: {previous_error}", flush=True)
+    else:
+        os.unlink(output_filename)
+        raise RuntimeError(f"retry_exhausted: crossover exhausted {attempts} attempts; last={previous_error}")
     box_print(f"Python code saved to {os.path.basename(output_filename)}", print_bbox_len=120, new_line_end=False)
     print('Job done')
 

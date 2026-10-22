@@ -17,7 +17,6 @@ This folder is for post-run analysis only. Scripts here should read experiment o
 - prefer reusable helper functions over duplicated logic
 - use descriptive snake_case filenames
 
-
 ## FRED 2D Pareto views
 
 `scripts/fred_pareto_graphs_2d.py` adds two views alongside the existing
@@ -78,3 +77,18 @@ independently verify evaluation reports or checkpoint provenance. A saved
 generation containing only the baseline is labeled **baseline only**, with no
 frontier line. If no saved global generation exists, the script stops with a
 clear error rather than inventing an evolutionary front.
+
+## FRED detector Pareto plots
+
+Set `FRED_RUN_TAG` to the tag used by the evolution run, then run
+`uv run python analysis/scripts/fred_pareto_graphs.py`. For a legacy run
+without a tag, pass `--checkpoints` and `--models_dir` explicitly.
+
+The stock seed is evaluated once through the same candidate runner as the
+initial LLM-created candidates and saved in `global_gen_0.pkl` as gene ID
+`seed`. Both 2D accuracy-versus-parameter fronts include it. The independent
+three-seed baseline summary estimates training noise; it is not another
+evolution candidate and is not inserted into these fronts. Failed and
+incomplete evaluations are omitted; `candidates.csv` records every valid
+evaluated candidate through the last checkpoint. The two displayed 2D
+fronts can differ from the three-objective front in `pareto_models.csv`.

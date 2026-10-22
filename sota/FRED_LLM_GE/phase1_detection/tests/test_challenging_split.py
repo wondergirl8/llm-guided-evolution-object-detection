@@ -53,7 +53,7 @@ def test_export_sequence_writes_frames_then_marks_done(tmp_path, monkeypatch):
     frames = [(Image.new("RGB", (80, 40)), i * step_us / 1_000_000) for i in (1, 2, 3)]
     calls = []
 
-    def fake_stream(folder, sequence, report, frame_step, download_dir):
+    def fake_stream(folder, sequence, report, frame_step, download_dir, events=None):
         calls.append((folder, sequence, frame_step))
         yield from frames
 
@@ -90,7 +90,7 @@ def test_predict_test_split_scores_every_streamed_frame(monkeypatch):
 
     step_us = final_eval.STEP_US
     frames = [(Image.new("RGB", (80, 40)), i * step_us / 1_000_000) for i in (1, 2, 3)]
-    monkeypatch.setattr(final_eval, "sequence_frames", lambda *a: iter(frames))
+    monkeypatch.setattr(final_eval, "sequence_frames", lambda *a, **k: iter(frames))
     monkeypatch.setattr(final_eval, "load_annotations",
                         lambda folder, seq, w, h: {3: [[1.0, 2.0, 11.0, 12.0]]})
 
@@ -132,7 +132,7 @@ def test_load_exported_split_reads_frames_lazily_with_exact_boxes(tmp_path, monk
     step_us = export_split.STEP_US
     image = Image.new("RGB", (80, 40), (10, 20, 30))
     monkeypatch.setattr(export_split, "sequence_frames",
-                        lambda *a: iter([(image, i * step_us / 1_000_000) for i in (1, 2)]))
+                        lambda *a, **k: iter([(image, i * step_us / 1_000_000) for i in (1, 2)]))
     monkeypatch.setattr(export_split, "load_annotations",
                         lambda folder, seq, w, h: {2: [[8.5, 4.25, 24.0, 20.0]]})
     export_split.export_sequence("7", "test", 10, tmp_path)

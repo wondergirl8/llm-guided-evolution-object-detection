@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -17,11 +18,13 @@ class DetectionResult:
 
     map50: float
     map50_95: float
-    params: int
+    params: int | float
 
 
     # validating the fields of the dataclass
     def __post_init__(self):
+        if (self.map50, self.map50_95, self.params) == (-math.inf, -math.inf, math.inf):
+            return
         if (
             isinstance(self.map50, bool)
             or not isinstance(self.map50, Real)
@@ -68,13 +71,16 @@ def validate_gene_id(gene_id):
     return gene_id
 
 
-def write_results(sota_root, gene_id, result):
+def write_results(sota_root, gene_id, result, reason=""):
     """Write the CSV row consumed by run_improved.py."""
 
     validate_gene_id(gene_id)
 
     if not isinstance(result, DetectionResult):
         raise TypeError("result must be a DetectionResult")
+    failed = (result.map50, result.map50_95, result.params) == (-math.inf, -math.inf, math.inf)
+    if not isinstance(reason, str) or failed != bool(reason.strip()):
+        raise ValueError("a failed result requires a reason; a successful result must not have one")
 
     directory = Path(sota_root) / "results"
     directory.mkdir(parents=True, exist_ok=True)
@@ -92,13 +98,10 @@ def write_results(sota_root, gene_id, result):
             temporary_name = handle.name
 
             writer = csv.writer(handle, lineterminator="\n")
-            writer.writerow(
-                [
-                    f"{result.map50:.6f}",
-                    f"{result.map50_95:.6f}",
-                    str(result.params),
-                ]
-            )
+            row = [f"{result.map50:.6f}", f"{result.map50_95:.6f}", str(result.params)]
+            if failed:
+                row.append(reason)
+            writer.writerow(row)
 
         os.replace(temporary_name, output)
 

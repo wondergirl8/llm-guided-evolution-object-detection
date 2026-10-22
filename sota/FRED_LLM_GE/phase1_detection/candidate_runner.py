@@ -16,37 +16,42 @@ elites are retrained at full budget later.
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import re
 import statistics
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import torch
 import yaml
 
-try:
+if __package__:
     from . import map_reporter
     from .adapters.dfine import DFINEAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from .adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
-    from .export_split import dataset_parts
+    from .export_split import dataset_parts, events_from_tag
     from .fitness import evaluate_frames
     from .proxy_data import REVISION, load_exported_split, load_split
     from .result_contract import DetectionResult, write_results
-except ImportError:
-    import map_reporter
-    from adapters.dfine import DFINEAdapter
-    from adapters.tiny_yolo11 import TinyYolo11Adapter
-    from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
-    from adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
-    from export_split import dataset_parts
-    from fitness import evaluate_frames
-    from proxy_data import REVISION, load_exported_split, load_split
-    from result_contract import DetectionResult, write_results
+else:
+    # SLURM invokes this file directly. Make the repository namespace package
+    # importable so adapters retain their relative imports in that mode too.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from sota.FRED_LLM_GE.phase1_detection import map_reporter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.dfine import DFINEAdapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Adapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
+    from sota.FRED_LLM_GE.phase1_detection.export_split import dataset_parts, events_from_tag
+    from sota.FRED_LLM_GE.phase1_detection.fitness import evaluate_frames
+    from sota.FRED_LLM_GE.phase1_detection.proxy_data import REVISION, load_exported_split, load_split
+    from sota.FRED_LLM_GE.phase1_detection.result_contract import DetectionResult, write_results
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
@@ -60,8 +65,8 @@ ADAPTERS = {adapter.name: adapter for adapter in
             (TinyYolo11Adapter, UltralyticsYolo11Adapter, UltralyticsYolo26P2Adapter,
              DFINEAdapter)}
 
-# Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
-FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
+# Excluded by the orchestrator's INVALID_FITNESS_MAX filter.
+FAILED_RESULT = DetectionResult(-math.inf, -math.inf, math.inf)
 INFRASTRUCTURE_ERROR = "ERROR infrastructure: "
 
 
@@ -144,7 +149,7 @@ def code_revision():
 def write_failure_results(sota_root, gene_id, start_time, message):
     """Record worst-case fitness for candidates that cannot be evaluated."""
     train_time = time.time() - start_time
-    write_results(sota_root, gene_id, FAILED_RESULT)
+    write_results(sota_root, gene_id, FAILED_RESULT, reason=message)
     print(f"ERROR evaluating generated model: {message}")
     print(f"Wrote worst-case fitness after {train_time:.1f}s")
     print('='*120);print('job done');print('='*120)
@@ -271,34 +276,31 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
         except (RuntimeError, AssertionError) as exc:
             print(f"{INFRASTRUCTURE_ERROR}CUDA unavailable on allocated device: {exc}", flush=True)
             raise SystemExit(1) from exc
-    adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
-    if adapter.settings.get("data") == "challenging_search":
-        proxy, train_data, load_val = challenging_search(protocol, family)
-    else:
-        proxy = protocol["proxy"]
-        train_data = load_val = None
-    torch.manual_seed(proxy["seed"])
-    config = {"family": family, "proxy": proxy, "family_settings": adapter.settings}
-
-    # This is LLM Guided Code
-    # Build the candidate; a broken LLM-generated architecture gets worst-case fitness
     try:
+        adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
+        if adapter.settings.get("data") == "challenging_search":
+            proxy, train_data, load_val = challenging_search(protocol, family)
+        else:
+            proxy = protocol["proxy"]
+            train_data = load_val = None
+        torch.manual_seed(proxy["seed"])
+        config = {"family": family, "proxy": proxy, "family_settings": adapter.settings}
+
+        # Build and prepare the candidate before starting expensive training.
         variant_path = adapter.variant_path(model_name, variant_dir)
         model = adapter.build(variant_path, num_classes=1, device=device)
+        param_count = adapter.param_count(model)
+        if load_val is None:
+            train_data, val_data = proxy_data(proxy)
+        else:
+            val_data = load_val()
+        train_frames = train_data.get("frames") or len(train_data["images"])
+        initial_hash = initial_weights_sha256(model) if family == "dfine" else None
+        environment = runtime_environment(device) if family == "dfine" else None
+        runtime_code_hash = dfine_runtime_code_sha256() if family == "dfine" else None
     except Exception as e:
         _record_run_failure(sota_root, gene_id, start_time, family, device, e)
         return
-
-    param_count = adapter.param_count(model)
-    initial_hash = initial_weights_sha256(model) if family == "dfine" else None
-    environment = runtime_environment(device) if family == "dfine" else None
-    runtime_code_hash = dfine_runtime_code_sha256() if family == "dfine" else None
-
-    if load_val is None:
-        train_data, val_data = proxy_data(proxy)
-    else:
-        val_data = load_val()
-    train_frames = train_data.get("frames") or len(train_data["images"])
     print(f"family: {family}, train frames: {train_frames}, "
           f"val frames: {len(val_data['images'])}, params: {param_count}, device: {device}",
           flush=True)
@@ -324,6 +326,10 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
                 training_history.append(point)
 
             adapter.train(model, train_data, proxy, device, on_epoch_end=record_epoch)
+        elif family == "yolo11":
+            args_path = Path(sota_root) / "training_args" / gene_id / "args.yaml"
+            adapter.train(model, train_data, proxy, device, args_path=args_path)
+            print(f"Saved Ultralytics training arguments: {args_path}", flush=True)
         else:
             adapter.train(model, train_data, proxy, device)
 
@@ -401,6 +407,10 @@ def main():
     parser.add_argument("--variant_dir", type=str, default=None,
                         help="Directory where models are written by LLM-GE")
     parser.add_argument("--protocol", type=str, default=str(DEFAULT_PROTOCOL))
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Override the training/evaluation random seed")
+    parser.add_argument("--events", type=str, default=None,
+                        help="Event frame tag, e.g. raw_w10000_polarity")
     parser.add_argument("--sota_root", type=str, default=None,
                         help="Where results/ and trained_models/ are written")
     parser.add_argument("--device", type=str,
@@ -434,10 +444,16 @@ def main():
         if args.family == "dfine":
             print(f"{INFRASTRUCTURE_ERROR}{message}", flush=True)
         else:
-            write_failure_results(sota_root, gene_id, time.time(), message)
+            write_failure_results(sota_root, gene_id, time.time(), f"gpu_unavailable: {message}")
         raise SystemExit(1)
 
     protocol = load_protocol(args.protocol)
+    if args.seed is not None:
+        if args.seed < 0 or args.training_seed is not None:
+            parser.error("--seed must be nonnegative and cannot be combined with --training-seed")
+        protocol["proxy"]["seed"] = args.seed
+    if args.events:
+        protocol["challenging"]["events"] = events_from_tag(args.events)
     if args.dfine_reg_max is not None:
         if (args.family != "dfine" or args.training_seed is None
                 or args.dfine_training_arm is not None):
@@ -482,10 +498,15 @@ def main():
                                       ("trained_models", ".pt"))):
             parser.error(f"confirmation run already exists: {sota_root}/{gene_id}")
 
+    run_options = {}
+    if args.family == "dfine":
+        run_options = {"diagnostics": args.diagnostics or args.training_seed is not None,
+                       "training_arm": args.dfine_training_arm,
+                       "refinement_bins": args.dfine_reg_max}
+    elif args.diagnostics:
+        run_options["diagnostics"] = True
     run(gene_id, args.model, variant_dir, args.family, protocol,
-        sota_root, args.device,
-        diagnostics=args.diagnostics or args.training_seed is not None,
-        training_arm=args.dfine_training_arm, refinement_bins=args.dfine_reg_max)
+        sota_root, args.device, **run_options)
 
 
 if __name__ == "__main__":

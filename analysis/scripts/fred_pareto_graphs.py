@@ -1,4 +1,4 @@
-"""3D Pareto front plots for the FRED YOLO11 LLM-GE run.
+"""Pareto front plots for the FRED YOLO11 LLM-GE run.
 
 Reads the global_gen_*.pkl files that run_improved.py saves after every
 generation, where each candidate's fitness is (mAP50, mAP50:95, params).
@@ -6,12 +6,17 @@ Both mAPs are maximized and parameter count minimized; the Pareto front is
 the set of candidates no other candidate beats on all three at once.
 Outputs (in --output):
 
-    pareto3d_final.png     3D front after the last generation
-    pareto3d_gen_<N>.png   3D front using every candidate up to generation N
-    pareto3d_fronts.gif    the per-generation plots as an animation
+    pareto2d_final.png     mAP50 vs params and mAP50:95 vs params after the last
+                           generation, each with its own 2D front (best score at
+                           a given size)
+    pareto2d_gen_<N>.png   the same using every candidate up to generation N
+    pareto2d_fronts.gif    the per-generation plots as an animation
     best_by_generation.png best mAP50 / mAP50:95 after each generation
     candidates.csv         every valid candidate, flagged if on the final front
-    pareto_models.csv      final front with model file paths
+    pareto_models.csv      final 3-objective front with model file paths
+
+The stock seed is evaluated as gene ID "seed" in generation 0. Both 2D
+fronts include it; the independent three-seed baseline is not a GE candidate.
 
 Usage:
     uv run python analysis/scripts/fred_pareto_graphs.py
@@ -24,16 +29,19 @@ import math
 import os
 import pickle
 import re
+from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
+import yaml
 
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-YOLO11_DIR = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "phase1_detection", "seeds", "yolo11")
+FRED_DIR = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE")
+PROTOCOL = os.path.join(FRED_DIR, "configs", "phase1", "protocol.yaml")
 METRICS = [("mAP50", "mAP50"), ("mAP50_95", "mAP50:95")]
 # train_eval.py writes (0, 0, 999999999) for candidates that crashed.
 FAILED_PARAMS = 999_999_999
@@ -83,74 +91,70 @@ def pareto_mask(df):
     return pd.Series(mask, index=df.index, dtype=bool)
 
 
-def load_seed(path):
-    if not os.path.isfile(path):
-        return None
-    map50, map50_95, params = pd.read_csv(path, header=None).iloc[0]
-    return {"mAP50": map50, "mAP50_95": map50_95, "params": params}
+def front_2d(df, metric):
+    """Exact 2D nondominated rows, including equal-score/equal-size ties."""
+    rows = df.sort_values(["params", metric], ascending=[True, False])
+    front = []
+    for _, row in rows.iterrows():
+        no_worse = (rows["params"] <= row["params"]) & (rows[metric] >= row[metric])
+        strictly_better = (rows["params"] < row["params"]) | (rows[metric] > row[metric])
+        if not (no_worse & strictly_better).any():
+            front.append(row.name)
+    return rows.loc[front]
 
 
-def plot_front_3d(df, title, seed, limits, path, dpi=150):
-    fig = plt.figure(figsize=(11, 7))
-    # The 3D plot takes the left of the figure; the right holds the key table.
-    ax = fig.add_axes([0.0, 0.03, 0.68, 0.88], projection="3d")
-    front_mask = pareto_mask(df) & (df["gene_id"] != "seed")
-    others = df[(df["gene_id"] != "seed") & ~front_mask]
-    front = df[front_mask].sort_values("params").reset_index(drop=True)
-    for subset, style in ((others, dict(color="lightgray", edgecolor="gray", s=25,
-                                        label="Candidates", alpha=0.7)),
-                          (front, dict(color="crimson", edgecolor="black", s=60,
-                                       label="Pareto front"))):
-        ax.scatter(subset["params"], subset["mAP50"] * 100, subset["mAP50_95"] * 100,
-                   depthshade=False, **style)
-    # Drop lines to the floor make each front point's height readable. Front
-    # points get a number badge (fewest params = 1) and their metrics go in the
-    # key table, since full text labels overlap where points cluster.
-    dz = 0.04 * (limits["mAP50_95"][1] - limits["mAP50_95"][0])
-    key = [f"{'#':>2}  {'mAP50':>6}  {'mAP50:95':>8}  {'params':>9}"]
-    near = 0.03 * (limits["params"][1] - limits["params"][0])
-    for i, row in front.iterrows():
-        x, y, z = row["params"], row["mAP50"] * 100, row["mAP50_95"] * 100
-        ax.plot([x, x], [y, y], [limits["mAP50_95"][0], z], color="crimson", lw=0.8, alpha=0.5)
-        # Stack badges of front points with nearly the same params so none hides another.
-        stacked = (abs(front["params"][:i] - x) < near).sum()
-        ax.text(x, y, z + dz * (1 + 2.2 * stacked), str(i + 1), fontsize=8, fontweight="bold", color="white",
-                ha="center", va="bottom", zorder=10,
-                bbox=dict(boxstyle="circle,pad=0.25", facecolor="crimson", edgecolor="black"))
-        key.append(f"{i + 1:>2}  {y:5.1f}%  {z:7.1f}%  {int(x):>9,}")
-    if seed:
-        key.append(f"{'x':>2}  {seed['mAP50'] * 100:5.1f}%  {seed['mAP50_95'] * 100:7.1f}%  "
-                   f"{int(seed['params']):>9,}  (seed)")
-    fig.text(0.68, 0.5, "Pareto front\n\n" + "\n".join(key), family="monospace", fontsize=9,
-             va="center", bbox=dict(boxstyle="round,pad=0.6", facecolor="white",
-                                    edgecolor="crimson"))
-    if seed:
-        ax.scatter(seed["params"], seed["mAP50"] * 100, seed["mAP50_95"] * 100,
-                   color="black", marker="x", s=110, linewidths=2, label="Seed",
-                   depthshade=False)
-    ax.set_xlim(*limits["params"])
-    ax.set_ylim(*limits["mAP50"])
-    ax.set_zlim(*limits["mAP50_95"])
-    ax.set_xlabel("Number of parameters")
-    ax.set_ylabel("mAP50 %")
-    ax.set_zlabel("mAP50:95 %")
-    # Viewed so the best corner (few params, high mAP50 and mAP50:95) faces the viewer.
-    ax.view_init(elev=22, azim=-60)
-    ax.legend(loc="upper left")
+def plot_fronts_2d(df, title, limits, path, dpi=150):
+    """mAP50 vs params and mAP50:95 vs params, each with its own Pareto front."""
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    seed_rows = df[df["gene_id"] == "seed"]
+    for ax, (metric, label) in zip(axes, METRICS):
+        front = front_2d(df, metric)
+        front_candidates = front[front["gene_id"] != "seed"]
+        others = df[(~df.index.isin(front.index)) & (df["gene_id"] != "seed")]
+        ax.scatter(others["params"] / 1e6, others[metric] * 100, color="lightgray",
+                   edgecolor="gray", s=25, alpha=0.7, label="Candidates")
+        # Staircase: at any size, the best score reachable with at most that many params.
+        staircase = front.drop_duplicates(subset=["params", metric])
+        ax.step(staircase["params"] / 1e6, staircase[metric] * 100, where="post", color="crimson",
+                lw=1.2, alpha=0.7)
+        ax.scatter(front_candidates["params"] / 1e6, front_candidates[metric] * 100, color="crimson",
+                   edgecolor="black", s=55, zorder=3, label="Pareto front")
+        for i, (_, row) in enumerate(front_candidates.iterrows()):
+            ax.annotate(f"{row[metric] * 100:.1f}%, {row['params'] / 1e6:.2f}M",
+                        (row["params"] / 1e6, row[metric] * 100), fontsize=7.5,
+                        xytext=(6, -11 if i % 2 else 5), textcoords="offset points")
+        if len(seed_rows):
+            seed = seed_rows.iloc[0]
+            seed_on_front = seed_rows.index[0] in front.index
+            ax.scatter(seed["params"] / 1e6, seed[metric] * 100, color="black", marker="x",
+                       s=90, linewidths=2, zorder=4,
+                       label="Stock seed (front)" if seed_on_front else "Stock seed")
+            ax.annotate(f"seed {seed[metric] * 100:.1f}%", (seed["params"] / 1e6, seed[metric] * 100),
+                        fontsize=7.5, xytext=(-8, 7), textcoords="offset points", ha="right")
+        # Identical coordinates still represent separate evaluated candidates.
+        for (params, score), count in df.groupby(["params", metric]).size().items():
+            if count > 1:
+                ax.annotate(f"×{count}", (params / 1e6, score * 100), fontsize=8,
+                            xytext=(7, 11), textcoords="offset points")
+        ax.set_xlim(limits["params"][0] / 1e6, limits["params"][1] / 1e6)
+        ax.set_ylim(*limits[metric])
+        ax.set_xlabel("Parameters (millions)")
+        ax.set_ylabel(f"{label} %")
+        ax.set_title(f"{label} vs parameters")
+        ax.grid(True, linestyle=":", alpha=0.6)
+        ax.legend(loc="lower right")
     fig.suptitle(title)
+    fig.tight_layout()
     fig.savefig(path, dpi=dpi)
     plt.close(fig)
     return path
 
 
-def plot_best_by_generation(history, seed, output_dir):
+def plot_best_by_generation(history, output_dir):
     fig, ax = plt.subplots(figsize=(7, 4.5))
     for (metric, label), color in zip(METRICS, ["crimson", "darkorange"]):
         ax.plot(history["generation"], history[metric] * 100, marker="o", color=color,
                 label=f"Best {label}")
-        if seed:
-            ax.axhline(seed[metric] * 100, color=color, linestyle="--", alpha=0.6,
-                       label=f"Seed {label}")
     ax.set_xticks(history["generation"])
     ax.set_xlabel("Generation")
     ax.set_ylabel("Score %")
@@ -179,64 +183,72 @@ def padded(values, pad=0.08, lower=None):
 
 
 def n_candidates(df):
-    return int((df["gene_id"] != "seed").sum())
+    return len(df)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot 3D Pareto fronts for the FRED LLM-GE run")
-    parser.add_argument("--checkpoints", default=os.path.join(ROOT_DIR, "fred_yolo11_checkpoints"),
+    parser = argparse.ArgumentParser(description="Plot Pareto fronts for the FRED LLM-GE run")
+    run_tag = os.getenv("FRED_RUN_TAG")
+    default_checkpoints = (os.path.join(ROOT_DIR, "fred_runs", run_tag, "checkpoints")
+                           if run_tag else os.path.join(ROOT_DIR, "fred_yolo11_checkpoints"))
+    parser.add_argument("--checkpoints", default=default_checkpoints,
                         help="Folder with global_gen_*.pkl")
-    parser.add_argument("--output", default=os.path.join(ROOT_DIR, "analysis", "results", "analysis", "fred_pareto"),
+    default_output = os.path.join(ROOT_DIR, "analysis", "results", "analysis", "fred_pareto")
+    parser.add_argument("--output", default=os.path.join(default_output, run_tag) if run_tag else default_output,
                         help="Folder to write plots and CSVs to")
-    parser.add_argument("--seed_results", default=os.path.join(YOLO11_DIR, "results", "seed_results.csv"),
-                        help="Seed score CSV (mAP50,mAP50:95,params); skipped if missing")
-    parser.add_argument("--models_dir", default=os.path.join(YOLO11_DIR, "models"),
+    default_models = (os.path.join(ROOT_DIR, "fred_runs", run_tag, "candidates", "models")
+                      if run_tag else None)
+    parser.add_argument("--models_dir", default=default_models,
                         help="Where the run's network_<id> files are (for pareto_models.csv)")
     parser.add_argument("--no_gif", action="store_true", help="Skip the animated GIF")
-    parser.add_argument("--family", default="YOLO11", help="Seed family name used in plot titles")
-    parser.add_argument("--seed_file", default=os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_yolo11.py"),
+    parser.add_argument("--family", default=os.getenv("FRED_SEED_FAMILY", "yolo11"),
+                        help="Family key in protocol.yaml")
+    parser.add_argument("--seed_file", default=None,
                         help="Seed model file listed for the seed in pareto_models.csv")
     args = parser.parse_args()
 
     generations = discover_generations(args.checkpoints)
     if not generations:
         raise SystemExit(f"No global_gen_*.pkl files in {args.checkpoints}")
+    if args.models_dir is None:
+        parser.error("--models_dir is required without FRED_RUN_TAG")
+    if args.seed_file is None:
+        protocol = yaml.safe_load(Path(PROTOCOL).read_text())
+        args.seed_file = os.path.join(FRED_DIR, protocol["families"][args.family]["seed_file"])
     os.makedirs(args.output, exist_ok=True)
-    seed = load_seed(args.seed_results)
 
     by_gen = [(gen, load_candidates(path)) for gen, path in generations]
     by_gen = [(gen, df) for gen, df in by_gen if len(df)]
-    if seed:
-        # The seed is a valid model too, so it can sit on (and shape) the front.
-        seed_row = pd.DataFrame([{"gene_id": "seed", **seed, "params": int(seed["params"])}])
-        by_gen = [(gen, pd.concat([df, seed_row], ignore_index=True)) for gen, df in by_gen]
+    if not by_gen:
+        raise SystemExit("No valid candidates in the generation checkpoints")
+    if 0 in [gen for gen, _ in by_gen] and "seed" not in set(by_gen[0][1]["gene_id"]):
+        raise ValueError("Generation 0 lacks a valid stock seed")
     last_gen, final = by_gen[-1]
 
     # Same axes for every generation so the GIF frames line up.
-    extra = [seed] if seed else []
-    limits = {"params": padded(list(final["params"]) + [s["params"] for s in extra], lower=0)}
+    limits = {"params": padded(list(final["params"]), lower=0)}
     for metric, _ in METRICS:
-        limits[metric] = padded([v * 100 for v in list(final[metric]) + [s[metric] for s in extra]],
+        limits[metric] = padded([v * 100 for v in list(final[metric])],
                                 lower=0)
 
     frames, history = [], []
     for gen, df in by_gen:
         title = f"FRED {args.family} LLM-GE: generation {gen} ({n_candidates(df)} valid candidates)"
-        frames.append(plot_front_3d(df, title, seed, limits,
-                                    os.path.join(args.output, f"pareto3d_gen_{gen}.png")))
+        frames.append(plot_fronts_2d(df, title, limits,
+                                     os.path.join(args.output, f"pareto2d_gen_{gen}.png")))
         history.append({"generation": gen, "mAP50": df["mAP50"].max(),
                         "mAP50_95": df["mAP50_95"].max()})
-    print(f"Saved {len(frames)} per-generation 3D plots to {args.output}")
+    print(f"Saved {len(frames)} per-generation plots to {args.output}")
 
     final_title = (f"FRED {args.family} LLM-GE: final Pareto front after generation {last_gen} "
                    f"({n_candidates(final)} valid candidates)")
-    print("Saved " + plot_front_3d(final, final_title, seed, limits,
-                                   os.path.join(args.output, "pareto3d_final.png"), dpi=300))
+    print("Saved " + plot_fronts_2d(final, final_title, limits,
+                                    os.path.join(args.output, "pareto2d_final.png"), dpi=300))
 
     if not args.no_gif and len(frames) > 1:
-        make_gif(frames, os.path.join(args.output, "pareto3d_fronts.gif"))
-        print("Saved pareto3d_fronts.gif")
-    print(f"Saved {plot_best_by_generation(pd.DataFrame(history), seed, args.output)}")
+        make_gif(frames, os.path.join(args.output, "pareto2d_fronts.gif"))
+        print("Saved pareto2d_fronts.gif")
+    print(f"Saved {plot_best_by_generation(pd.DataFrame(history), args.output)}")
 
     final = final.copy()
     final["pareto_front"] = pareto_mask(final)
@@ -251,9 +263,6 @@ def main():
     models.to_csv(os.path.join(args.output, "pareto_models.csv"), index=False)
 
     print(f"\nPareto front (mAP50, mAP50:95, params) after generation {last_gen}:")
-    if seed:
-        print(f"  seed: mAP50 {seed['mAP50']:.1%}, mAP50:95 {seed['mAP50_95']:.1%}, "
-              f"params {int(seed['params']):,}")
     for _, row in models.iterrows():
         print(f"  {row['gene_id']}: mAP50 {row['mAP50']:.1%}, mAP50:95 {row['mAP50_95']:.1%}, "
               f"params {row['params']:,}")
