@@ -35,7 +35,7 @@ python-bash-script
 #SBATCH -t 4:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -G 1
-#SBATCH --mem 16G
+#SBATCH --mem 32G
 #SBATCH -c 12
 #SBATCH -N 1
 #SBATCH --output=run_job_outputs/evaluation/slurm-%j.out

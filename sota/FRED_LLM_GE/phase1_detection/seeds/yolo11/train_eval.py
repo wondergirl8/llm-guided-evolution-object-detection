@@ -70,7 +70,7 @@ BENCHMARK_SPLIT = "challenging"
 OFFICIAL_SPLIT = "challenging_train"
 
 # Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
-FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
+FAILED_RESULT = DetectionResult(float('-inf'), float('-inf'), float('inf'))
 
 
 def sha256_file(path):
@@ -88,7 +88,7 @@ def code_revision():
 def write_failure_results(gene_id, start_time, message):
     """Record worst-case fitness for generated models that cannot be evaluated."""
     train_time = time.time() - start_time
-    write_results(SCRIPT_DIR, gene_id, FAILED_RESULT)
+    write_results(SCRIPT_DIR, gene_id, FAILED_RESULT, reason=message)
     print(f"ERROR evaluating generated model: {message}")
     print(f"Wrote worst-case fitness after {train_time:.1f}s")
     print('='*120);print('job done');print('='*120)
@@ -254,7 +254,9 @@ def main(gene_id, model_name, variant_dir, train_sequences, val_sequences,
           f"params: {param_count}, device: {device}", flush=True)
 
     try:
-        stride = model_stride(model, train_data["images"].to(device).float() / 255)
+        # One frame is enough to measure the output grid; moving the whole
+        # training set to the GPU as float32 took ~60 GB at 1280 width.
+        stride = model_stride(model, train_data["images"][:1].to(device).float() / 255)
         model.output_stride = stride  # keep predict's decoding consistent with training
         train(model, train_data, epochs, batch_size, lr, device, stride)
 
@@ -304,7 +306,7 @@ if __name__ == "__main__":
     parser.add_argument("--frame_step", type=int,
                         default=int(os.getenv("FRED_FRAME_STEP", FRAME_STEP)),
                         help="Use every Nth event frame of each sequence")
-    parser.add_argument("--img_width", type=int, default=int(os.getenv("FRED_IMG_WIDTH", "640")),
+    parser.add_argument("--img_width", type=int, default=int(os.getenv("FRED_IMG_WIDTH", "1280")),
                         help="Resize frames to this width (height keeps the aspect ratio)")
     parser.add_argument("--batch_size", type=int, default=int(os.getenv("FRED_BATCH", "16")))
     parser.add_argument("--lr", type=float, default=float(os.getenv("FRED_LR", "1e-3")))
