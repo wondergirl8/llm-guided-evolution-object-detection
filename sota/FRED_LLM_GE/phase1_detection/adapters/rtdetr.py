@@ -102,6 +102,17 @@ def _targets_from_pixels(image_boxes, width, height, img_width, device):
             "labels": torch.zeros(len(boxes), dtype=torch.long, device=device)}
 
 
+def _to_float(value):
+    """fp16 autocast outputs -> float32, so the matcher and losses run at full precision."""
+    if isinstance(value, torch.Tensor):
+        return value.float() if value.is_floating_point() else value
+    if isinstance(value, dict):
+        return {key: _to_float(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_to_float(item) for item in value)
+    return value
+
+
 def _nms(boxes, scores, threshold):
     """Greedy single-class NMS for the runner's provisional proxy protocol."""
     order = scores.argsort(descending=True)
@@ -174,6 +185,14 @@ class RTDETRAdapter(FamilyAdapter):
         )
         generator = torch.Generator().manual_seed(proxy["seed"])
         workers = self.settings.get("workers", 0)
+        # Optional fp16 mixed precision for the forward/backward pass (as in the
+        # official RT-DETR --amp option); the loss is computed in float32 and
+        # inference stays float32. bf16 would round 1280-px box coordinates to
+        # ~5 px. Frames have one fixed size, so cuDNN can pick its fastest kernels.
+        amp = bool(self.settings.get("amp", False)) and torch.device(device).type == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=amp)
+        if amp:
+            torch.backends.cudnn.benchmark = True
         for epoch in range(epochs):
             model.train()
             order = torch.randperm(len(images), generator=generator)
@@ -193,16 +212,23 @@ class RTDETRAdapter(FamilyAdapter):
                     event = _prepare(group_images[offset:offset + microbatch], img_width, device)
                     targets = [_targets_from_pixels(boxes[int(i)], width, height, img_width, device)
                                for i in selected]
-                    losses = self.criterion(model(event, targets), targets)
+                    with torch.autocast("cuda", dtype=torch.float16, enabled=amp):
+                        outputs = model(event, targets)
+                    losses = self.criterion(_to_float(outputs), targets)
                     weight = len(selected) / len(group)
-                    (losses["loss_total"] * weight).backward()
+                    scaler.scale(losses["loss_total"] * weight).backward()
                     # Kept on the GPU so each microbatch does not wait for a sync.
                     batch_loss = batch_loss + losses["loss_total"].detach() * weight
+                scaler.unscale_(optimizer)
+                # With fp16 an overflowing step is expected now and then: the
+                # scaler skips it and lowers its scale. Without amp, any
+                # non-finite gradient is still an error.
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), self.settings.get("grad_clip", 0.1),
-                    error_if_nonfinite=True,
+                    error_if_nonfinite=not amp,
                 )
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 total += batch_loss * len(group)
             print(f"epoch {epoch + 1}/{epochs}: RT-DETR loss {float(total) / len(images):.4f}", flush=True)
 
