@@ -34,8 +34,12 @@ contrastive denoising, Hungarian matcher, VFL/L1/GIoU criterion, and predict con
    frame width or height, and do not change the three-channel Event input.
 6. Keep attention memory bounded: avoid full self-attention over the stride-8
    or stride-16 token maps, and keep a bounded query count.
-7. Favor localization of tiny drones while keeping parameter and activation use
-   reasonable. Do not edit the matcher, loss, class mapping, confidence policy,
+7. Only the interface in rule 3 is fixed. Inside the class you may change channel
+   widths (including the out_channels values), block and layer counts, kernel
+   sizes, attention heads, sampling points, feed-forward sizes, and how features
+   are connected or fused. The class may become smaller or larger. Renaming,
+   reformatting, editing docstrings or comments, or regrouping the same layers is
+   not a change. Do not edit the matcher, loss, class mapping, confidence policy,
    NMS, or data loading through a mutable architecture class.
 8. ConvNormLayer(ch_in, ch_out, kernel_size, stride, padding=None, bias=False,
    act=None) is Conv2d + BatchNorm2d + optional activation; act is one of

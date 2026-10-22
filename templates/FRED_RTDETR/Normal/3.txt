@@ -1,5 +1,6 @@
-Improve this class's efficiency without losing the high-resolution detail needed
-for FRED's small drones. Keep its constructor, forward output, and multiple-of-32 input behavior.
+Make this class substantially lighter: aim for clearly fewer parameters (for
+example narrower channels, fewer blocks, or fewer stacked layers) while keeping
+as much tiny-drone accuracy as possible. Keep the protected RT-DETR output contract.
 
 Current class:
 ```python

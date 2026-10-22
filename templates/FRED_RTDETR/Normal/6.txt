@@ -1,0 +1,9 @@
+Remove or simplify the parts of this class that contribute least to finding
+tiny drones, and spend at most part of the saved budget where it helps most.
+The result should be smaller than the current class. Keep the protected RT-DETR
+output contract.
+
+Current class:
+```python
+{}
+```

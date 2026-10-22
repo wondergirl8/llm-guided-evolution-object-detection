@@ -1,0 +1,16 @@
+Two versions of the same RT-DETR architecture class for tiny drones in FRED Event frames:
+
+Version 1
+```python
+{}
+```
+
+Version 2
+```python
+{}
+```
+
+Combine the strongest ideas from both versions into one class that localizes tiny
+drones more accurately. Keep the class name, constructor signature, forward
+signature, and output contract. Return the complete combined class in one python
+code block and write nothing after that block.
