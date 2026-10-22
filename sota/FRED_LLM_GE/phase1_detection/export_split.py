@@ -193,13 +193,19 @@ def main():
     parser.add_argument("--finalize", action="store_true")
     parser.add_argument("--sweep", action="store_true",
                         help="export every challenging.event_sweep setting instead of events")
+    parser.add_argument("--events", default=None,
+                        help='Event frames, e.g. "raw_w10000_palette" (default: protocol\'s '
+                             "challenging.events)")
     args = parser.parse_args()
     if not 0 <= args.shard < args.num_shards:
         parser.error("need 0 <= shard < num_shards")
 
     challenging = yaml.safe_load(Path(args.protocol).read_text())["challenging"]
     data_root = FRED_DIR / challenging["data_root"]
-    settings = challenging["event_sweep"] if args.sweep else [challenging.get("events")]
+    if args.sweep and args.events:
+        parser.error("--sweep exports the sweep's own settings; drop --events")
+    events = events_from_tag(args.events) if args.events else challenging.get("events")
+    settings = challenging["event_sweep"] if args.sweep else [events]
     parts = [(events, *part) for events in settings
              for part in dataset_parts(dict(challenging, events=events), data_root, args.set)]
     if args.finalize:
