@@ -167,7 +167,7 @@ PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 # run_improved.py checkpoints generation 0 (seed and initial candidates), then
 # runs generations 1 through num_generations - 1. Resubmitting resumes from the latest
 # checkpoint in the configured run directory.
-num_generations = int(os.getenv('FRED_NUM_GENERATIONS', '11'))
+num_generations = int(os.getenv('FRED_NUM_GENERATIONS', '21'))
 if num_generations < 1:
     raise ValueError('FRED_NUM_GENERATIONS must include generation 0')
 EVAL_GPU_CONSTRAINT = os.getenv('FRED_EVAL_GPU_CONSTRAINT', 'H200')
