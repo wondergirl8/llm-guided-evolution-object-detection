@@ -124,3 +124,34 @@ families:
     # Train and score candidates on the challenging search split above.
     data: challenging_search
     workers: 8
+    # Fixed SGD recipe: values match Ultralytics 8.4.175 defaults except that
+    # optimizer was "auto" and is now deliberately fixed to SGD.
+    # The seed baseline and every evolved candidate use this same recipe.
+    training:
+      optimizer: SGD
+      lr0: 0.01
+      momentum: 0.937
+      weight_decay: 0.0005
+      lrf: 0.01
+      cos_lr: false
+      warmup_epochs: 3.0
+      warmup_momentum: 0.8
+      warmup_bias_lr: 0.1
+      nbs: 64
+      amp: true
+      augmentation:
+        hsv_h: 0.015
+        hsv_s: 0.7
+        hsv_v: 0.4
+        degrees: 0.0
+        translate: 0.1
+        scale: 0.5
+        shear: 0.0
+        perspective: 0.0
+        flipud: 0.0
+        fliplr: 0.5
+        bgr: 0.0
+        mosaic: 1.0
+        mixup: 0.0
+        cutmix: 0.0
+        close_mosaic: 10

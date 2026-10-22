@@ -16,9 +16,11 @@ from utils.print_utils import *
 
 from typing import Optional
 import requests
+from local_llm_request import post_with_retry
 import huggingface_hub
 from huggingface_hub import InferenceClient
 import textwrap
+from functools import lru_cache
 from transformers import AutoTokenizer
 from google import genai
 from google.genai import types
@@ -84,8 +86,11 @@ def get_llm_code_generator(llm_model):
         qc_func = llm_code_qc_hf
     return llm_code_generator, qc_func
 
-def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, llm_model, temperature):
-    """Generates augmented code using Mixtral."""
+def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, llm_model, temperature,
+                            return_raw=False):
+    """Generate an operator response with the configured LLM client."""
+    if return_raw and apply_quality_control:
+        raise ValueError("raw operator responses require quality control to be disabled")
     print("LLM being used: ", llm_model)
     box_print("PROMPT TO LLM", print_bbox_len=60, new_line_end=False)
     print(txt2llm, flush=True)
@@ -120,6 +125,11 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
         box_print("TEXT FROM LLM", print_bbox_len=60, new_line_end=False)
         
         print(code_from_llm)
+
+    # Architecture policies need every complete proposal, not just the first
+    # fenced block selected by the legacy extractor below.
+    if return_raw:
+        return code_from_llm
 
     box_print("CODE FROM LLM", print_bbox_len=60, new_line_end=False)
     code_from_llm = clean_code_from_llm(code_from_llm)
@@ -534,11 +544,36 @@ def get_llm_server_hostname():
         hostname = f.readline().strip() 
     return hostname
 
+@lru_cache(maxsize=1)
+def _local_chat_tokenizer(model_path):
+    return AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+
+
+def _format_local_prompt(prompt):
+    """Format YOLO11 requests for the served instruct model, not the client label."""
+    if globals().get('CANDIDATE_POLICY_MODULE') != (
+            'sota.FRED_LLM_GE.phase1_detection.yolo11_search_space'):
+        return prompt
+    tokenizer = _local_chat_tokenizer(MODEL_PATH)
+    formatted = tokenizer.apply_chat_template(
+        [{'role': 'user', 'content': prompt}], tokenize=False,
+        add_generation_prompt=True)
+    # The server passes strings to TextGenerationPipeline, which adds this BOS
+    # token itself. Omit the one in the rendered template to avoid two BOS tokens.
+    bos = tokenizer.bos_token
+    if not bos or not formatted.startswith(bos):
+        raise ValueError('YOLO11 chat template must start with the tokenizer BOS token')
+    return formatted[len(bos):]
+
+
 def submit_mixtral_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
     if server_url is None:
-        server_url = f"http://{os.getenv('SERVER_HOSTNAME', 'localhost')}:{PORT}/generate"
+        server_url = f"http://{get_llm_server_hostname()}:{PORT}/generate"
+    formatted_prompt = _format_local_prompt(prompt)
+    if formatted_prompt != prompt:
+        print('FORMATTED PROMPT TO LOCAL LLM:\n' + formatted_prompt, flush=True)
     payload = {
-        "prompt": prompt,
+        "prompt": formatted_prompt,
         "max_new_tokens": max_new_tokens, # can change to random between 800 - 1000 if needed
         "temperature": temperature,
         "top_p": top_p
@@ -546,14 +581,8 @@ def submit_mixtral_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature=
 
     headers = {"Content-Type": "application/json"}
 
-    llm_hostname = get_llm_server_hostname()
-    
-    print(llm_hostname)
-
-    server_url = f"http://{llm_hostname}:{PORT}/generate"
-    
     try:
-        response = requests.post(server_url, headers=headers, json=payload)
+        response = post_with_retry(server_url, headers=headers, payload=payload)
         
         if response.status_code == 200:
             output_txt = response.json().get("generated_text", "No output received.")
@@ -584,7 +613,7 @@ def submit_deepseek_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature
     headers = {"Content-Type": "application/json"}
     
     try:
-        response = requests.post(server_url, headers=headers, json=payload)
+        response = post_with_retry(server_url, headers=headers, payload=payload)
         
         if response.status_code == 200:
             output_txt = response.json().get("generated_text", "No output received.")
