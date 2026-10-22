@@ -127,10 +127,14 @@ families:
     # Accumulate gradients to retain proxy.batch_size on one GPU. 8 fits in
     # ~26 GB at 1280 and was 2.2x faster than 2 in the R50 smoke test.
     microbatch_size: 8
+    # fp16 mixed precision for training (loss and scoring stay float32).
+    amp: true
     workers: 8
     model:
       # Seed backbone: ResNet-vd depth 18, 34, 50 or 101 (official presets).
-      depth: 50
+      # The first search run used 50; 18 has half the parameters and leaves
+      # room for mutations to shrink as well as grow the model.
+      depth: 18
       num_queries: 300
       num_denoising: 100
   tiny_yolo11:
