@@ -12,7 +12,10 @@ import yaml
 
 import run_improved as controller
 from src.fred_runtime import assert_llm_job_active, gpu_memory_budget
-from src.fred_yolo26_proposals import generate_validated_section
+from src.fred_yolo26_proposals import (
+    INITIAL_COVERAGE_TARGETS, generate_validated_section, initial_target_for_slot,
+    verify_initial_coverage,
+)
 
 FRED = Path(__file__).resolve().parents[2]
 SEED = FRED / 'seeds/seed_yolo26n_p2.yaml'
@@ -47,11 +50,8 @@ def test_generated_slurm_templates_keep_allocated_devices(tmp_path, family):
 def test_invalid_channels_then_valid_reply_gets_feedback_and_keeps_parent(tmp_path):
     original = SEED.read_text()
     parts = original.split('# --OPTION--')
-    section = yaml.safe_load(parts[1])
-    section['backbone'][0][3][0] = 96  # Actual rejected proposal from ICE.
-    bad = yaml.safe_dump(section, sort_keys=False)
-    section['backbone'][0][3][0] = 128
-    good = yaml.safe_dump(section, sort_keys=False)
+    bad = yaml.safe_dump({'layer': 0, 'field': 'channels', 'value': 96})
+    good = yaml.safe_dump({'layer': 0, 'field': 'channels', 'value': 128})
     prompts, replies = [], iter([bad, good])
     def generate(prompt):
         prompts.append(prompt)
@@ -59,7 +59,7 @@ def test_invalid_channels_then_valid_reply_gets_feedback_and_keeps_parent(tmp_pa
     output = tmp_path / 'candidate.py'
     generate_validated_section(SEED, output, parts, 1, 'Mutate one layer.', generate, FRED)
     assert SEED.read_text() == original
-    assert 'allowed channel arguments [64, 128]' in prompts[0]
+    assert 'layer 0 Conv: channels [64, 128]' in prompts[0]
     assert 'channels are out of bounds' in prompts[1]
     audit = json.loads(output.with_suffix('.py.proposal_attempts.json').read_text())
     assert [attempt['accepted'] for attempt in audit['attempts']] == [False, True]
@@ -69,23 +69,148 @@ def test_invalid_channels_then_valid_reply_gets_feedback_and_keeps_parent(tmp_pa
 
 def test_invalid_proposals_are_not_silently_rounded_or_parent_fallback(tmp_path):
     parts = SEED.read_text().split('# --OPTION--')
-    section = yaml.safe_load(parts[2])
-    section['head'][8][3][0] = 96
     output = tmp_path / 'bad.py'
     with pytest.raises(RuntimeError, match='No valid YOLO26 proposal after 2 attempts'):
         generate_validated_section(SEED, output, parts, 2, 'Mutate.',
-            lambda _: yaml.safe_dump(section), FRED, attempts=2)
+            lambda _: yaml.safe_dump({'layer': 19, 'field': 'channels', 'value': 96}),
+            FRED, attempts=2)
     assert not output.exists()
 
 
-def test_multiple_layer_changes_are_rejected(tmp_path):
+def test_full_section_reply_is_rejected(tmp_path):
     parts = SEED.read_text().split('# --OPTION--')
     section = yaml.safe_load(parts[1])
     section['backbone'][0][3][0] = 128
-    section['backbone'][8][1] = 1
     with pytest.raises(RuntimeError, match='No valid YOLO26 proposal'):
         generate_validated_section(SEED, tmp_path / 'bad.py', parts, 1, 'Mutate.',
             lambda _: yaml.safe_dump(section), FRED, attempts=1)
+
+
+def test_duplicate_edit_is_retried_before_model_preflight(tmp_path, monkeypatch):
+    from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo26_p2 import (
+        UltralyticsYolo26P2Adapter,
+    )
+    parts = SEED.read_text().split('# --OPTION--')
+    first = yaml.safe_dump({'layer': 19, 'field': 'channels', 'value': 64})
+    second = yaml.safe_dump({'layer': 16, 'field': 'channels', 'value': 128})
+    preflight = UltralyticsYolo26P2Adapter.preflight
+    calls = []
+    def counted(self, candidate, parent):
+        calls.append(candidate)
+        return preflight(self, candidate, parent)
+    monkeypatch.setattr(UltralyticsYolo26P2Adapter, 'preflight', counted)
+    generate_validated_section(SEED, tmp_path / 'network_first.py', parts, 2,
+                               'Mutate.', lambda _: first, FRED)
+    replies = iter((first, second))
+    output = tmp_path / 'network_second.py'
+    generate_validated_section(SEED, output, parts, 2, 'Mutate.',
+                               lambda _: next(replies), FRED)
+    audit = json.loads(output.with_suffix('.py.proposal_attempts.json').read_text())
+    assert len(calls) == 2  # Duplicate does not construct the model again.
+    assert [row['accepted'] for row in audit['attempts']] == [False, True]
+    assert 'duplicates network_first.py' in audit['attempts'][0]['error']
+    assert yaml.safe_load(output.read_text())['head'][5][3][0] == 128
+
+
+def test_compact_edit_supports_reductions_and_rejects_unchanged(tmp_path):
+    parts = SEED.read_text().split('# --OPTION--')
+    unchanged = yaml.safe_dump({'layer': 19, 'field': 'channels', 'value': 128})
+    reduction = yaml.safe_dump({'layer': 19, 'field': 'channels', 'value': 64})
+    replies = iter((unchanged, reduction))
+    output = tmp_path / 'network_reduced.py'
+    generate_validated_section(SEED, output, parts, 2, 'Mutate.',
+                               lambda _: next(replies), FRED)
+    assert yaml.safe_load(output.read_text())['head'][8][3][0] == 64
+    audit = json.loads(output.with_suffix('.py.proposal_attempts.json').read_text())
+    assert 'unchanged' in audit['attempts'][0]['error']
+
+
+def test_initial_yolo26_panel_covers_four_distinct_reductions(tmp_path, monkeypatch):
+    parts = SEED.read_text().split('# --OPTION--')
+    source = yaml.safe_load(SEED.read_text())
+    entries = []
+    for slot in range(4):
+        target = initial_target_for_slot(slot)
+        layer = INITIAL_COVERAGE_TARGETS[target]
+        original = source['head'][layer - 11][3][0]
+        output = tmp_path / f'network_{target}.py'
+        prompts = []
+        generate_validated_section(
+            SEED, output, parts, 2, 'Mutate.',
+            lambda prompt: (prompts.append(prompt) or yaml.safe_dump(
+                {'layer': layer, 'field': 'channels', 'value': original // 2})),
+            FRED, coverage_target=target)
+        assert f'Required initial coverage target: {target}' in prompts[0]
+        entries.append((target, output))
+    report = verify_initial_coverage(entries)
+    assert report['coverage_version'] == controller.YOLO26_COVERAGE_VERSION
+    assert {item['target'] for item in report['candidates']} == set(INITIAL_COVERAGE_TARGETS)
+    assert all(item['parameter_delta'] < 0 for item in report['candidates'])
+    with pytest.raises(ValueError, match='incomplete initial YOLO26 coverage'):
+        verify_initial_coverage(entries[:-1])
+    output_dir = tmp_path / 'controller_output'
+    output_dir.mkdir()
+    monkeypatch.setattr(controller, 'SEED_FAMILY', 'yolo26_p2')
+    monkeypatch.setattr(controller, 'VARIANT_DIR', str(tmp_path))
+    monkeypatch.setattr(controller, 'OUTPUT_DIR', str(output_dir))
+    monkeypatch.setattr(controller, 'GLOBAL_DATA', {
+        target: {'coverage_target': target} for target, _ in entries})
+    controller.verify_yolo26_initial_population([[target] for target, _ in entries])
+    saved = json.loads((output_dir / 'initial_yolo26_coverage.json').read_text())
+    assert saved == report
+
+
+def test_initial_yolo26_target_retries_wrong_layer_and_direction(tmp_path):
+    parts = SEED.read_text().split('# --OPTION--')
+    replies = iter((
+        yaml.safe_dump({'layer': 22, 'field': 'channels', 'value': 128}),
+        yaml.safe_dump({'layer': 19, 'field': 'channels', 'value': 192}),
+        yaml.safe_dump({'layer': 19, 'field': 'channels', 'value': 64}),
+    ))
+    output = tmp_path / 'network_reduced.py'
+    generate_validated_section(SEED, output, parts, 2, 'Mutate.',
+                               lambda _: next(replies), FRED, coverage_target='p2_down')
+    audit = json.loads(output.with_suffix('.py.proposal_attempts.json').read_text())
+    assert [row['accepted'] for row in audit['attempts']] == [False, False, True]
+    assert audit['attempts'][-1]['parameter_delta'] < 0
+
+
+def test_initial_yolo26_targets_pass_through_controller_to_worker(tmp_path, monkeypatch):
+    monkeypatch.setattr(controller, 'SEED_FAMILY', 'yolo26_p2')
+    requested = []
+    monkeypatch.setattr(controller.toolbox, 'individual',
+                        lambda **kwargs: requested.append(kwargs.get('coverage_target')) or
+                        [kwargs.get('coverage_target')])
+    assert len(controller.create_population(4, 'test-llm', coverage_panel=True)) == 4
+    assert requested == list(INITIAL_COVERAGE_TARGETS)
+    requested.clear()
+    controller.create_population(1, 'test-llm')
+    assert requested == [None]
+    monkeypatch.setattr(controller, 'GEN_COUNT', -1)
+    monkeypatch.setattr(controller, 'OUTPUT_DIR', str(tmp_path / 'jobs'))
+    monkeypatch.setattr(controller, 'generate_template', lambda *args: ('Prompt {}', 'normal'))
+    monkeypatch.setattr(controller, 'load_yaml', lambda: {
+        'llm_bash_script': '{}', 'gpu_selection': ''})
+    script = controller.write_bash_script(
+        llm_model='test-llm', job_name='test', input_filename_x=str(SEED),
+        output_filename=str(tmp_path / 'models/network_test.py'),
+        coverage_target='p3_down')
+    assert '--coverage_target p3_down' in script
+
+
+def test_depth_scaled_repeat_alias_does_not_create_another_candidate(tmp_path):
+    parts = SEED.read_text().split('# --OPTION--')
+    first = yaml.safe_dump({'layer': 19, 'field': 'repeats', 'value': 3})
+    alias = yaml.safe_dump({'layer': 19, 'field': 'repeats', 'value': 4})
+    generate_validated_section(SEED, tmp_path / 'network_first.py', parts, 2,
+                               'Mutate.', lambda _: first, FRED)
+    output = tmp_path / 'network_alias.py'
+    with pytest.raises(RuntimeError, match='No valid YOLO26 proposal'):
+        generate_validated_section(SEED, output, parts, 2,
+                                   'Mutate.', lambda _: alias, FRED, attempts=1)
+    assert not output.exists()
+    audit = json.loads(output.with_suffix('.py.proposal_attempts.json').read_text())
+    assert 'duplicates network_first.py' in audit['attempts'][0]['error']
 
 
 class FakeCUDA:
@@ -141,11 +266,8 @@ def test_mutation_worker_routes_real_section_through_validation_retry(tmp_path, 
     from src import llm_mutation
     monkeypatch.setattr(llm_mutation, 'SEED_FAMILY', 'yolo26_p2')
     monkeypatch.setattr(llm_mutation.np.random, 'randint', lambda *a: 1)
-    section = yaml.safe_load(SEED.read_text().split('# --OPTION--')[1])
-    replies = []
-    for channel in (96, 128):
-        section['backbone'][0][3][0] = channel
-        replies.append(yaml.safe_dump(section))
+    replies = [yaml.safe_dump({'layer': 0, 'field': 'channels', 'value': channel})
+               for channel in (96, 128)]
     def generate(*args): return replies.pop(0)
     monkeypatch.setattr(llm_mutation, 'generate_augmented_code', generate)
     template = tmp_path / 'prompt.txt'
@@ -203,7 +325,8 @@ def test_crossover_worker_preserves_first_parent_one_layer_contract(tmp_path, mo
     parts[1] = yaml.safe_dump(section)
     other = tmp_path / 'other.py'
     other.write_text('# --OPTION--'.join(parts))
-    monkeypatch.setattr(llm_crossover, 'generate_augmented_code', lambda *a: parts[1])
+    monkeypatch.setattr(llm_crossover, 'generate_augmented_code',
+                        lambda *a: yaml.safe_dump({'layer': 0, 'field': 'channels', 'value': 128}))
     output = tmp_path / 'candidate.py'
     llm_crossover.augment_network(str(SEED), str(other), str(output))
     assert yaml.safe_load(output.read_text())['backbone'][0][3][0] == 128

@@ -113,6 +113,8 @@ def test_resume_rejects_cached_failure_before_parent_selection(tmp_path, monkeyp
     assert start_gen == 47
     assert saved["selection_version"] == controller.YOLO26_SELECTION_VERSION
     assert global_data["selection_version"] == controller.YOLO26_SELECTION_VERSION
+    assert saved["coverage_version"] == controller.YOLO26_COVERAGE_VERSION
+    assert global_data["coverage_version"] == controller.YOLO26_COVERAGE_VERSION
     monkeypatch.setattr(controller, "GLOBAL_DATA", global_data["GLOBAL_DATA"])
     population = saved["population"]
 
@@ -183,6 +185,23 @@ def test_yolo26_checkpoint_rejects_older_selection_versions(tmp_path, yolo26_sta
             1, folder_name=checkpoint_dir, global_path=global_dir,
             checkpoint_data={"population": [], "hof": controller.tools.ParetoFront()},
         )
+
+
+def test_yolo26_checkpoint_rejects_older_coverage_policy(tmp_path, yolo26_state):
+    checkpoint_dir = tmp_path / "checkpoints"
+    global_dir = tmp_path / "global"
+    controller.save_checkpoint(
+        1, folder_name=checkpoint_dir, global_path=global_dir,
+        checkpoint_data={"population": [], "hof": controller.tools.ParetoFront()},
+    )
+    checkpoint = checkpoint_dir / "checkpoint_gen_1.pkl"
+    with checkpoint.open("rb") as stream:
+        saved = pickle.load(stream)
+    saved["coverage_version"] = "older_coverage"
+    with checkpoint.open("wb") as stream:
+        pickle.dump(saved, stream)
+    with pytest.raises(ValueError, match="Start a fresh YOLO26 search"):
+        controller.load_checkpoint(folder_name=checkpoint_dir, global_path=global_dir)
 
 
 def test_other_family_checkpoint_keeps_previous_format(tmp_path, monkeypatch):

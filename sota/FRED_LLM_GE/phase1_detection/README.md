@@ -41,7 +41,8 @@ repository root (replace the checkpoint path with the handoff or cluster path):
 ```bash
 uv run python sota/FRED_LLM_GE/phase1_detection/rescore_yolo26.py \
   --checkpoint-dir sota/FRED_LLM_GE/phase1_detection/seeds/yolo26_p2/trained_models \
-  --output-dir sota/FRED_LLM_GE/phase1_detection/seeds/yolo26_p2/head_rescore
+  --output-dir sota/FRED_LLM_GE/phase1_detection/seeds/yolo26_p2/head_rescore \
+  --diagnostics
 ```
 
 The command reads each checkpoint's sibling `results/<gene_id>_evaluation.json`
@@ -51,7 +52,14 @@ one-to-many head also uses NMS IoU 0.5 and 0.7. `--gene-id seed` limits a run,
 and `--checkpoint-dir`, `--reference-results-dir`, and `--data-root` can point
 to a restored handoff. Output goes only to the separate `--output-dir`, with
 one validation report per setting; rerunning skips matching completed reports.
-`head_rescore_summary.csv` collects the comparisons after all settings finish.
+`head_rescore_summary.csv` collects the comparisons after all settings finish,
+including AP75, small-object AP/recall, the AP50-to-AP75 gap, missed targets,
+and localization counts when diagnostics are enabled. Its deltas compare each
+setting against the re-scored one-to-many `eval_conf`/`nms_iou` baseline when
+that setting is included in the sweep. `head_rescore_sequences.csv` lists the
+per-sequence diagnostic results. A baseline rescore that differs from the
+historical AP is a reproducibility warning; do not interpret policy deltas until
+the export and runtime difference is resolved.
 The NMS-free head is a separate inference choice and may score lower.
 
 Add `--diagnostics` to the re-scoring command or to `candidate_runner.py` to
@@ -69,9 +77,10 @@ their default writable paths are separate:
 | Family | Candidates, results, and trained checkpoints | Evolution state |
 | --- | --- | --- |
 | `yolo11` | `phase1_detection/seeds/ultralytics_yolo11/` | `fred_yolo11_output/`, `fred_yolo11_checkpoints/` |
-| `yolo26_p2` | `phase1_detection/seeds/yolo26_p2/` | `fred_yolo26_p2_map5095_v1_output/`, `fred_yolo26_p2_map5095_v1_checkpoints/` |
+| `yolo26_p2` | `phase1_detection/seeds/yolo26_p2_coverage_v1/` for the new LLM search | `fred_yolo26_p2_map5095_coverage_v1_output/`, `fred_yolo26_p2_map5095_coverage_v1_checkpoints/` |
 | `dfine` | `phase1_detection/seeds/dfine/` | `fred_dfine_output/`, `fred_dfine_checkpoints/` |
 
+Standalone YOLO26 seed runs still default to `phase1_detection/seeds/yolo26_p2/`.
 The older `tiny_yolo11` tutorial family also has its own paths. An explicit
 `--sota_root` overrides a family's result root and makes the default
 `--variant_dir` follow that root.
@@ -101,21 +110,38 @@ using fewer parameters only to break an exact accuracy tie. It still records
 mAP50 and keeps the multi-metric Pareto archive for tradeoff review. This
 selection policy is versioned as `map50_95_primary_params_tiebreak_v1` in both
 population and global checkpoints. The default YOLO26 output/checkpoint paths
-have a matching `map5095_v1` suffix; older checkpoints cannot be resumed under
-the new selection policy. This is a pilot search setting, not the formal
-`DG-P1-06` fitness-contract freeze.
+have a matching `map5095_coverage_v1` suffix; older checkpoints cannot be
+resumed under the new selection and coverage policies. This is a pilot search
+setting, not the formal `DG-P1-06` fitness-contract freeze.
+
+The first four candidates in a fresh YOLO26 LLM search now target narrower
+P2, P3, P4, and P5 output layers (head indices 19, 22, 25, and 28), one per
+candidate. Each proposal must reduce channels and the constructed model's
+parameter count. Its proposal audit records the layer, value, architecture
+hash, and before/after parameter counts. Before any evaluation job, the
+controller writes `initial_yolo26_coverage.json` and refuses an incomplete or
+duplicate panel. Subsequent mutation and crossover still use the broader
+bounded edit space. This deliberate panel responds to the archived run, in
+which all four evaluated variants widened only layer 0, layer 19, or both;
+it does not assert that narrower layers will improve AP.
 
 ## YOLO26 controlled ablations
 
 The separate [ablation plan](../configs/phase1/yolo26_ablations.yaml) compares
-the seed with a longer budget, optimizer, learning rate, and Event-image
-augmentation changes. It also halves P4 or P5 output width individually while
-leaving the seed's P2/P3 paths intact. The proposed compact-model tests would
+training duration, optimizer, learning rate, mosaic, and Event-image saturation.
+The archived `seed` run used `optimizer=auto`, which selected AdamW at `lr0=0.002`,
+momentum 0.9, and bias warmup LR 0.0 for one class. `seed_fixed_adamw` pins
+those resolved values as the training comparison anchor, so the longer run
+cannot silently switch optimizer. The optimizer comparison uses the same
+learning rate on both sides. The plan also halves P4 or P5 output width
+individually while leaving the seed's P2/P3 paths intact. The proposed
+compact-model tests would
 restore only the P2 or P3 detection-output layer relative to that compact model,
 but that candidate source is absent from this workspace. They are omitted
 from the runnable plan until its exact source is restored. Every listed
-comparison changes one factor, and each experiment should be repeated with
-seeds 0, 1, and 2 before drawing a training-variance conclusion.
+comparison changes one factor. Screen recipes on seed 0, then run the anchor
+and promising recipes on paired seeds 1 and 2 before drawing a training-variance
+conclusion.
 
 First validate every proposed architecture locally without FRED data:
 
@@ -128,16 +154,70 @@ run one experiment/seed at a time, for example:
 
 ```bash
 uv run python sota/FRED_LLM_GE/phase1_detection/yolo26_ablation.py \
-  --experiment seed_p4_half --seed 0 \
+  --experiment seed_fixed_adamw --seed 0 \
   --data-root sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/data_cache/challenging
 ```
 
 Each run has its own directory under `seeds/yolo26_p2/ablations/`, with a model
-YAML, checkpoint, diagnostic evaluation JSON, Ultralytics `args.yaml` (resolved
-trainer arguments), and `results.csv` (training curves). The report records the
-actual optimizer class and file hashes. Existing run directories
+YAML, checkpoint, diagnostic evaluation JSON, Ultralytics `args.yaml` (trainer
+arguments), and `results.csv` (training curves). The report records the actual
+optimizer, learning rate, momentum, bias warmup LR, initial model hash,
+completed epochs, training time, validation sample identity, and file hashes.
+Existing run directories
 are refused to prevent accidental overwrites. This is a pilot search-validation
 study, separate from the LLM-GE candidate rankings and the held-out test.
+
+After the anchor and a selected arm have all three paired seeds, compare them:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/compare_yolo26_ablations.py \
+  --experiment seed_no_mosaic \
+  --output sota/FRED_LLM_GE/phase1_detection/seeds/yolo26_p2/ablations/no_mosaic_comparison.json
+```
+
+Omit `--experiment` only after every training arm has all three seeds. The
+comparison rejects missing repeats, changed data/model/evaluator/runtime,
+incomplete training, and different initial weights for paired seeds. Its gain
+screen is exploratory; training results do not change the LLM-GE ranking or
+authorize held-out evaluation.
+
+## YOLO26 search-export data-path audit
+
+The four archived YOLO26 evaluation logs each warn about slow sampled image
+access. Train-image reads were reported at 4.4–5.8 MB/s and the same three
+training frames (`119_001151`, `119_001751`, `119_002301`) appear in the
+duplicate-label messages in every run. These messages come from the shared
+`labels.cache`, so they are not four independent scans or twelve distinct
+data errors. Ultralytics reported 10,053
+training images, 1,826 backgrounds, and zero corrupt images in its cache scan.
+Its speed warning samples only five files, so the logs do not establish a
+training bottleneck or an accuracy effect. The original export is absent from
+the handoff, so the duplicate source and actual I/O rate cannot be verified
+locally.
+
+On the machine holding the **original** search export, run the read-only audit
+before the ablations, and save a second report after them:
+
+```bash
+uv run python sota/FRED_LLM_GE/phase1_detection/audit_yolo26_data_path.py \
+  --data-root PATH/TO/challenging \
+  --output PATH/OUTSIDE/EXPORT/yolo26_data_path_before.json
+```
+
+The audit compares every marker's pixel boxes to its YOLO label file, counts
+duplicate rows separately when pixel boxes are already equal and when distinct
+pixel boxes round to the same six-decimal label, checks image presence,
+`train.txt` and `data.yaml` paths, and verifies the `trainer_val` copies. It
+also records a deterministic bounded stat/read sample for each split; those
+timings are host- and cache-dependent and are not detector latency. A
+marker/label/path mismatch exits nonzero; duplicate rows are reported for
+review without modifying labels. The ablation runner performs this check before
+every training run, saves `data_path_audit.json` in that run directory, and
+records marker and label hashes so paired comparisons reject changed exports.
+Compare the before/after marker and label hashes to detect export changes
+during trials. The markers hold post-clipping
+boxes, so original FRED sequence ZIPs would still be needed to establish
+whether a marker duplicate originated in source annotations or clipping.
 
 Once candidate selection is frozen, prepare the final export and run one
 held-out evaluation with the same family selector. The default remains YOLO11.

@@ -38,16 +38,21 @@ if not AVAILABLE_LLM_MODELS and globals().get("LLM_MODEL"):
 
 LLM_SERVER_READY = False
 YOLO26_SELECTION_VERSION = 'map50_95_primary_params_tiebreak_v1'
+YOLO26_COVERAGE_VERSION = 'initial_p2_p5_reductions_v1'
 VALIDATED_FITNESS_FAMILIES = ('yolo26_p2', 'dfine')
 DFINE_MAX_INFRA_RETRIES = 1
 
 
 def require_yolo26_selection_version(data, path):
-    if (SEED_FAMILY == 'yolo26_p2' and
-            data.get('selection_version') != YOLO26_SELECTION_VERSION):
+    if SEED_FAMILY != 'yolo26_p2':
+        return
+    if (data.get('selection_version') != YOLO26_SELECTION_VERSION or
+            data.get('coverage_version') != YOLO26_COVERAGE_VERSION):
         raise ValueError(
-            f'{path} has selection version {data.get("selection_version")!r}; '
-            f'expected {YOLO26_SELECTION_VERSION!r}. Start a fresh YOLO26 search '
+            f'{path} has selection/coverage versions '
+            f'{data.get("selection_version")!r}/{data.get("coverage_version")!r}; '
+            f'expected {YOLO26_SELECTION_VERSION!r}/{YOLO26_COVERAGE_VERSION!r}. '
+            'Start a fresh YOLO26 search '
             'with separate checkpoint paths.'
         )
 
@@ -227,6 +232,7 @@ def write_bash_script(llm_model,
                       python_file='src/llm_mutation.py', 
                       top_p=0.1, temperature=0.2,
                       gpu=None,
+                      coverage_target=None,
                      ):
     
     print("WRITING write_bash_script, llm_model: ", llm_model)
@@ -254,6 +260,11 @@ def write_bash_script(llm_model,
             file.write(template_txt)
         temp_text = f'{python_file} {input_filename_x} {output_filename} {file_path} --top_p {top_p} --temperature {temperature}'
         python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
+        if coverage_target is not None:
+            from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS
+            if SEED_FAMILY != 'yolo26_p2' or coverage_target not in INITIAL_COVERAGE_TARGETS:
+                raise ValueError(f'Unsupported initial coverage target: {coverage_target}')
+            python_runline += f' --coverage_target {coverage_target}'
     elif python_file=='src/llm_crossover.py':
         gene_id_parent2 = fetch_gene(input_filename_y)
         GLOBAL_DATA_ANCESTRY = update_ancestry(gene_id_child, gene_id_parent, GLOBAL_DATA_ANCESTRY, 
@@ -465,7 +476,8 @@ def generate_random_string(length=20):
     random_string = 'xXx'+random_string
     return random_string
     
-def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
+def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4,
+                      coverage_target=None):
     box_print("Create Individual", print_bbox_len=60, new_line_end=False)
     out_dir = os.path.join(OUTPUT_DIR, str(GENERATION))
     config = load_yaml()
@@ -481,10 +493,12 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
                                             python_file='src/llm_mutation.py',
                                             llm_model=llm_model,
                                             job_name="create_individual",
+                                            coverage_target=coverage_target,
                                             top_p=0.1, temperature=temperature)
     GLOBAL_DATA[gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
                             'status':'subbed file', 'fitness':None, 'start_time':time.time(),
-                            'operator_type': 'creation', 'local_output': local_output}
+                            'operator_type': 'creation', 'local_output': local_output,
+                            'coverage_target': coverage_target}
     if SEED_FAMILY == 'dfine':
         GLOBAL_DATA[gene_id]['parent_sources'] = [SEED_NETWORK]
         if not successful_sub_flag:
@@ -1512,10 +1526,12 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
         state = {'GLOBAL_DATA': GLOBAL_DATA, 'GLOBAL_DATA_HIST': GLOBAL_DATA_HIST,
                  'GLOBAL_DATA_ANCESTRY': GLOBAL_DATA_ANCESTRY}
         if SEED_FAMILY == 'yolo26_p2':
-            if 'selection_version' in data:
+            if 'selection_version' in data or 'coverage_version' in data:
                 require_yolo26_selection_version(data, folder_name)
-            data = {**data, 'selection_version': YOLO26_SELECTION_VERSION}
+            data = {**data, 'selection_version': YOLO26_SELECTION_VERSION,
+                    'coverage_version': YOLO26_COVERAGE_VERSION}
             state['selection_version'] = YOLO26_SELECTION_VERSION
+            state['coverage_version'] = YOLO26_COVERAGE_VERSION
         if fingerprint is not None:
             data = dict(data, protocol_fingerprint=fingerprint)
             state['protocol_fingerprint'] = fingerprint
@@ -1567,6 +1583,7 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                 stored_global_data["EVAL_CACHE"] = EVAL_CACHE
         if SEED_FAMILY == 'yolo26_p2':
             stored_global_data['selection_version'] = YOLO26_SELECTION_VERSION
+            stored_global_data['coverage_version'] = YOLO26_COVERAGE_VERSION
         if fingerprint is not None:
             stored_global_data['protocol_fingerprint'] = fingerprint
 
@@ -1580,9 +1597,10 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
             "hof": hof, 
         }
     if SEED_FAMILY == 'yolo26_p2':
-        if 'selection_version' in checkpoint_data:
+        if 'selection_version' in checkpoint_data or 'coverage_version' in checkpoint_data:
             require_yolo26_selection_version(checkpoint_data, filename)
-        checkpoint_data = {**checkpoint_data, 'selection_version': YOLO26_SELECTION_VERSION}
+        checkpoint_data = {**checkpoint_data, 'selection_version': YOLO26_SELECTION_VERSION,
+                           'coverage_version': YOLO26_COVERAGE_VERSION}
     if fingerprint is not None:
         checkpoint_data = dict(checkpoint_data, protocol_fingerprint=fingerprint)
     with open(filename, 'wb') as file:
@@ -1707,7 +1725,12 @@ def select_parents(pop, k):
         return select_yolo26_by_accuracy(pop, k)
     return true_nsga2(pop, k)
 
-def create_population(n, llm_model):
+def create_population(n, llm_model, coverage_panel=False):
+    if SEED_FAMILY == 'yolo26_p2' and coverage_panel:
+        from src.fred_yolo26_proposals import initial_target_for_slot
+        return [toolbox.individual(llm_model=llm_model,
+                                   coverage_target=initial_target_for_slot(slot))
+                for slot in range(n)]
     individual_func = partial(toolbox.individual, llm_model=llm_model)
     return tools.initRepeat(list, individual_func, n)
 
@@ -1804,6 +1827,21 @@ def add_stock_seed_to_initial_population(population):
                             "start_time": time.time(), "origin": "stock_seed"}
     GLOBAL_DATA_ANCESTRY[gene_id] = {"GENES": [gene_id], "MUTATE_TYPE": ["STOCK_SEED"]}
     return [creator.Individual([gene_id]), *population]
+
+
+def verify_yolo26_initial_population(population):
+    """Record complete, distinct P2–P5 coverage before any training jobs."""
+    if SEED_FAMILY != 'yolo26_p2':
+        return
+    from src.fred_yolo26_proposals import verify_initial_coverage
+    entries = [(GLOBAL_DATA[ind[0]]['coverage_target'],
+                os.path.join(VARIANT_DIR, f'{MODEL}_{ind[0]}.py')) for ind in population]
+    report = verify_initial_coverage(entries)
+    report_path = os.path.join(OUTPUT_DIR, 'initial_yolo26_coverage.json')
+    with open(report_path, 'x') as handle:
+        json.dump(report, handle, indent=2)
+        handle.write('\n')
+    print(f'Initial YOLO26 coverage verified: {report_path}', flush=True)
 
 # Define the problem
 creator.create("FitnessMulti", base.Fitness, weights=FITNESS_WEIGHTS)  # Adjust weights as needed
@@ -1903,9 +1941,16 @@ if __name__ == "__main__":
         initial_mutations = start_population_size - int("SEED_FAMILY" in globals())
         if initial_mutations < 0:
             raise ValueError("start_population_size must include a slot for the stock seed")
-        population = toolbox.population(n=initial_mutations, llm_model=llm_model)
+        if SEED_FAMILY == 'yolo26_p2' and initial_mutations < 4:
+            raise ValueError("YOLO26 initial population needs four coverage candidates and a stock seed")
+        if SEED_FAMILY == 'yolo26_p2':
+            population = toolbox.population(n=initial_mutations, llm_model=llm_model,
+                                            coverage_panel=True)
+        else:
+            population = toolbox.population(n=initial_mutations, llm_model=llm_model)
         box_print("Batch Checking Created Genes", print_bbox_len=60, new_line_end=False)
         delayed_creation_check(population)
+        verify_yolo26_initial_population(population)
         population = add_stock_seed_to_initial_population(population)
         hof = tools.ParetoFront()
 

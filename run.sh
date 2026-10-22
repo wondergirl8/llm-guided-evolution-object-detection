@@ -21,7 +21,7 @@ run_tag="fred_yolo11"
 if [[ "${FRED_SEED_FAMILY:-yolo11}" == "dfine" ]]; then
   run_tag="fred_dfine"
 elif [[ "${FRED_SEED_FAMILY:-yolo11}" == "yolo26_p2" ]]; then
-  run_tag="fred_yolo26_p2_map5095_v1"
+  run_tag="fred_yolo26_p2_map5095_coverage_v1"
 elif [[ "${FRED_SEED_FAMILY:-yolo11}" == "tiny_yolo11" ]]; then
   run_tag="fred_tiny_yolo11"
 fi

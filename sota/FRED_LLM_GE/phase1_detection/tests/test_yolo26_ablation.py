@@ -9,7 +9,9 @@ from PIL import Image
 
 ultralytics = pytest.importorskip("ultralytics")
 
-from sota.FRED_LLM_GE.phase1_detection import candidate_runner, yolo26_ablation
+from sota.FRED_LLM_GE.phase1_detection import (
+    candidate_runner, compare_yolo26_ablations, yolo26_ablation,
+)
 
 
 def test_ablation_check_builds_each_architecture_once(capsys):
@@ -31,6 +33,16 @@ def test_ablation_plan_rejects_confounded_comparison(tmp_path):
     path = tmp_path / "bad_plan.yaml"
     path.write_text(yaml.safe_dump(plan))
     with pytest.raises(ValueError, match="exactly one factor"):
+        yolo26_ablation.load_plan(path, protocol)
+
+
+def test_ablation_plan_rejects_ignored_learning_rate(tmp_path):
+    protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
+    plan = yaml.safe_load(yolo26_ablation.DEFAULT_PLAN.read_text())
+    plan["experiments"]["seed"]["train"] = {"lr0": 0.001}
+    path = tmp_path / "bad_plan.yaml"
+    path.write_text(yaml.safe_dump(plan))
+    with pytest.raises(ValueError, match="optimizer=auto ignores lr0"):
         yolo26_ablation.load_plan(path, protocol)
 
 
@@ -63,6 +75,12 @@ def test_ablation_smoke_saves_resolved_args_curves_and_report(
                  val_frame_step=1)
     monkeypatch.setattr(candidate_runner, "challenging_search", lambda *_: (
         proxy, {"data_yaml": data_yaml, "frames": 1}, lambda: validation))
+    audit = {"train": {"issue_count": 0, "marker_sha256": "a" * 64,
+                       "label_sha256": "b" * 64},
+             "search_val": {"issue_count": 0, "marker_sha256": "c" * 64,
+                            "label_sha256": "d" * 64}}
+    monkeypatch.setattr(yolo26_ablation.audit_yolo26_data_path, "audit_search",
+                        lambda *_: audit)
     plan = yolo26_ablation.load_plan(yolo26_ablation.DEFAULT_PLAN, protocol)
     output = tmp_path / "ablations"
     run_dir = yolo26_ablation.run_experiment(
@@ -82,10 +100,108 @@ def test_ablation_smoke_saves_resolved_args_curves_and_report(
     assert report["metadata"]["ablation_experiment"] == experiment
     assert report["metadata"]["ablation_comparison"] == plan["experiments"][experiment]["compare_to"]
     assert report["metadata"]["resolved_optimizer"]
+    assert report["metadata"]["resolved_lr0"] > 0
+    requested = plan["experiments"][experiment].get("train", {})
+    if "optimizer" in requested:
+        assert report["metadata"]["resolved_optimizer"] == requested["optimizer"]
+    if "lr0" in requested:
+        assert report["metadata"]["resolved_lr0"] == requested["lr0"]
+    if "momentum" in requested:
+        assert report["metadata"]["resolved_momentum"] == requested["momentum"]
+    if "warmup_bias_lr" in requested:
+        assert report["metadata"]["resolved_warmup_bias_lr"] == requested["warmup_bias_lr"]
+    assert report["metadata"]["completed_epochs"] == 1
+    assert report["metadata"]["training_seconds"] > 0
+    assert len(report["metadata"]["initial_weights_sha256"]) == 64
+    assert len(report["metadata"]["validation_sample_ids_sha256"]) == 64
     assert len(report["metadata"]["ablation_code_sha256"]) == 64
     assert report["metadata"]["resolved_train_args_sha256"] == (
         candidate_runner.sha256_file(run_dir / "ultralytics/train/args.yaml"))
+    assert json.loads((run_dir / "data_path_audit.json").read_text()) == audit
+    assert report["metadata"]["training_label_sha256"] == "b" * 64
+    assert report["metadata"]["validation_label_sha256"] == "d" * 64
+    if experiment == "seed_no_mosaic":
+        anchor_dir = yolo26_ablation.run_experiment(
+            plan, yolo26_ablation.DEFAULT_PLAN, protocol, candidate_runner.DEFAULT_PROTOCOL,
+            "seed_fixed_adamw", seed, output, "cpu")
+        anchor = json.loads((anchor_dir / "results/ablation_evaluation.json").read_text())
+        assert (report["metadata"]["initial_weights_sha256"]
+                == anchor["metadata"]["initial_weights_sha256"])
     with pytest.raises(FileExistsError, match="fresh output root"):
         yolo26_ablation.run_experiment(
             plan, yolo26_ablation.DEFAULT_PLAN, protocol, candidate_runner.DEFAULT_PROTOCOL,
             experiment, seed, output, "cpu")
+
+
+def test_ablation_refuses_data_path_mismatch_before_training(tmp_path, monkeypatch):
+    protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
+    plan = yolo26_ablation.load_plan(yolo26_ablation.DEFAULT_PLAN, protocol)
+    monkeypatch.setattr(yolo26_ablation.audit_yolo26_data_path, "audit_search",
+                        lambda *_: {"train": {"issue_count": 1},
+                                    "search_val": {"issue_count": 0}})
+    with pytest.raises(ValueError, match="data-path audit found mismatches"):
+        yolo26_ablation.run_experiment(
+            plan, yolo26_ablation.DEFAULT_PLAN, protocol, candidate_runner.DEFAULT_PROTOCOL,
+            "seed_fixed_adamw", 0, tmp_path / "ablations", "cpu")
+    assert not (tmp_path / "ablations").exists()
+
+
+def test_training_comparison_requires_paired_seeds_and_shared_initialization(tmp_path):
+    protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
+    plan = yolo26_ablation.load_plan(yolo26_ablation.DEFAULT_PLAN, protocol)
+    shared = {key: "same" for key in compare_yolo26_ablations.SAME_FIELDS}
+    shared["runtime_environment"] = {"device": "cuda:0"}
+    for arm, ap in (("seed_fixed_adamw", 0.4), ("seed_no_mosaic", 0.43)):
+        for seed in plan["repeat_seeds"]:
+            directory = tmp_path / arm / f"seed_{seed}" / "results"
+            directory.mkdir(parents=True)
+            report = {
+                "schema_version": "fred-detection-report-v1", "gene_id": "ablation",
+                "mode": "validation", "metric_units": "fraction", "num_frames": 10,
+                "evaluator": {"backend": "pycocotools"},
+                "metrics": {"mAP50": ap + 0.3, "mAP50_95": ap + seed * 0.001,
+                            "params": 2515976},
+                "diagnostics": {"definition": "COCO bbox", "overall": {
+                    "mAP75": ap + 0.1, "mAP_small": 0.2, "recall_small": 0.3},
+                    "by_sequence": {"train/4": {"frames": 10, "ground_truth": 5}}},
+                "metadata": dict(shared, ablation_experiment=arm,
+                                 ablation_comparison=plan["experiments"][arm].get("compare_to"),
+                                 ablation_seed=seed, completed_epochs=20,
+                                 initial_weights_sha256=f"weights-{seed}",
+                                 resolved_optimizer="AdamW", resolved_lr0=0.002,
+                                 resolved_momentum=0.9, resolved_warmup_bias_lr=0.0,
+                                 training_seconds=10.0),
+            }
+            (directory / "ablation_evaluation.json").write_text(json.dumps(report))
+
+    result = compare_yolo26_ablations.compare(
+        tmp_path, plan, protocol, ["seed_no_mosaic"])
+    assert result["seeds"] == [0, 1, 2]
+    comparison = result["comparisons"][0]
+    assert comparison["experiment"] == "seed_no_mosaic"
+    assert comparison["mean_deltas"]["mAP50_95"] == pytest.approx(0.03)
+    assert comparison["consistent_mAP50_95_gain_for_review"] is True
+
+    report_path = (tmp_path / "seed_no_mosaic" / "seed_1" /
+                   "results/ablation_evaluation.json")
+    report = json.loads(report_path.read_text())
+    report["metadata"]["initial_weights_sha256"] = "different"
+    report_path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="initial model weights differ"):
+        compare_yolo26_ablations.compare(tmp_path, plan, protocol, ["seed_no_mosaic"])
+
+    report["metadata"]["initial_weights_sha256"] = "weights-1"
+    report["metadata"]["validation_sample_ids_sha256"] = "different"
+    report_path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="model, data, evaluator, or runtime differs"):
+        compare_yolo26_ablations.compare(tmp_path, plan, protocol, ["seed_no_mosaic"])
+
+    report["metadata"]["validation_sample_ids_sha256"] = "same"
+    report["metadata"]["training_label_sha256"] = "changed"
+    report_path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="model, data, evaluator, or runtime differs"):
+        compare_yolo26_ablations.compare(tmp_path, plan, protocol, ["seed_no_mosaic"])
+
+    report_path.unlink()
+    with pytest.raises(FileNotFoundError, match="missing paired ablation report"):
+        compare_yolo26_ablations.compare(tmp_path, plan, protocol, ["seed_no_mosaic"])

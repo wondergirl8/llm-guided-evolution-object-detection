@@ -37,6 +37,7 @@ def test_population_and_global_resume_as_one_committed_pair(tmp_path, monkeypatc
     assert json.loads((tmp_path / 'resume_gen_0.json').read_text())['stage'] == 'initial_population_pending_evaluation'
     if family == 'yolo26_p2':
         assert data['selection_version'] == controller.YOLO26_SELECTION_VERSION
+        assert data['coverage_version'] == controller.YOLO26_COVERAGE_VERSION
     (tmp_path / 'global_gen_1.pkl').write_bytes(b'CORRUPTED SYNTHETIC DATA')
     with pytest.raises(RuntimeError, match='artifacts preserved'):
         controller.load_checkpoint(tmp_path, global_path=tmp_path)

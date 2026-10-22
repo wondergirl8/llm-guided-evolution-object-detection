@@ -54,11 +54,18 @@ def validate_dfine_proposal(parent, proposal):
         raise ValueError("proposal leaves the architecture class unchanged")
 
 def augment_network(input_filename='network.py', output_filename='network_x.py', template_txt=None,
-                    top_p=0.15, llm_model=LLM_DEEPSEEK, temperature=0.1, apply_quality_control=False):
+                    top_p=0.15, llm_model=LLM_DEEPSEEK, temperature=0.1,
+                    apply_quality_control=False, coverage_target=None):
     
     print(f'Loading {input_filename} code')
     print('Using')
     parts = split_file(input_filename)
+    if coverage_target is not None:
+        if globals().get('SEED_FAMILY') != 'yolo26_p2':
+            raise ValueError('coverage_target is only supported for YOLO26')
+        from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS
+        if coverage_target not in INITIAL_COVERAGE_TARGETS:
+            raise ValueError(f'unknown YOLO26 coverage target: {coverage_target}')
     # prompt_templates = glob.glob(f'{ROOT_DIR}/templates/FixedPrompts/*/*.txt')
     # template_path = np.random.choice(prompt_templates)
     # template_path = f'{ROOT_DIR}/templates/{fname}'
@@ -83,7 +90,8 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     previous_error = None
     for attempt in range(attempts):
         candidate_parts = parts.copy()
-        augment_idx = selected_idx if inspect_blocks else np.random.randint(1, len(parts))
+        augment_idx = (2 if coverage_target is not None else
+                       selected_idx if inspect_blocks else np.random.randint(1, len(parts)))
         code2llm = parts[augment_idx]
         txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
         if policy is not None and hasattr(policy, 'mutation_prompt'):
@@ -96,7 +104,8 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
                 input_filename, output_filename, parts, augment_idx, txt2llm,
                 lambda prompt: generate_augmented_code(
                     prompt, augment_idx - 1, apply_quality_control, top_p,
-                    llm_model, temperature), FRED_DIR)
+                    llm_model, temperature), FRED_DIR,
+                coverage_target=coverage_target)
             print('Job Done', flush=True)
             return
         retry_temperature = min(0.8, temperature + 0.1 * attempt) if policy else temperature
@@ -207,6 +216,8 @@ if __name__ == "__main__":
     parser.add_argument('--top_p', type=float, default=0.15, help='Top P value for text generation')
     parser.add_argument('--temperature', type=float, default=0.1, help='Temperature value for text generation')
     parser.add_argument('--apply_quality_control', type=str2bool, default=False, help='Use LLM QC')
+    parser.add_argument('--coverage_target', default=None,
+                        help='YOLO26 initial candidate target; assigned by the controller')
 
     # Parse the arguments
     args = parser.parse_args()
@@ -220,4 +231,5 @@ if __name__ == "__main__":
                     top_p=args.top_p, 
                     temperature=args.temperature,
                     apply_quality_control=args.apply_quality_control,
+                    coverage_target=args.coverage_target,
                    )

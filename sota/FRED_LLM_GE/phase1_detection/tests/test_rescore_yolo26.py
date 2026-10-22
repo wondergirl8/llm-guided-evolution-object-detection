@@ -60,6 +60,7 @@ def test_rescore_keeps_historical_report_and_scores_both_heads(tmp_path, monkeyp
     assert {row["conf"] for row in rows} == {"0.05", "0.1"}
     assert {row["nms_iou"] for row in rows if row["head"] == "one_to_many"} == {"0.5", "0.7"}
     assert sum(row["head"] == "one_to_one" and row["nms_iou"] == "" for row in rows) == 2
+    assert all(row["mAP75"] == "" for row in rows)
     rescore_yolo26.run(args)  # matching reports are safely reused
     assert len(list((args.output_dir / "results").glob("*_evaluation.json"))) == 6
 
@@ -69,6 +70,56 @@ def test_rescore_keeps_historical_report_and_scores_both_heads(tmp_path, monkeyp
         details = json.loads(path.read_text())["diagnostics"]
         assert details["overall"]["false_negatives_iou50"] == 1
         assert details["by_sequence"]["train/0"]["ground_truth"] == 1
+    with (args.output_dir / "head_rescore_summary.csv").open(newline="") as file:
+        rows = list(csv.DictReader(file))
+    assert len(rows) == 6
+    assert all(row["mAP75"] != "" and row["mAP_small"] != "" for row in rows)
+    assert all(row["false_negatives_iou50"] == "1" for row in rows)
+    baseline = next(row for row in rows if row["head"] == "one_to_many"
+                    and row["conf"] == "0.05" and row["nms_iou"] == "0.5")
+    assert float(baseline["delta_vs_baseline_mAP50_95"]) == 0.0
+    assert float(baseline["delta_vs_baseline_mAP75"]) == 0.0
+    with (args.output_dir / "head_rescore_sequences.csv").open(newline="") as file:
+        sequences = list(csv.DictReader(file))
+    assert len(sequences) == 6
+    assert all(row["sequence"] == "train/0" and row["ground_truth"] == "1"
+               for row in sequences)
     assert reference_path.read_bytes() == historical_bytes
     rescore_yolo26.run(args)  # completed diagnostic reports are reused
     assert len(list((args.output_dir / "results").glob("*_evaluation.json"))) == 6
+
+
+def test_summary_shows_policy_deltas_and_undefined_small_object_ap(tmp_path):
+    args = Namespace(output_dir=tmp_path)
+    (tmp_path / "results").mkdir()
+    proxy = {"eval_conf": 0.05, "nms_iou": 0.5}
+    sweep = [("one_to_many", 0.05, 0.5), ("one_to_one", 0.05, 0.5)]
+    records = [("seed", None, None, None,
+                {"mAP50": 0.8, "mAP50_95": 0.4})]
+    for head, ap50, ap5095, ap75, small in (
+            ("one_to_many", 0.8, 0.4, 0.5, None),
+            ("one_to_one", 0.82, 0.43, 0.54, None)):
+        report = {
+            "metrics": {"mAP50": ap50, "mAP50_95": ap5095, "params": 100},
+            "diagnostics": {
+                "overall": {"mAP75": ap75, "mAP_small": small,
+                            "recall_small": None, "false_negatives_iou50": 3,
+                            "poorly_localized_iou50_to75": 2},
+                "by_sequence": {"train/4": {"frames": 10, "ground_truth": 5,
+                                             "false_negatives_iou50": 3,
+                                             "poorly_localized_iou50_to75": 2,
+                                             "mAP50": ap50, "mAP75": ap75,
+                                             "mAP50_95": ap5095}},
+            },
+        }
+        name = rescore_yolo26.score_name("seed", head, 0.05, 0.5)
+        (tmp_path / "results" / f"{name}_evaluation.json").write_text(json.dumps(report))
+
+    rescore_yolo26.write_summary(args, records, sweep, proxy)
+    with (tmp_path / "head_rescore_summary.csv").open(newline="") as file:
+        rows = {row["head"]: row for row in csv.DictReader(file)}
+    assert float(rows["one_to_many"]["mAP50_minus_mAP75"]) == pytest.approx(0.3)
+    assert float(rows["one_to_one"]["delta_vs_baseline_mAP50_95"]) == pytest.approx(0.03)
+    assert float(rows["one_to_one"]["delta_vs_baseline_mAP75"]) == pytest.approx(0.04)
+    assert rows["one_to_one"]["mAP_small"] == ""
+    assert rows["one_to_one"]["delta_vs_baseline_mAP_small"] == ""

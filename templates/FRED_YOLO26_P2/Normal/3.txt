@@ -1,4 +1,4 @@
-Adjust this YOLO26n-P2 section for sparse Event frames with small fast-moving drones. Make a small, valid change near the P2 or P3 feature path and keep the layer layout and all routing fixed.
+Propose one small, valid layer edit near the P2 or P3 feature path for sparse Event frames with small fast-moving drones. Keep the layer layout and all routing fixed.
 
 The current section:
 ```yaml

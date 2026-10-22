@@ -5,18 +5,22 @@ Use --check to validate and build every architecture without FRED data or a GPU.
 """
 
 import argparse
+import csv
 import hashlib
 import importlib.metadata
+import json
 import tempfile
+import time
 from pathlib import Path
 
 import torch
 import yaml
 
 try:
-    from . import candidate_runner, map_reporter
+    from . import audit_yolo26_data_path, candidate_runner, map_reporter
     from .adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
 except ImportError:
+    import audit_yolo26_data_path
     import candidate_runner
     import map_reporter
     from adapters.ultralytics_yolo26_p2 import UltralyticsYolo26P2Adapter
@@ -25,7 +29,7 @@ except ImportError:
 FRED_DIR = candidate_runner.FRED_DIR
 DEFAULT_PLAN = FRED_DIR / "configs/phase1/yolo26_ablations.yaml"
 DEFAULT_OUTPUT = FRED_DIR / "phase1_detection/seeds/yolo26_p2/ablations"
-TRAIN_OPTIONS = {"optimizer", "lr0", "mosaic", "hsv_s"}
+TRAIN_OPTIONS = {"optimizer", "lr0", "momentum", "warmup_bias_lr", "mosaic", "hsv_s"}
 
 
 def architecture(plan, case):
@@ -73,12 +77,19 @@ def load_plan(path, protocol):
                 raise ValueError(f"{name}: unsupported optimizer")
             if key == "lr0" and (type(value) not in (float, int) or not 0 < value <= 1):
                 raise ValueError(f"{name}: lr0 must be in (0, 1]")
+            if key == "momentum" and (type(value) not in (float, int) or not 0 < value < 1):
+                raise ValueError(f"{name}: momentum must be in (0, 1)")
+            if key == "warmup_bias_lr" and (
+                    type(value) not in (float, int) or not 0 <= value <= 1):
+                raise ValueError(f"{name}: warmup_bias_lr must be in [0, 1]")
             if key in ("mosaic", "hsv_s") and (
                     type(value) not in (float, int) or not 0 <= value <= 1):
                 raise ValueError(f"{name}: {key} must be in [0, 1]")
+        if "lr0" in options and options.get("optimizer", "auto") == "auto":
+            raise ValueError(f"{name}: optimizer=auto ignores lr0; choose an explicit optimizer")
         reference = case.get("compare_to")
         if reference is None:
-            continue  # seed and compact are separate reference architectures
+            continue  # independent reference recipes
         if reference not in cases or cases[reference]["model"] != case["model"]:
             raise ValueError(f"{name}: comparison must use the same source model")
         previous = cases[reference]
@@ -122,7 +133,8 @@ def run_experiment(plan, plan_path, protocol, protocol_path, name, seed, output_
 
     case = cases[name]
     config, source = architecture(plan, case)
-    code_files = ("yolo26_ablation.py", "candidate_runner.py", "fitness.py",
+    code_files = ("yolo26_ablation.py", "audit_yolo26_data_path.py",
+                  "candidate_runner.py", "fitness.py",
                   "map_reporter.py", "adapters/ultralytics_yolo11.py",
                   "adapters/ultralytics_yolo26_p2.py")
     code_sha = hashlib.sha256(b"".join(
@@ -130,6 +142,11 @@ def run_experiment(plan, plan_path, protocol, protocol_path, name, seed, output_
     plan_sha = candidate_runner.sha256_file(plan_path)
     protocol_sha = candidate_runner.sha256_file(protocol_path)
     source_sha = candidate_runner.sha256_file(source)
+    data_root = FRED_DIR / protocol["challenging"]["data_root"]
+    data_path_audit = audit_yolo26_data_path.audit_search(data_root, protocol)
+    if any(data_path_audit[split]["issue_count"] for split in ("train", "search_val")):
+        raise ValueError("search export data-path audit found mismatches; "
+                         "run audit_yolo26_data_path.py for details")
     proxy, train_data, load_val = candidate_runner.challenging_search(protocol, "yolo26_p2")
     export_sha = candidate_runner.sha256_file(train_data["data_yaml"])
     val_data = load_val()
@@ -140,17 +157,46 @@ def run_experiment(plan, plan_path, protocol, protocol_path, name, seed, output_
     torch.manual_seed(seed)
 
     run_dir.mkdir(parents=True)
+    audit_file = run_dir / "data_path_audit.json"
+    audit_file.write_text(json.dumps(data_path_audit, indent=2) + "\n")
     variant = run_dir / "model.yaml"
     variant.write_text(yaml.safe_dump(config, sort_keys=False))
     model = adapter.build(variant, num_classes=1, device=device)
     adapter.workdir = run_dir / "ultralytics"
     params = adapter.param_count(model)
+    initial_weights = []
+    model.add_callback("on_train_start", lambda trainer: initial_weights.append(
+        candidate_runner.initial_weights_sha256(trainer.model)))
+    start = time.perf_counter()
     adapter.train(model, train_data, proxy, device)
+    training_seconds = time.perf_counter() - start
+    if len(initial_weights) != 1:
+        raise RuntimeError("could not capture the model state before training")
 
     trainer_dir = adapter.workdir / "train"
     args_file, curve_file = trainer_dir / "args.yaml", trainer_dir / "results.csv"
     if not args_file.is_file() or not curve_file.is_file():
         raise RuntimeError("Ultralytics did not save resolved arguments and training curves")
+    with curve_file.open(newline="") as handle:
+        completed_epochs = sum(1 for _ in csv.DictReader(handle))
+    if completed_epochs != proxy["epochs"]:
+        raise RuntimeError(f"training stopped after {completed_epochs} of {proxy['epochs']} epochs")
+    resolved_optimizer = type(model.trainer.optimizer).__name__
+    resolved_lr0 = model.trainer.args.lr0
+    optimizer_group = model.trainer.optimizer.param_groups[0]
+    resolved_momentum = (optimizer_group["betas"][0] if "betas" in optimizer_group
+                         else optimizer_group["momentum"])
+    resolved_warmup_bias_lr = model.trainer.args.warmup_bias_lr
+    requested = case.get("train", {})
+    if ("optimizer" in requested and resolved_optimizer != requested["optimizer"]
+            or "lr0" in requested and resolved_lr0 != requested["lr0"]
+            or "momentum" in requested and resolved_momentum != requested["momentum"]
+            or "warmup_bias_lr" in requested
+            and resolved_warmup_bias_lr != requested["warmup_bias_lr"]):
+        raise RuntimeError(f"resolved optimizer settings differ from {name}: "
+                           f"{resolved_optimizer}, lr0={resolved_lr0}, "
+                           f"momentum={resolved_momentum}, "
+                           f"warmup_bias_lr={resolved_warmup_bias_lr}")
     checkpoint = run_dir / "trained_models" / "ablation.pt"
     checkpoint.parent.mkdir()
     adapter.save(model, checkpoint)
@@ -165,8 +211,21 @@ def run_experiment(plan, plan_path, protocol, protocol_path, name, seed, output_
                     ablation_code_sha256=code_sha, ablation_plan_sha256=plan_sha,
                     ablation_protocol_sha256=protocol_sha,
                     training_export_sha256=export_sha,
+                    training_marker_sha256=data_path_audit["train"]["marker_sha256"],
+                    training_label_sha256=data_path_audit["train"]["label_sha256"],
+                    validation_marker_sha256=data_path_audit["search_val"]["marker_sha256"],
+                    validation_label_sha256=data_path_audit["search_val"]["label_sha256"],
+                    data_path_audit_sha256=candidate_runner.sha256_file(audit_file),
+                    validation_sample_ids_sha256=hashlib.sha256(json.dumps(
+                        val_data["sample_ids"], separators=(",", ":")).encode()).hexdigest(),
                     resolved_train_args_sha256=candidate_runner.sha256_file(args_file),
-                    resolved_optimizer=type(model.trainer.optimizer).__name__,
+                    resolved_optimizer=resolved_optimizer, resolved_lr0=resolved_lr0,
+                    resolved_momentum=resolved_momentum,
+                    resolved_warmup_bias_lr=resolved_warmup_bias_lr,
+                    initial_weights_sha256=initial_weights[0],
+                    training_seconds=training_seconds,
+                    completed_epochs=completed_epochs,
+                    runtime_environment=candidate_runner.runtime_environment(device),
                     training_curve_sha256=candidate_runner.sha256_file(curve_file),
                     ultralytics_version=importlib.metadata.version("ultralytics"))
     result, _ = map_reporter.report(
@@ -197,6 +256,13 @@ def main():
         parser.error("--experiment is required unless --check is used")
     if args.data_root:
         protocol["challenging"]["data_root"] = str(args.data_root.resolve())
+    data_root = FRED_DIR / protocol["challenging"]["data_root"]
+    search = protocol["challenging"]["search"]
+    train_yaml = data_root / f"search_train_step{search['train_frame_step']}" / "data.yaml"
+    val_root = data_root / f"search_val_step{search['val_frame_step']}"
+    if not train_yaml.is_file() or not val_root.is_dir():
+        parser.error(f"restore the original search export under {data_root} "
+                     f"(requires {train_yaml} and {val_root})")
     run_experiment(plan, args.plan, protocol, args.protocol, args.experiment,
                    args.seed, args.output_dir, args.device)
 

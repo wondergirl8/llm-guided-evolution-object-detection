@@ -81,16 +81,41 @@ def scoring_settings(args, proxy):
             for iou in (args.nms_ious if head == "one_to_many" else (proxy["nms_iou"],))]
 
 
-def write_summary(args, records, sweep):
-    """Gather every completed setting into one reviewable comparison table."""
-    rows = []
+def _write_csv(path, rows):
+    temp = None
+    try:
+        with NamedTemporaryFile(mode="w", newline="", dir=path.parent,
+                                prefix=f".{path.stem}.", delete=False) as handle:
+            temp = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temp, path)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+    print(f"summary: {path}", flush=True)
+
+
+def write_summary(args, records, sweep, proxy):
+    """Compare policies and diagnostic losses on the same validation frames."""
+    rows, sequence_rows = [], []
     for gene_id, _, _, _, historical_metrics in records:
+        reports = {}
         for head, conf, iou in sweep:
             rescore_id = score_name(gene_id, head, conf, iou)
-            report = json.loads((args.output_dir / "results" /
-                                 f"{rescore_id}_evaluation.json").read_text())
+            reports[head, conf, iou] = json.loads((args.output_dir / "results" /
+                                                   f"{rescore_id}_evaluation.json").read_text())
+        baseline = reports.get(("one_to_many", proxy["eval_conf"], proxy["nms_iou"]))
+        for head, conf, iou in sweep:
+            report = reports[head, conf, iou]
             metrics = report["metrics"]
-            rows.append({
+            details = report.get("diagnostics")
+            overall = details["overall"] if details else {}
+            baseline_metrics = baseline["metrics"] if baseline else None
+            baseline_overall = (baseline.get("diagnostics", {}).get("overall", {})
+                                if baseline else {})
+            row = {
                 "source_gene_id": gene_id, "head": head, "conf": conf,
                 "nms_iou": iou if head == "one_to_many" else "",
                 "mAP50": metrics["mAP50"], "mAP50_95": metrics["mAP50_95"],
@@ -98,21 +123,31 @@ def write_summary(args, records, sweep):
                 "historical_mAP50": historical_metrics["mAP50"],
                 "historical_mAP50_95": historical_metrics["mAP50_95"],
                 "delta_mAP50_95": metrics["mAP50_95"] - historical_metrics["mAP50_95"],
-            })
-    output = args.output_dir / "head_rescore_summary.csv"
-    temp = None
-    try:
-        with NamedTemporaryFile(mode="w", newline="", dir=args.output_dir,
-                                prefix=".head_rescore_summary.", delete=False) as handle:
-            temp = Path(handle.name)
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
-        os.replace(temp, output)
-    finally:
-        if temp is not None:
-            temp.unlink(missing_ok=True)
-    print(f"summary: {output}", flush=True)
+                "delta_vs_baseline_mAP50_95": (metrics["mAP50_95"] - baseline_metrics["mAP50_95"]
+                                                if baseline_metrics else ""),
+                "mAP75": overall.get("mAP75", ""),
+                "mAP_small": overall.get("mAP_small", ""),
+                "recall_small": overall.get("recall_small", ""),
+                "mAP50_minus_mAP75": (metrics["mAP50"] - overall["mAP75"]
+                                       if overall.get("mAP75") is not None else ""),
+                "false_negatives_iou50": overall.get("false_negatives_iou50", ""),
+                "poorly_localized_iou50_to75": overall.get("poorly_localized_iou50_to75", ""),
+            }
+            for field in ("mAP75", "mAP_small", "recall_small"):
+                current, reference = overall.get(field), baseline_overall.get(field)
+                row[f"delta_vs_baseline_{field}"] = (current - reference
+                    if current is not None and reference is not None else "")
+            rows.append(row)
+            if details:
+                for sequence, values in sorted(details["by_sequence"].items()):
+                    sequence_rows.append({
+                        "source_gene_id": gene_id, "head": head, "conf": conf,
+                        "nms_iou": iou if head == "one_to_many" else "",
+                        "sequence": sequence, **values,
+                    })
+    _write_csv(args.output_dir / "head_rescore_summary.csv", rows)
+    if sequence_rows:
+        _write_csv(args.output_dir / "head_rescore_sequences.csv", sequence_rows)
 
 
 def run(args):
@@ -198,7 +233,7 @@ def run(args):
                 if abs(delta) > 0.005:
                     print("  WARNING: historical score differs by >0.005; "
                           "check the restored validation export and runtime", flush=True)
-    write_summary(args, records, sweep)
+    write_summary(args, records, sweep, proxy)
 
 
 def main():

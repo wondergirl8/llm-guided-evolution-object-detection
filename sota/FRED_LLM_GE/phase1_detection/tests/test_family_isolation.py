@@ -56,7 +56,13 @@ print(json.dumps({
                 "rules", "prompts"):
         assert len({entry[key] for entry in selected.values()}) == len(FAMILIES), key
     for family, entry in selected.items():
-        assert Path(entry["root"]) == candidate_runner.FAMILY_SOTA_ROOTS[family]
+        expected_root = candidate_runner.FAMILY_SOTA_ROOTS[family]
+        if family == "yolo26_p2":
+            # Fresh coverage-policy searches cannot mix models or reports with
+            # the standalone seed and older YOLO26 runs.
+            expected_root = expected_root.with_name("yolo26_p2_coverage_v1")
+            assert f"--sota_root {expected_root}" in entry["eval"]
+        assert Path(entry["root"]) == expected_root
         assert Path(entry["variant"]) == Path(entry["root"]) / "models"
         assert Path(entry["seed"]).is_file()
         assert (ROOT / entry["rules"]).is_file()

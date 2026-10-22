@@ -216,6 +216,41 @@ def test_dfine_trains_from_exported_lazy_images(tmp_path):
     assert len(candidate_runner.predict_frames(adapter, model, data, proxy, "cpu")) == 2
 
 
+def test_dfine_microbatch_preserves_effective_batch_loss_with_uneven_targets():
+    class SeparableCriterion:
+        def __call__(self, predictions, targets):
+            per_frame = predictions.mean(dim=(1, 2, 3))
+            counts = per_frame.new_tensor([len(target["boxes"]) for target in targets])
+            loss_cls = per_frame.mean()
+            loss_bbox = (per_frame * counts).sum() / max(int(counts.sum()), 1)
+            zero = loss_cls * 0
+            loss_go_lsd = per_frame.square().mean()
+            return {
+                "loss_cls": loss_cls, "loss_bbox": loss_bbox,
+                "loss_giou": zero, "loss_fgl": zero,
+                "loss_go_lsd": loss_go_lsd,
+                "loss_total": loss_cls + 5 * loss_bbox + 0.5 * loss_go_lsd,
+            }
+
+    data = _data()
+    data["boxes"][2] = torch.tensor([[30., 20., 36., 26.], [40., 25., 45., 31.]])
+    initial = torch.nn.Conv2d(3, 1, 1)
+    proxy = {"epochs": 1, "batch_size": 3, "seed": 0}
+    outcomes = []
+    for microbatch_size in (1, 2, 8):
+        adapter = _adapter()
+        adapter.settings.update(microbatch_size=microbatch_size, grad_clip=1000)
+        adapter.criterion = SeparableCriterion()
+        model = torch.nn.Conv2d(3, 1, 1)
+        model.load_state_dict(initial.state_dict())
+        adapter.train(model, data, proxy, "cpu")
+        outcomes.append((model.state_dict(), adapter.training_epoch_losses[0]))
+    for state, terms in outcomes[1:]:
+        for key, value in state.items():
+            assert torch.allclose(value, outcomes[0][0][key], atol=1e-7)
+        assert terms == pytest.approx(outcomes[0][1], abs=1e-7)
+
+
 def test_dfine_cosine_schedule_changes_lr_after_each_epoch():
     adapter = _adapter()
     adapter.settings.update(workers=0, lr_schedule="cosine")

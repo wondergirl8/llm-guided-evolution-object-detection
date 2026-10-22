@@ -39,7 +39,7 @@ _FAMILIES = {
         "eval_timeout": 8 * 60 * 60,
     },
     "yolo26_p2": {
-        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo26_p2"),
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo26_p2_coverage_v1"),
         "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo26n_p2.yaml"),
         "prompt_group": "FRED_YOLO26_P2/Normal",
         "rules": "templates/FRED_YOLO26_P2/ConstantRules.txt",
@@ -91,7 +91,7 @@ CONSTANT_RULES_PATH = _FAMILY["rules"]
 
 _OUTPUT_FOLDER = {
     "dfine": "fred_dfine_output",
-    "yolo26_p2": "fred_yolo26_p2_map5095_v1_output",
+    "yolo26_p2": "fred_yolo26_p2_map5095_coverage_v1_output",
     "tiny_yolo11": "fred_tiny_yolo11_output",
 }.get(SEED_FAMILY, "fred_yolo11_output")
 OUTPUT_DIR = (os.path.join(RUN_ROOT, "operator_jobs") if RUN_ROOT else
@@ -159,7 +159,7 @@ SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
 _ISLAND_RUN_NAME = {
     "dfine": "fred_dfine_islands",
-    "yolo26_p2": "fred_yolo26_p2_map5095_v1_islands",
+    "yolo26_p2": "fred_yolo26_p2_map5095_coverage_v1_islands",
     "tiny_yolo11": "fred_tiny_yolo11_islands",
 }.get(SEED_FAMILY, "fred_yolo11_islands")
 ISLAND_CONTROLLER_RUN_NAME = _ISLAND_RUN_NAME + _RUN_SUFFIX

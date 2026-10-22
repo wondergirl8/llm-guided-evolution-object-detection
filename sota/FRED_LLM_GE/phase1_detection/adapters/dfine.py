@@ -193,6 +193,7 @@ class DFINEAdapter(FamilyAdapter):
                 optimizer.zero_grad(set_to_none=True)
                 batch_loss = 0.0
                 batch_terms = {name: 0.0 for name in loss_terms}
+                group_targets = sum(len(boxes[int(i)]) for i in group)
                 for offset in range(0, len(group), microbatch):
                     selected = group[offset:offset + microbatch]
                     raw = group_images[offset:offset + microbatch]
@@ -202,12 +203,23 @@ class DFINEAdapter(FamilyAdapter):
                     targets = [_targets_from_pixels(boxes[int(i)], width, height, device)
                                for i in selected]
                     losses = self.criterion(model(event), targets)
-                    weight = len(selected) / len(group)
-                    (losses["loss_total"] * weight).backward()
+                    frame_weight = len(selected) / len(group)
+                    target_weight = sum(len(target["boxes"]) for target in targets) / max(group_targets, 1)
+                    # Classification and distillation are frame means; localization
+                    # is normalized by the number of targets in the optimizer step.
+                    weighted = {
+                        name: losses[name] * (frame_weight if name in ("loss_cls", "loss_go_lsd")
+                                               else target_weight)
+                        for name in loss_terms
+                    }
+                    weighted_total = (weighted["loss_cls"] + 5 * weighted["loss_bbox"]
+                                      + 2 * weighted["loss_giou"] + weighted["loss_fgl"]
+                                      + 0.5 * weighted["loss_go_lsd"])
+                    weighted_total.backward()
                     # Kept on the GPU so each microbatch does not wait for a sync.
-                    batch_loss = batch_loss + losses["loss_total"].detach() * weight
+                    batch_loss = batch_loss + weighted_total.detach()
                     for name in loss_terms:
-                        batch_terms[name] = batch_terms[name] + losses[name].detach() * weight
+                        batch_terms[name] = batch_terms[name] + weighted[name].detach()
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), self.settings.get("grad_clip", 0.1),
                     error_if_nonfinite=True,

@@ -105,7 +105,7 @@ families:
     grad_clip: 0.1
     # Accumulate gradients to retain proxy.batch_size without holding all
     # 1280-wide Event frames and their feature maps on the GPU at once.
-    microbatch_size: 1
+    microbatch_size: 8
     # DataLoader workers decoding PNG frames during training (eval jobs get 12 CPUs).
     workers: 8
     model:

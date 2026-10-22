@@ -4,11 +4,15 @@ repeat_seeds: [0, 1, 2]
 sources:
   seed: seeds/seed_yolo26n_p2.yaml
 experiments:
+  # The archived 20-epoch seed used optimizer=auto, which resolved to AdamW at
+  # lr0=0.002, momentum=0.9 and warmup_bias_lr=0.0 for one class. Pin all four
+  # for comparisons so a longer run cannot silently switch training behavior.
   seed: {model: seed}
-  seed_longer: {model: seed, compare_to: seed, epochs: 40}
-  seed_sgd: {model: seed, compare_to: seed, train: {optimizer: SGD}}
-  seed_sgd_low_lr: {model: seed, compare_to: seed_sgd, train: {optimizer: SGD, lr0: 0.001}}
-  seed_no_mosaic: {model: seed, compare_to: seed, train: {mosaic: 0.0}}
-  seed_no_hsv_saturation: {model: seed, compare_to: seed, train: {hsv_s: 0.0}}
+  seed_fixed_adamw: {model: seed, train: {optimizer: AdamW, lr0: 0.002, momentum: 0.9, warmup_bias_lr: 0.0}}
+  seed_longer: {model: seed, compare_to: seed_fixed_adamw, epochs: 40, train: {optimizer: AdamW, lr0: 0.002, momentum: 0.9, warmup_bias_lr: 0.0}}
+  seed_sgd: {model: seed, compare_to: seed_fixed_adamw, train: {optimizer: SGD, lr0: 0.002, momentum: 0.9, warmup_bias_lr: 0.0}}
+  seed_sgd_low_lr: {model: seed, compare_to: seed_sgd, train: {optimizer: SGD, lr0: 0.001, momentum: 0.9, warmup_bias_lr: 0.0}}
+  seed_no_mosaic: {model: seed, compare_to: seed_fixed_adamw, train: {optimizer: AdamW, lr0: 0.002, momentum: 0.9, warmup_bias_lr: 0.0, mosaic: 0.0}}
+  seed_no_hsv_saturation: {model: seed, compare_to: seed_fixed_adamw, train: {optimizer: AdamW, lr0: 0.002, momentum: 0.9, warmup_bias_lr: 0.0, hsv_s: 0.0}}
   seed_p4_half: {model: seed, compare_to: seed, edit: {section: head, index: 14, channels: 256}}
   seed_p5_half: {model: seed, compare_to: seed, edit: {section: head, index: 17, channels: 512}}

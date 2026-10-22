@@ -73,7 +73,7 @@ def main():
             if time.time() >= float(os.environ['LLMGE_SESSION_DEADLINE']):
                 return
         controller.wait_for_llm_server(timeout=1800)
-        checkpoints = ('fred_yolo26_p2_map5095_v1_checkpoints' if cfg.SEED_FAMILY == 'yolo26_p2'
+        checkpoints = ('fred_yolo26_p2_map5095_coverage_v1_checkpoints' if cfg.SEED_FAMILY == 'yolo26_p2'
                        else 'fred_dfine_checkpoints')
         if bounded and cfg.SEED_FAMILY == 'dfine':
             pending_cleanup = ROOT / checkpoints / '.cleanup_pending'
