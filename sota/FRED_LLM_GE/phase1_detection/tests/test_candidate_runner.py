@@ -1,6 +1,10 @@
 import importlib.util
+import os
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 import torch
 
 from sota.FRED_LLM_GE.phase1_detection import candidate_runner
@@ -8,6 +12,35 @@ from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Ada
 
 FRED_DIR = Path(candidate_runner.__file__).resolve().parents[1]
 TRAIN_EVAL = FRED_DIR / "phase1_detection" / "seeds" / "yolo11" / "train_eval.py"
+
+
+def test_direct_script_imports_adapters_without_pythonpath(tmp_path):
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [sys.executable, str(Path(candidate_runner.__file__)), "--help"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "--family" in completed.stdout
+
+
+@pytest.mark.parametrize("events_tag", [None, "raw_w10000_polarity"])
+def test_main_evaluates_once_with_requested_events(monkeypatch, tmp_path, events_tag):
+    protocol = {"proxy": {"seed": 0}, "challenging": {"events": {"source": "released"}}}
+    monkeypatch.setattr(candidate_runner, "load_protocol", lambda _: protocol)
+    calls = []
+    monkeypatch.setattr(candidate_runner, "run", lambda *args: calls.append(args[4]["challenging"]["events"].copy()))
+    argv = ["candidate_runner.py", "--family", "yolo11", "--model", "network",
+            "--device", "cuda", "--sota_root", str(tmp_path)]
+    if events_tag:
+        argv.extend(["--events", events_tag])
+    monkeypatch.setattr(sys, "argv", argv)
+
+    candidate_runner.main()
+
+    assert calls == ([candidate_runner.events_from_tag(events_tag)] if events_tag
+                     else [{"source": "released"}])
 
 
 def _load_train_eval():

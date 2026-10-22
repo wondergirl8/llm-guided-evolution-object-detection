@@ -1,0 +1,11 @@
+Combine the two YOLO11n YAML sections below into one valid replacement section for the FRED drone detector. Prefer a coherent small-object design rather than copying one parent unchanged. Preserve the section key, layer count, layer positions, every from link, and all Concat, nn.Upsample, and Detect layers. Output only one complete YAML section in one ```yaml code block.
+
+Parent A:
+```yaml
+{}
+```
+
+Parent B:
+```yaml
+{}
+```

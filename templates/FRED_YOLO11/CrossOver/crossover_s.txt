@@ -1,0 +1,11 @@
+You are crossing two candidate YOLO11n architectures for tiny drones. Merge useful changes from both sections while keeping the original YOLO11n routing and stride-8/16/32 detection structure. Use allowed modules and valid YAML. Return exactly one complete section, starting with backbone: or head:, in one ```yaml code block. No explanation.
+
+First parent:
+```yaml
+{}
+```
+
+Second parent:
+```yaml
+{}
+```

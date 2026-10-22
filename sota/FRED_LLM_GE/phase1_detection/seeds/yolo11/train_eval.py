@@ -73,7 +73,7 @@ BENCHMARK_SPLIT = "challenging"
 OFFICIAL_SPLIT = "challenging_train"
 
 # Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
-FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
+FAILED_RESULT = DetectionResult(float('-inf'), float('-inf'), float('inf'))
 
 
 def sha256_file(path):
@@ -91,7 +91,7 @@ def code_revision():
 def write_failure_results(gene_id, start_time, message):
     """Record worst-case fitness for generated models that cannot be evaluated."""
     train_time = time.time() - start_time
-    write_results(SCRIPT_DIR, gene_id, FAILED_RESULT)
+    write_results(SCRIPT_DIR, gene_id, FAILED_RESULT, reason=message)
     print(f"ERROR evaluating generated model: {message}")
     print(f"Wrote worst-case fitness after {train_time:.1f}s")
     print('='*120);print('job done');print('='*120)

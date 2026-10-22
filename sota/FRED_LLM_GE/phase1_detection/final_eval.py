@@ -140,6 +140,7 @@ def main():
         seed=seed, deterministic=True, pretrained=args.weights or False,
         device=_ultralytics_device(args.device), workers=adapter.settings.get("workers", 8),
         project=str(out), name="train", exist_ok=True, val=False, plots=False, verbose=False,
+        **adapter.training_options(),
     )
     checkpoint = out / "model.pt"
     model.save(checkpoint)
