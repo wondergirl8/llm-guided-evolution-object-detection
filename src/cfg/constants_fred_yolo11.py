@@ -58,18 +58,27 @@ _FAMILIES = {
         "seed": os.path.join(FRED_DIR, "seeds", "seed_rtdetr.py"),
         "prompt_group": "FRED_RTDETR/Normal",
         "rules": "templates/FRED_RTDETR/ConstantRules.txt",
-        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+        # Counted from submission, so it includes the wait for a GPU; an R18
+        # candidate trains in ~2.2 h with amp.
+        "eval_timeout": 6 * 60 * 60,
+        # At run_improved.py's defaults (temperature 0.02-0.35, top_p 0.1) the
+        # first R50 run mostly returned near-copies of the parent class.
+        "mutation_temperature": (0.3, 0.7),
+        "mutation_top_p": 0.9,
     },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
-CANDIDATE_POLICY_MODULE = (
-    "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
-    if SEED_FAMILY == "yolo11" else None
-)
-CROSSOVER_TEMPLATE_DIR = (
-    "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
-    else "templates/CrossOver"
-)
+CANDIDATE_POLICY_MODULE = {
+    "yolo11": "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space",
+    "rtdetr": "sota.FRED_LLM_GE.phase1_detection.rtdetr_search_space",
+}.get(SEED_FAMILY)
+CROSSOVER_TEMPLATE_DIR = {
+    "yolo11": "templates/FRED_YOLO11/CrossOver",
+    "rtdetr": "templates/FRED_RTDETR/CrossOver",
+}.get(SEED_FAMILY, "templates/CrossOver")
+# LLM sampling for created and mutated genes; None keeps run_improved.py's defaults.
+MUTATION_TEMPERATURE = _FAMILY.get("mutation_temperature")
+MUTATION_TOP_P = _FAMILY.get("mutation_top_p")
 # Event frames candidates train on: unset for FRED's released frames, or a tag
 # such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
 # keeps its genes, results, outputs and checkpoints apart from the released run.
