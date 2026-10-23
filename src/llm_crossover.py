@@ -73,6 +73,16 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
             rules_path = os.path.join(ROOT_DIR, rules_path)
         with open(rules_path, 'r') as file:
             txt2llm = f'{txt2llm}\n{file.read()}'
+    if globals().get('SEED_FAMILY') == 'dfine':
+        from src.fred_dfine_proposals import generate_validated_section
+        generate_validated_section(
+            input_filename_x, output_filename, parts_x, augment_idx, txt2llm,
+            lambda prompt: strip_leading_imports(generate_augmented_code(
+                prompt, augment_idx - 1, apply_quality_control, top_p,
+                llm_model, temperature)), FRED_DIR,
+            attempts=globals().get('max_gen_attempts', 5), other_parent=input_filename_y)
+        print('Job Done', flush=True)
+        return
     if globals().get('SEED_FAMILY') == 'yolo26_p2':
         from src.fred_yolo26_proposals import generate_validated_section
         generate_validated_section(input_filename_x, output_filename, parts_x, augment_idx,

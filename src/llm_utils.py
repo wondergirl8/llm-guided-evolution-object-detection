@@ -145,6 +145,8 @@ def strip_leading_imports(code):
     preamble already imports torch, nn and F, so these lines only get the
     candidate rejected.
     """
+    if code is None:
+        return None
     lines = code.splitlines()
     start = 0
     while start < len(lines) and (not lines[start].strip()

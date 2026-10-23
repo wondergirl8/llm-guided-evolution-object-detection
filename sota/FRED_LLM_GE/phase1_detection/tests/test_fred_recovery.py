@@ -35,6 +35,13 @@ def test_generated_slurm_templates_keep_allocated_devices(tmp_path, family):
     subprocess.run([sys.executable, str(tmp_path / 'slurm.py')], cwd=tmp_path,
                    env=env, check=True, capture_output=True, text=True)
     config = yaml.safe_load((tmp_path / 'slurm-config/slurm_config.yaml').read_text())
+    run_script = (tmp_path / 'run.sh').read_text()
+    server_script = (tmp_path / 'server.sh').read_text()
+    assert 'run_improved.py --checkpoints ' in run_script
+    assert ' --global_path ' in run_script
+    assert '#SBATCH -t 7:45:00' in run_script
+    assert 'export CUDA_VISIBLE_DEVICES=0,1' not in server_script
+    assert 'from src.cfg.constants import PORT' in server_script
     for template in ('python_bash_script', 'llm_bash_script'):
         script = config[template].replace('{}', 'printf "%s" "$CUDA_VISIBLE_DEVICES"')
         # Execute only the visibility-related lines; module/scheduler calls need ICE.
@@ -156,8 +163,18 @@ def test_initial_yolo26_panel_covers_four_distinct_reductions(tmp_path, monkeypa
     monkeypatch.setattr(controller, 'GLOBAL_DATA', {
         target: {'coverage_target': target} for target, _ in entries})
     controller.verify_yolo26_initial_population([[target] for target, _ in entries])
+    controller.verify_yolo26_initial_population([[target] for target, _ in entries])
     saved = json.loads((output_dir / 'initial_yolo26_coverage.json').read_text())
-    assert saved == report
+    assert saved == {**report, 'open_candidates': []}
+    open_ids = ['open_1', 'open_2', 'open_3']
+    controller.GLOBAL_DATA.update({gene: {'coverage_target': None} for gene in open_ids})
+    seven_output = tmp_path / 'seven_controller_output'
+    seven_output.mkdir()
+    monkeypatch.setattr(controller, 'OUTPUT_DIR', str(seven_output))
+    controller.verify_yolo26_initial_population(
+        [[target] for target, _ in entries] + [[gene] for gene in open_ids])
+    seven = json.loads((seven_output / 'initial_yolo26_coverage.json').read_text())
+    assert seven['open_candidates'] == open_ids
 
 
 def test_initial_yolo26_target_retries_wrong_layer_and_direction(tmp_path):
@@ -183,6 +200,9 @@ def test_initial_yolo26_targets_pass_through_controller_to_worker(tmp_path, monk
                         [kwargs.get('coverage_target')])
     assert len(controller.create_population(4, 'test-llm', coverage_panel=True)) == 4
     assert requested == list(INITIAL_COVERAGE_TARGETS)
+    requested.clear()
+    assert len(controller.create_population(7, 'test-llm', coverage_panel=True)) == 7
+    assert requested == [*INITIAL_COVERAGE_TARGETS, None, None, None]
     requested.clear()
     controller.create_population(1, 'test-llm')
     assert requested == [None]
@@ -290,10 +310,13 @@ def test_dfine_mutation_rejects_failed_or_unchanged_proposal(tmp_path, monkeypat
     template.write_text('Improve this section: {}')
     output = tmp_path / 'candidate.py'
 
-    with pytest.raises(RuntimeError, match='ERROR proposal:'):
+    with pytest.raises(RuntimeError, match='No valid D-FINE proposal after 5 attempts'):
         llm_mutation.augment_network(str(seed), str(output), str(template))
 
     assert not output.exists()
+    audit = json.loads(output.with_suffix('.py.proposal_attempts.json').read_text())
+    assert len(audit['attempts']) == 5
+    assert not any(attempt['accepted'] for attempt in audit['attempts'])
 
 
 def test_dfine_crossover_rejects_failed_proposal(tmp_path, monkeypatch):
@@ -309,10 +332,53 @@ def test_dfine_crossover_rejects_failed_proposal(tmp_path, monkeypatch):
         (templates / name).write_text('Combine {} and {}')
     output = tmp_path / 'candidate.py'
 
-    with pytest.raises(RuntimeError, match='ERROR proposal:'):
+    with pytest.raises(RuntimeError, match='No valid D-FINE proposal after 5 attempts'):
         llm_crossover.augment_network(str(seed), str(seed), str(output))
 
     assert not output.exists()
+
+
+def test_dfine_retry_feedback_produces_novel_executable_candidate(tmp_path):
+    from src.fred_dfine_proposals import architecture_hash, generate_validated_section
+
+    seed = FRED / 'seeds/seed_dfine.py'
+    parts = seed.read_text().split('# --OPTION--')
+    valid = parts[1].replace('ConvNormAct(width * 2, width * 2),', 'nn.Identity(),')
+    assert valid != parts[1]
+    prompts, replies = [], iter(('ERROR', valid))
+    def generate(prompt):
+        prompts.append(prompt)
+        return next(replies)
+    output = tmp_path / 'network_valid.py'
+    generate_validated_section(seed, output, parts, 1, 'Change the backbone.',
+                               generate, FRED, attempts=2)
+    assert output.is_file()
+    assert 'Previous proposal was rejected' in prompts[1]
+    assert architecture_hash(output) != architecture_hash(seed)
+    audit = json.loads(output.with_suffix('.py.proposal_attempts.json').read_text())
+    assert [row['accepted'] for row in audit['attempts']] == [False, True]
+    duplicate = tmp_path / 'network_duplicate.py'
+    with pytest.raises(RuntimeError, match='No valid D-FINE proposal after 1 attempts'):
+        generate_validated_section(seed, duplicate, parts, 1, 'Change the backbone.',
+                                   lambda _: valid, FRED, attempts=1)
+    assert not duplicate.exists()
+    duplicate_audit = json.loads(duplicate.with_suffix('.py.proposal_attempts.json').read_text())
+    assert 'duplicates network_valid.py' in duplicate_audit['attempts'][0]['error']
+
+
+def test_dfine_docstring_and_import_are_not_architecture_edits(tmp_path):
+    from src.fred_dfine_proposals import _validate_section, architecture_hash
+
+    seed = FRED / 'seeds/seed_dfine.py'
+    parts = seed.read_text().split('# --OPTION--')
+    prose = list(parts)
+    prose[1] = prose[1].replace('Three-scale CNN Event backbone',
+                                'Another description of this backbone')
+    prose_path = tmp_path / 'network_prose.py'
+    prose_path.write_text('# --OPTION--'.join(prose))
+    assert architecture_hash(prose_path) == architecture_hash(seed)
+    with pytest.raises(ValueError, match='may not add imports'):
+        _validate_section(parts[1], prose[1] + '\n    import os\n')
 
 
 def test_crossover_worker_preserves_first_parent_one_layer_contract(tmp_path, monkeypatch):

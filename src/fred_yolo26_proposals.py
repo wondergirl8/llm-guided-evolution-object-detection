@@ -25,7 +25,10 @@ INITIAL_COVERAGE_TARGETS = {
 def initial_target_for_slot(slot):
     if type(slot) is not int or slot < 0:
         raise ValueError("initial candidate slot must be nonnegative")
-    return tuple(INITIAL_COVERAGE_TARGETS)[slot % len(INITIAL_COVERAGE_TARGETS)]
+    # Each required reduction occupies one slot. Repeating P2 cannot make a
+    # distinct model: its only allowed reduction is 128 -> 64 channels.
+    targets = tuple(INITIAL_COVERAGE_TARGETS)
+    return targets[slot] if slot < len(targets) else None
 
 
 def _model_parameters(variant):

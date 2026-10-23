@@ -17,8 +17,8 @@ hostname
 module load cuda
 module load uv
 
-# Make sure CUDA can see all GPUs
-export CUDA_VISIBLE_DEVICES=0,1
+# Use exactly the devices Slurm assigned to this server job.
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 export UV_CACHE_DIR="${TMPDIR:-${SLURM_TMPDIR:-/tmp}}/uv-cache-${SLURM_JOB_ID:-$$}"
 mkdir -p "$UV_CACHE_DIR"
 echo "Using UV cache: $UV_CACHE_DIR"

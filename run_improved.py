@@ -41,6 +41,9 @@ YOLO26_SELECTION_VERSION = 'map50_95_primary_params_tiebreak_v1'
 YOLO26_COVERAGE_VERSION = 'initial_p2_p5_reductions_v1'
 VALIDATED_FITNESS_FAMILIES = ('yolo26_p2', 'dfine')
 DFINE_MAX_INFRA_RETRIES = 1
+INITIAL_POPULATION_PENDING = False
+INITIAL_CREATION_PENDING = False
+INITIAL_CREATION_IDS = []
 
 
 def require_yolo26_selection_version(data, path):
@@ -365,7 +368,7 @@ def submit_bash(file_path, **kwargs):
         successful_sub_flag 
         job_id
     """
-    if load_candidate_policy(globals()) is not None:
+    if load_candidate_policy(globals()) is not None or (RUN_TAG and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES):
         check_server_window()
     if not wait_for_llm_server():
         return False, None, 'llm_unavailable: server not ready'
@@ -511,6 +514,9 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4,
         if successful_sub_flag or SEED_FAMILY != 'dfine':
             GLOBAL_DATA[gene_id]['status'] = 'DELAYED_CHECK'
         individual = creator.Individual([gene_id])
+        if INITIAL_CREATION_PENDING and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+            INITIAL_CREATION_IDS.append(gene_id)
+            persist_initial_creation_checkpoint()
         return individual
     
     if successful_sub_flag:
@@ -522,6 +528,9 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4,
         print(f'Model Files for {gene_id} are Loaded') if job_done else print(f'Error Loading Model Files for {gene_id}', flush=True)
         if SEED_FAMILY == 'dfine' and not job_done:
             record_dfine_proposal_failure(gene_id)
+    if INITIAL_CREATION_PENDING and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+        INITIAL_CREATION_IDS.append(gene_id)
+        persist_initial_creation_checkpoint()
     return individual
 
 def submit_run(gene_id, exclude_nodes=()):
@@ -607,6 +616,7 @@ def submit_run(gene_id, exclude_nodes=()):
     GLOBAL_DATA[gene_id]['results_job'] = job_id
     GLOBAL_DATA[gene_id]['eval_start_time'] = time.time()
     GLOBAL_DATA[gene_id]['local_output'] = local_output
+    persist_initial_population_checkpoint([creator.Individual([gene_id])])
     print(f'\t‣ Running py File for {gene_id}, {job_id}')
 
 def evalModel(individual):
@@ -765,8 +775,20 @@ def check4model2run(gene_id):
                                          f'Architecture duplicates {previous} ({digest})',
                                          status='FAILED: DUPLICATE ARCHITECTURE')
                 return
+        else:
+            from src.fred_dfine_proposals import architecture_hash
+            digest = architecture_hash(check_exist)
+            GLOBAL_DATA[gene_id]['architecture_sha256'] = digest
+            previous = next((other for records in (GLOBAL_DATA, GLOBAL_DATA_HIST)
+                             for other, record in records.items()
+                             if other != gene_id and record.get('architecture_sha256') == digest
+                             and not record.get('failure_reason')), None)
+            if previous:
+                reject_detection_fitness(gene_id, None,
+                                         f'Architecture duplicates {previous} ({digest})',
+                                         status='FAILED: DUPLICATE ARCHITECTURE')
+                return
         submit_run(gene_id)
-        return
         return
 
     policy = load_candidate_policy(globals())
@@ -874,9 +896,14 @@ def record_dfine_proposal_failure(gene_id, reason=None):
         reason = 'LLM generation job failed'
         if log_path and os.path.isfile(log_path):
             with open(log_path) as log:
-                markers = [line.strip() for line in log if 'ERROR proposal:' in line]
+                markers = [line.strip() for line in log
+                           if 'ERROR proposal:' in line or
+                           ('D-FINE proposal attempt ' in line and ' rejected: ' in line)]
             if markers:
-                reason = markers[-1].split('ERROR proposal:', 1)[1].strip()
+                last = markers[-1]
+                reason = (last.split('ERROR proposal:', 1)[1].strip()
+                          if 'ERROR proposal:' in last else
+                          'retry_exhausted: ' + last.split(' rejected: ', 1)[1].strip())
     if log_path:
         reason = f'{reason}; generation log: {log_path}'
     reject_detection_fitness(gene_id, None, reason, status='FAILED: PROPOSAL')
@@ -1158,6 +1185,7 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                         print(f"\t‣ Still Waiting On: Gene: {gene_id}", flush=True)
                         print_job_info(GLOBAL_DATA[gene_id])
                         all_done = False  # Some jobs are still running
+        persist_initial_population_checkpoint(population)
         if all_done:
             box_print("Evalutated All Genes", print_bbox_len=60)
             break  # All jobs are done or timed out
@@ -1192,7 +1220,8 @@ def update_individual(ind, new_gene_id, old_gene_id=None, process_success=True, 
     if process_success:
         ind[0] = new_gene_id
         ind = creator.Individual([new_gene_id])
-        if (load_candidate_policy(globals()) is None and old_gene_id is not None and
+        if (load_candidate_policy(globals()) is None and
+                SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES and old_gene_id is not None and
                 old_gene_id in GLOBAL_DATA):
             del GLOBAL_DATA[old_gene_id]
         print(f'\t☑ {operation}: {new_gene_id}')
@@ -1233,6 +1262,13 @@ def delayed_mate_check(offspring):
                     print(f'\t‣ Error Loading Model Files for {new_gene_id}!!', flush=True)
 
                 failed_process = not (successful_sub_flag and job_done)
+                if failed_process and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                    if not GLOBAL_DATA[new_gene_id].get('failure_reason'):
+                        reject_detection_fitness(
+                            new_gene_id, None,
+                            operator_failure_reason(new_gene_id, 'crossover'),
+                            status='FAILED: OPERATOR')
+                    continue
                 if failed_process and load_candidate_policy(globals()) is not None:
                     record_failure(new_gene_id, operator_failure_reason(new_gene_id, 'crossover'))
                     continue
@@ -1242,6 +1278,23 @@ def delayed_mate_check(offspring):
                                                process_success=not failed_process, process_type='Mating')
 
     return offspring
+
+
+def mutate_selected_offspring(offspring, llm_model):
+    """Do not use failed crossover children as mutation parents."""
+    skip_failed = (load_candidate_policy(globals()) is not None or
+                   SEED_FAMILY in VALIDATED_FITNESS_FAMILIES)
+    for mutant in offspring:
+        if skip_failed:
+            record = GLOBAL_DATA.get(mutant[0], {})
+            if (record.get('failure_reason') or
+                    (SEED_FAMILY in VALIDATED_FITNESS_FAMILIES and
+                     str(record.get('status', '')).startswith('FAILED'))):
+                continue
+        if random.random() < mutation_probability:
+            toolbox.mutate(individual=mutant, llm_model=llm_model)
+            del mutant.fitness.values
+
 
 def delayed_creation_check(offspring):
     if DELAYED_CHECK is True:
@@ -1264,6 +1317,10 @@ def delayed_creation_check(offspring):
                         record_failure(gene_id, operator_failure_reason(gene_id, 'creation'))
                 elif load_candidate_policy(globals()) is not None:
                     record_failure(k, operator_failure_reason(k, 'creation'))
+                elif SEED_FAMILY == 'yolo26_p2':
+                    reject_detection_fitness(
+                        k, None, operator_failure_reason(k, 'creation'),
+                        status='FAILED: OPERATOR')
                   
     return offspring
 
@@ -1305,6 +1362,13 @@ def delayed_mutate_check(offspring):
 
                     failed_process = not (successful_sub_flag and job_done)
                     old_gene_id = LINKED_GENES[k]
+                    if failed_process and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                        if not GLOBAL_DATA[new_gene_id].get('failure_reason'):
+                            reject_detection_fitness(
+                                new_gene_id, None,
+                                operator_failure_reason(new_gene_id, 'mutation'),
+                                status='FAILED: OPERATOR')
+                        continue
                     if failed_process and load_candidate_policy(globals()) is not None:
                         record_failure(new_gene_id, operator_failure_reason(new_gene_id, 'mutation'))
                         continue
@@ -1312,6 +1376,10 @@ def delayed_mutate_check(offspring):
                                                    process_success=not failed_process, process_type='Mutation')
                 elif load_candidate_policy(globals()) is not None:
                     record_failure(k, operator_failure_reason(k, 'mutation'))
+                elif SEED_FAMILY == 'yolo26_p2':
+                    reject_detection_fitness(
+                        k, None, operator_failure_reason(k, 'mutation'),
+                        status='FAILED: OPERATOR')
                   
     return offspring
 
@@ -1493,7 +1561,7 @@ _ACTIVE_FINGERPRINT = None
 def run_fingerprint():
     """Identify the FRED protocol and inputs that must stay fixed across resume."""
     global _ACTIVE_FINGERPRINT
-    if SEED_FAMILY != 'yolo11' or "RUN_CHECKPOINT_DIR" not in globals():
+    if SEED_FAMILY not in ('yolo11', 'yolo26_p2', 'dfine') or "RUN_CHECKPOINT_DIR" not in globals():
         return None
 
     from sota.FRED_LLM_GE.phase1_detection.protocol_fingerprint import compute_fingerprint
@@ -1511,6 +1579,15 @@ def run_fingerprint():
             'PRESERVE_SLURM_CUDA_VISIBLE_DEVICES', False),
         'fred_events': globals().get('FRED_EVENTS', ''),
     }
+    if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+        identity['evolution_settings'].update({
+            'llm_model': globals().get('LLM_MODEL'),
+            'llm_model_path': globals().get('MODEL_PATH'),
+            'llm_max_new_tokens': globals().get('LLM_MAX_NEW_TOKENS'),
+            'prompt_group': globals().get('DEFAULT_PROMPT_GROUP'),
+            'crossover_template_dir': globals().get('CROSSOVER_TEMPLATE_DIR'),
+            'max_gen_attempts': max_gen_attempts,
+        })
     if _ACTIVE_FINGERPRINT is not None and identity != _ACTIVE_FINGERPRINT:
         raise RuntimeError('FRED protocol changed during this run; refusing checkpoint update')
     _ACTIVE_FINGERPRINT = identity
@@ -1538,6 +1615,8 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
         if load_candidate_policy(globals()) is not None:
             state['EVAL_CACHE'] = EVAL_CACHE
         return save_pair(folder_name, global_path, gen, data, state, SEED_FAMILY)
+    atomic_initial_pair = (gen == 0 and global_path is not None and RUN_TAG and
+                           SEED_FAMILY in VALIDATED_FITNESS_FAMILIES)
     os.makedirs(folder_name, exist_ok=True)
     filename = os.path.join(folder_name, f'checkpoint_gen_{gen}.pkl')
     if os.path.exists(filename):
@@ -1587,9 +1666,14 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
         if fingerprint is not None:
             stored_global_data['protocol_fingerprint'] = fingerprint
 
-        with open(global_file, 'wb') as file:
-            pickle.dump(stored_global_data, file)
-        print(f'Global data saved as {global_file}')
+        if not atomic_initial_pair and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES and RUN_TAG:
+            from src.fred_session import atomic_write
+            atomic_write(global_file, pickle.dumps(stored_global_data, protocol=pickle.HIGHEST_PROTOCOL))
+        elif not atomic_initial_pair:
+            with open(global_file, 'wb') as file:
+                pickle.dump(stored_global_data, file)
+        if not atomic_initial_pair:
+            print(f'Global data saved as {global_file}')
 
     if checkpoint_data is None:
         checkpoint_data = {
@@ -1603,9 +1687,43 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                            'coverage_version': YOLO26_COVERAGE_VERSION}
     if fingerprint is not None:
         checkpoint_data = dict(checkpoint_data, protocol_fingerprint=fingerprint)
-    with open(filename, 'wb') as file:
-        pickle.dump(checkpoint_data, file)
+    if atomic_initial_pair:
+        checkpoint_data = dict(checkpoint_data, _global_state_snapshot=stored_global_data)
+    if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES and RUN_TAG:
+        from src.fred_session import atomic_write
+        atomic_write(filename, pickle.dumps(checkpoint_data, protocol=pickle.HIGHEST_PROTOCOL))
+    else:
+        with open(filename, 'wb') as file:
+            pickle.dump(checkpoint_data, file)
     print(f"Population data saved as {filename}")
+    if atomic_initial_pair:
+        atomic_write(global_file, pickle.dumps(stored_global_data, protocol=pickle.HIGHEST_PROTOCOL))
+        print(f'Global data saved as {global_file}')
+
+
+def persist_initial_population_checkpoint(active_population=None):
+    """Save generation-zero submissions while the controller is still evaluating."""
+    if not INITIAL_POPULATION_PENDING or SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES:
+        return
+    members = list(population)
+    if active_population is not None:
+        seen = {ind[0] for ind in members}
+        members.extend(ind for ind in active_population if ind[0] not in seen)
+    save_checkpoint(0, folder_name=RUN_CHECKPOINT_DIR,
+                    global_path=RUN_CHECKPOINT_DIR,
+                    checkpoint_data={'population': members, 'hof': hof,
+                                     'initial_population_pending_evaluation': True})
+
+
+def persist_initial_creation_checkpoint():
+    """Keep submitted initial LLM jobs and their coverage slots resumable."""
+    if not INITIAL_CREATION_PENDING or SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES:
+        return
+    members = [creator.Individual([gene_id]) for gene_id in INITIAL_CREATION_IDS]
+    save_checkpoint(0, folder_name=RUN_CHECKPOINT_DIR,
+                    global_path=RUN_CHECKPOINT_DIR,
+                    checkpoint_data={'population': members, 'hof': hof,
+                                     'initial_population_creation_pending': True})
 
 GEN_PATTERNS = {
     "checkpoint": re.compile(r"^checkpoint_gen_(\d+)\.pkl$"),
@@ -1668,22 +1786,34 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         verify_fingerprint(population_data, filepath, fingerprint)
         print(f"Loaded population data from {filepath}")
         start_gen = extract_generation(checkpoint_file, "checkpoint") + 1
+        if (SEED_FAMILY in VALIDATED_FITNESS_FAMILIES and start_gen == 1
+                and (population_data.get('initial_population_pending_evaluation') or
+                     population_data.get('initial_population_creation_pending'))):
+            start_gen = 0
 
-    if global_file is None:
-        global_candidates = [f for f in os.listdir(global_path) if extract_generation(f, "global") is not None]
-        global_files = sorted(global_candidates, key=lambda f: extract_generation(f, "global"), reverse=True)
-        global_file = global_files[0] if global_files else None
-    if global_file:
-        filepath = os.path.join(global_path, global_file)
-        with open(filepath, 'rb') as file:
-            global_data = pickle.load(file)
-        require_yolo26_selection_version(global_data, filepath)
-        verify_fingerprint(global_data, filepath, fingerprint)
-        print(f"Loaded global data from {filepath}")
+    embedded_state = (population_data.get('_global_state_snapshot')
+                      if population_data and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES else None)
+    if embedded_state is not None:
+        global_data = embedded_state
+        require_yolo26_selection_version(global_data, checkpoint_file)
+        verify_fingerprint(global_data, checkpoint_file, fingerprint)
+        print(f'Loaded matching generation-0 global state from {checkpoint_file}')
+    else:
+        if global_file is None:
+            global_candidates = [f for f in os.listdir(global_path) if extract_generation(f, "global") is not None]
+            global_files = sorted(global_candidates, key=lambda f: extract_generation(f, "global"), reverse=True)
+            global_file = global_files[0] if global_files else None
+        if global_file:
+            filepath = os.path.join(global_path, global_file)
+            with open(filepath, 'rb') as file:
+                global_data = pickle.load(file)
+            require_yolo26_selection_version(global_data, filepath)
+            verify_fingerprint(global_data, filepath, fingerprint)
+            print(f"Loaded global data from {filepath}")
 
     if fingerprint is not None and bool(population_data) != bool(global_data):
         raise RuntimeError('FRED checkpoint is incomplete: population and global data must both exist')
-    if fingerprint is not None and checkpoint_file and global_file:
+    if fingerprint is not None and embedded_state is None and checkpoint_file and global_file:
         if extract_generation(checkpoint_file, 'checkpoint') != extract_generation(global_file, 'global'):
             raise RuntimeError('FRED checkpoint generations do not match')
 
@@ -1807,7 +1937,119 @@ def refill_initial_population(individuals, target, llm_model):
     return population
 
 
-def add_stock_seed_to_initial_population(population):
+def distinct_valid_detection_population(candidates):
+    """Keep one successful candidate per checked architecture identity."""
+    if SEED_FAMILY == 'yolo26_p2':
+        from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo26_p2 import (
+            UltralyticsYolo26P2Adapter,
+        )
+        architecture_hash = UltralyticsYolo26P2Adapter.architecture_hash
+    elif SEED_FAMILY == 'dfine':
+        from src.fred_dfine_proposals import architecture_hash
+    else:
+        raise ValueError(f'No custom architecture identity for {SEED_FAMILY}')
+    unique, seen = [], {}
+    for individual in candidates:
+        record = GLOBAL_DATA[individual[0]]
+        if record.get('fitness') in (None, INVALID_FITNESS_MAX) or record.get('failure_reason'):
+            continue
+        digest = record.get('architecture_sha256')
+        if digest is None:
+            digest = architecture_hash(f'{VARIANT_DIR}/{MODEL}_{individual[0]}.py')
+            record['architecture_sha256'] = digest
+        if digest in seen:
+            if seen[digest] != individual[0]:
+                record['population_exclusion_reason'] = (
+                    f'duplicate_architecture: matches {seen[digest]} ({digest})')
+                print(f'\t☠ Excluding {SEED_FAMILY} candidate {individual[0]}: '
+                      f"{record['population_exclusion_reason']}", flush=True)
+            continue
+        record.pop('population_exclusion_reason', None)
+        unique.append(individual)
+        seen[digest] = individual[0]
+    return unique
+
+
+def refill_detection_initial_population(individuals, target, llm_model):
+    """Require a complete, distinct custom-detector generation zero."""
+    global GEN_COUNT
+    if SEED_FAMILY == 'yolo26_p2':
+        from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS
+        for individual in individuals[1:1 + len(INITIAL_COVERAGE_TARGETS)]:
+            record = GLOBAL_DATA[individual[0]]
+            if record.get('fitness') in (None, INVALID_FITNESS_MAX) or record.get('failure_reason'):
+                write_run_status({'status': 'coverage_failed', 'generation': 0,
+                                  'target': record.get('coverage_target'),
+                                  'failure_reason': record.get('failure_reason')})
+                raise RuntimeError(f"YOLO26 required {record.get('coverage_target')} candidate "
+                                   f"{individual[0]} failed evaluation; generation 0 is incomplete")
+    elif SEED_FAMILY != 'dfine':
+        raise ValueError(f'No custom initial refill for {SEED_FAMILY}')
+
+    population = distinct_valid_detection_population(individuals)
+    limit = globals().get('FRED_MAX_REFILL_ATTEMPTS', 3 * target)
+    attempts = 0
+    all_fresh = []
+    while len(population) < target and attempts < limit:
+        count = min(target - len(population), limit - attempts)
+        current_gen = GEN_COUNT
+        GEN_COUNT = -1
+        try:
+            fresh = toolbox.population(n=count, llm_model=llm_model)
+            delayed_creation_check(fresh)
+        finally:
+            GEN_COUNT = current_gen
+        attempts += count
+        for child in fresh:
+            child.fitness.values = PLACEHOLDER_FITNESS
+        check_and_update_fitness(fresh)
+        all_fresh.extend(fresh)
+        population = distinct_valid_detection_population([*population, *fresh])
+        print(f'Generation 0 distinct {SEED_FAMILY} architectures: {len(population)}/{target}; '
+              f'refill attempts: {attempts}/{limit}', flush=True)
+    log_failure_counts(0, [*individuals, *all_fresh])
+    if len(population) < target:
+        write_run_status({'status': 'depleted', 'generation': 0,
+                          'distinct_architectures': len(population), 'target': target,
+                          'refill_attempts': attempts})
+        raise RuntimeError(f'{SEED_FAMILY} generation 0 has {len(population)}/{target} distinct '
+                           f'successful architectures after {attempts} refill attempts')
+    return population
+
+
+def refill_detection_generation_population(individuals, target, llm_model, generation):
+    """Replace failed or duplicate offspring while keeping valid survivors."""
+    population = distinct_valid_detection_population(individuals)
+    limit = globals().get('FRED_MAX_REFILL_ATTEMPTS', 3 * target)
+    attempts = 0
+    all_fresh = []
+    while len(population) < target and attempts < limit:
+        if not population:
+            break
+        count = min(target - len(population), limit - attempts)
+        fresh = [toolbox.mutate(individual=toolbox.clone(random.choice(population)),
+                                llm_model=llm_model) for _ in range(count)]
+        attempts += count
+        delayed_mutate_check(fresh)
+        for child in fresh:
+            child.fitness.values = PLACEHOLDER_FITNESS
+        check_and_update_fitness(fresh)
+        all_fresh.extend(fresh)
+        population = distinct_valid_detection_population([*population, *fresh])
+        print(f'Generation {generation} distinct {SEED_FAMILY} architectures: '
+              f'{len(population)}/{target}; refill attempts: {attempts}/{limit}', flush=True)
+    log_failure_counts(generation, [*individuals, *all_fresh])
+    if len(population) < target:
+        write_run_status({'status': 'depleted', 'generation': generation,
+                          'distinct_architectures': len(population), 'target': target,
+                          'refill_attempts': attempts})
+        raise RuntimeError(f'{SEED_FAMILY} generation {generation} has '
+                           f'{len(population)}/{target} distinct successful architectures '
+                           f'after {attempts} refill attempts')
+    return population
+
+
+def add_stock_seed_to_initial_population(population, allow_existing=False):
     """Give a FRED stock seed a normal candidate ID and evaluation job.
 
     The copy is byte-for-byte, so Python seeds and YAML seeds use the same
@@ -1819,9 +2061,14 @@ def add_stock_seed_to_initial_population(population):
     gene_id = "seed"
     os.makedirs(VARIANT_DIR, exist_ok=True)
     target = os.path.join(VARIANT_DIR, f"{MODEL}_{gene_id}.py")
-    if os.path.exists(target) or gene_id in GLOBAL_DATA:
+    if gene_id in GLOBAL_DATA or (os.path.exists(target) and not allow_existing):
         raise RuntimeError(f"Stock seed already exists in a fresh run: {target}; use a fresh run tag")
-    shutil.copyfile(SEED_NETWORK, target)
+    if os.path.exists(target):
+        with open(target, 'rb') as current, open(SEED_NETWORK, 'rb') as source:
+            if current.read() != source.read():
+                raise RuntimeError(f'Stock seed file changed during resume: {target}')
+    else:
+        shutil.copyfile(SEED_NETWORK, target)
     GLOBAL_DATA[gene_id] = {"sub_flag": True, "job_id": None,
                             "status": "subbed file", "fitness": None,
                             "start_time": time.time(), "origin": "stock_seed"}
@@ -1833,15 +2080,48 @@ def verify_yolo26_initial_population(population):
     """Record complete, distinct P2–P5 coverage before any training jobs."""
     if SEED_FAMILY != 'yolo26_p2':
         return
-    from src.fred_yolo26_proposals import verify_initial_coverage
+    from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS, verify_initial_coverage
+    targets = [GLOBAL_DATA[ind[0]]['coverage_target'] for ind in population]
+    expected = list(INITIAL_COVERAGE_TARGETS) + [None] * (len(population) - len(INITIAL_COVERAGE_TARGETS))
+    if targets != expected:
+        raise ValueError(f'Initial YOLO26 target order must be {expected}, got {targets}')
     entries = [(GLOBAL_DATA[ind[0]]['coverage_target'],
-                os.path.join(VARIANT_DIR, f'{MODEL}_{ind[0]}.py')) for ind in population]
+                os.path.join(VARIANT_DIR, f'{MODEL}_{ind[0]}.py'))
+               for ind in population if GLOBAL_DATA[ind[0]]['coverage_target'] is not None]
     report = verify_initial_coverage(entries)
+    report['open_candidates'] = [ind[0] for ind in population[len(INITIAL_COVERAGE_TARGETS):]]
     report_path = os.path.join(OUTPUT_DIR, 'initial_yolo26_coverage.json')
-    with open(report_path, 'x') as handle:
-        json.dump(report, handle, indent=2)
-        handle.write('\n')
+    if os.path.exists(report_path):
+        with open(report_path) as handle:
+            if json.load(handle) != report:
+                raise RuntimeError(f'Initial YOLO26 coverage changed during resume: {report_path}')
+    else:
+        with open(report_path, 'x') as handle:
+            json.dump(report, handle, indent=2)
+            handle.write('\n')
     print(f'Initial YOLO26 coverage verified: {report_path}', flush=True)
+
+
+def finish_initial_creation(individuals, llm_model, resume=False):
+    """Complete submitted generation-0 LLM jobs before starting seed evaluation."""
+    global INITIAL_CREATION_PENDING
+    if resume:
+        target = start_population_size - 1
+        if len(individuals) > target:
+            raise RuntimeError(f'Generation-0 creation checkpoint has {len(individuals)} '
+                               f'LLM candidates; expected at most {target}')
+        for slot in range(len(individuals), target):
+            if SEED_FAMILY == 'yolo26_p2':
+                from src.fred_yolo26_proposals import initial_target_for_slot
+                candidate = toolbox.individual(llm_model=llm_model,
+                                               coverage_target=initial_target_for_slot(slot))
+            else:
+                candidate = toolbox.individual(llm_model=llm_model)
+            individuals.append(candidate)
+    INITIAL_CREATION_PENDING = False
+    delayed_creation_check(individuals)
+    verify_yolo26_initial_population(individuals)
+    return add_stock_seed_to_initial_population(individuals, allow_existing=resume)
 
 # Define the problem
 creator.create("FitnessMulti", base.Fitness, weights=FITNESS_WEIGHTS)  # Adjust weights as needed
@@ -1897,13 +2177,14 @@ if __name__ == "__main__":
         args.checkpoints = RUN_CHECKPOINT_DIR
         args.global_path = RUN_CHECKPOINT_DIR
         print(f"FRED run tag: {RUN_TAG}; checkpoints: {RUN_CHECKPOINT_DIR}", flush=True)
+    CHECKPOINT_FOLDER = args.checkpoints
 
     PROMPT_GLOB = resolve_prompt_glob(args.prompt_group)
 
     print(DNA_TXT)
     print("ISLAND llm_model: ", llm_model)
     print(f"Prompt glob: {PROMPT_GLOB}")
-    if load_candidate_policy(globals()) is not None:
+    if load_candidate_policy(globals()) is not None or (RUN_TAG and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES):
         print(f"FRED generation limit: {num_generations - 1} evolutionary generations; "
               f"LLM server job: {os.getenv('LLMGE_SERVER_JOB_ID', '<not supplied>')}", flush=True)
 
@@ -1912,6 +2193,10 @@ if __name__ == "__main__":
         exit(1)
 
     population_data, start_gen, global_data = load_checkpoint(folder_name=args.checkpoints, global_path=args.global_path)
+    initial_pending = bool(population_data and
+                           population_data.get('initial_population_pending_evaluation'))
+    creation_pending = bool(population_data and
+                            population_data.get('initial_population_creation_pending'))
     if population_data:
         box_print("CHECKPOINT LOADED")
         GLOBAL_DATA = global_data["GLOBAL_DATA"]
@@ -1943,29 +2228,47 @@ if __name__ == "__main__":
             raise ValueError("start_population_size must include a slot for the stock seed")
         if SEED_FAMILY == 'yolo26_p2' and initial_mutations < 4:
             raise ValueError("YOLO26 initial population needs four coverage candidates and a stock seed")
+        hof = tools.ParetoFront()
+        from src.fred_session import enabled
+        INITIAL_CREATION_PENDING = (SEED_FAMILY in VALIDATED_FITNESS_FAMILIES and
+                                    not enabled())
+        INITIAL_CREATION_IDS = []
+        if INITIAL_CREATION_PENDING:
+            persist_initial_creation_checkpoint()
         if SEED_FAMILY == 'yolo26_p2':
             population = toolbox.population(n=initial_mutations, llm_model=llm_model,
                                             coverage_panel=True)
         else:
             population = toolbox.population(n=initial_mutations, llm_model=llm_model)
         box_print("Batch Checking Created Genes", print_bbox_len=60, new_line_end=False)
-        delayed_creation_check(population)
-        verify_yolo26_initial_population(population)
-        population = add_stock_seed_to_initial_population(population)
-        hof = tools.ParetoFront()
+        population = finish_initial_creation(population, llm_model)
 
         # Preserve the initial population and submitted worker identities before
         # long evaluations. Generation zero is setup, not a completed search generation.
-        from src.fred_session import enabled
-        if enabled():
-            save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path)
+        if enabled() or SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+            INITIAL_POPULATION_PENDING = SEED_FAMILY in VALIDATED_FITNESS_FAMILIES and not enabled()
+            if INITIAL_POPULATION_PENDING:
+                persist_initial_population_checkpoint()
+            else:
+                save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path)
+
+    if creation_pending:
+        INITIAL_CREATION_PENDING = True
+        INITIAL_CREATION_IDS = [individual[0] for individual in population]
+        population = finish_initial_creation(population, llm_model, resume=True)
+        INITIAL_POPULATION_PENDING = True
+        persist_initial_population_checkpoint()
+        initial_pending = True
+
+    if initial_pending:
+        INITIAL_POPULATION_PENDING = True
 
     # Evaluate the entire population
     for ind in population:
         ind.fitness.values = PLACEHOLDER_FITNESS
         
     check_and_update_fitness(population)
-    if not population_data:
+    if not population_data or initial_pending:
         log_failure_counts(0, population)
         if "SEED_FAMILY" in globals():
             if GLOBAL_DATA["seed"]["fitness"] == INVALID_FITNESS_MAX:
@@ -1973,12 +2276,19 @@ if __name__ == "__main__":
             if load_candidate_policy(globals()) is not None:
                 population = refill_initial_population(
                     population, start_population_size, llm_model)
+            elif SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                population = refill_detection_initial_population(
+                    population, start_population_size, llm_model)
             hof.update(population)
-            save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path)
+            INITIAL_POPULATION_PENDING = False
+            save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path,
+                            checkpoint_data={'population': population, 'hof': hof,
+                                             'initial_population_pending_evaluation': False})
+            start_gen = 1
     # Evolution
     paused_for_server = False
     for gen in range(start_gen, num_generations if migration_gen == 0 else ((start_gen + migration_gen - 1) // migration_gen) * migration_gen + 1):
-        if load_candidate_policy(globals()) is not None:
+        if load_candidate_policy(globals()) is not None or (RUN_TAG and SEED_FAMILY in VALIDATED_FITNESS_FAMILIES):
             try:
                 check_server_window()
             except ServerWindowClosed as exc:
@@ -2071,13 +2381,7 @@ if __name__ == "__main__":
         
         # Apply mutation on the offspring
         box_print("Mutating", print_bbox_len=60, new_line_end=False)
-        for mutant in offspring:
-            if (load_candidate_policy(globals()) is not None and
-                    GLOBAL_DATA.get(mutant[0], {}).get('failure_reason')):
-                continue
-            if random.random() < mutation_probability:
-                toolbox.mutate(individual=mutant, llm_model=llm_model)
-                del mutant.fitness.values
+        mutate_selected_offspring(offspring, llm_model)
                 
         box_print(f"GLOBAL_DATA_ANCESTRY", new_line_end=False)
         print_ancestry(GLOBAL_DATA_ANCESTRY)
@@ -2116,6 +2420,9 @@ if __name__ == "__main__":
         # Replace the old population with the offspring
         population[:] = (valid_detection_population(offspring)
                          if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES else offspring)
+        if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+            population[:] = refill_detection_generation_population(
+                population, population_size, llm_model, gen)
         # Gather all the fitnesses in one list and print the stats
         if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES or population:
             print_scores(population, FITNESS_WEIGHTS)

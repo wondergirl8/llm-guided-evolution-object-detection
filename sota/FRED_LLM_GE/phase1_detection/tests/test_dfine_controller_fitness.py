@@ -110,6 +110,14 @@ def test_dfine_preflight_rejects_invalid_candidates_before_submission(
         assert cause in controller.GLOBAL_DATA[gene_id]["failure_reason"]
     assert controller.GLOBAL_DATA["good"]["status"] == "subbed file"
 
+    controller.GLOBAL_DATA_HIST["good"] = controller.GLOBAL_DATA.pop("good")
+    controller.GLOBAL_DATA["duplicate"] = {"status": "subbed file", "fitness": None}
+    (tmp_path / "network_duplicate.py").write_text(candidates["good"])
+    controller.check4model2run("duplicate")
+    assert submitted == ["good"]
+    assert controller.GLOBAL_DATA["duplicate"]["status"] == "FAILED: DUPLICATE ARCHITECTURE"
+    assert "good" in controller.GLOBAL_DATA["duplicate"]["failure_reason"]
+
 
 def test_failed_dfine_generation_records_proposal_reason(dfine_state, monkeypatch, tmp_path):
     monkeypatch.setattr(controller, "DELAYED_CHECK", True)

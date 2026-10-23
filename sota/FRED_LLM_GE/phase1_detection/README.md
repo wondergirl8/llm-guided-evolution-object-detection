@@ -99,11 +99,9 @@ island, result, and checkpoint paths. Candidate validation keeps all layer
 routing, P2/P3/P4/P5 detection, the end-to-end head, and scale fixed. It permits
 only bounded Conv channel/kernel and C3k2 channel/repeat changes. After a
 validated standalone FRED baseline, the post-core `DG-P1-10` decision, and a
-target-GPU resource check, the evolution entry point is:
-
-```bash
-FRED_SEED_FAMILY=yolo26_p2 bash run.sh
-```
+target-GPU resource check, follow the [custom-seed PACE runbook](../docs/CUSTOM_SEEDS_LLM_GE_RUN.md) to set
+`FRED_SEED_FAMILY=yolo26_p2`, generate the Slurm scripts, and submit the server
+and controller as batch jobs.
 
 The YOLO26 pilot search now ranks candidates by search-validation mAP50:95,
 using fewer parameters only to break an exact accuracy tie. It still records
@@ -227,12 +225,12 @@ directory.
 ```bash
 uv run python sota/FRED_LLM_GE/phase1_detection/export_split.py --set final
 uv run python sota/FRED_LLM_GE/phase1_detection/export_split.py --set final --finalize
-uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py \
+uv run python -m sota.FRED_LLM_GE.phase1_detection.final_eval \
   --family yolo26_p2 --name yolo26n_p2_scratch
 ```
 
-For an evolved candidate, add `--model network_<gene_id> --variant_dir
-sota/FRED_LLM_GE/phase1_detection/seeds/yolo26_p2/models` to the final
+For an evolved candidate from a tagged run, add `--model network_<gene_id>
+--variant_dir fred_runs/<tag>/candidates/models` to the final
 evaluation command. Do not use challenging_test to choose candidates.
 
 ## D-FINE-inspired Event seed
@@ -584,7 +582,7 @@ and score challenging_test once:
 ```bash
 uv run python sota/FRED_LLM_GE/phase1_detection/export_split.py --set final
 uv run python sota/FRED_LLM_GE/phase1_detection/export_split.py --set final --finalize
-uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py \
+uv run python -m sota.FRED_LLM_GE.phase1_detection.final_eval \
   --family dfine --name frozen_dfine --dfine-reg-max 32
 ```
 
@@ -593,7 +591,8 @@ For an evolved source, also pass its `--model network_<gene_id>` and
 `--variant_dir`. D-FINE final outputs are isolated under the final export's
 `dfine/` directory, and the evaluator refuses to repeat an existing named run.
 
-`FRED_SEED_FAMILY=dfine bash run.sh` selects the D-FINE LLM-GE configuration.
+Set `FRED_SEED_FAMILY=dfine`, generate the Slurm scripts, and submit `run.sh`
+through `sbatch` as described in the [custom-seed PACE runbook](../docs/CUSTOM_SEEDS_LLM_GE_RUN.md).
 Before submitting a generated D-FINE candidate, the controller checks its
 training loss, backward pass, and predictions on small synthetic Event frames.
 Evaluation jobs use Slurm's assigned GPU and check that CUDA works before

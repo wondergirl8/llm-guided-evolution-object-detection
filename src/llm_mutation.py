@@ -80,6 +80,18 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
         raise ValueError(f"Prompt template {fname} must contain a literal {{}} code placeholder")
     output_file = Path(output_filename)
     output_file.parent.mkdir(exist_ok=True, parents=True)
+    if globals().get('SEED_FAMILY') == 'dfine':
+        from src.fred_dfine_proposals import generate_validated_section
+        augment_idx = np.random.randint(1, len(parts))
+        txt2llm = template_txt.replace("{}", parts[augment_idx].strip(), 1)
+        generate_validated_section(
+            input_filename, output_filename, parts, augment_idx, txt2llm,
+            lambda prompt: strip_leading_imports(generate_augmented_code(
+                prompt, augment_idx - 1, apply_quality_control, top_p,
+                llm_model, temperature)), FRED_DIR,
+            attempts=globals().get('max_gen_attempts', 5))
+        print('Job Done', flush=True)
+        return
     policy = (None if globals().get('SEED_FAMILY') in ('dfine', 'yolo26_p2')
               else load_candidate_policy(globals()))
     attempts = globals().get('max_gen_attempts', 5) if policy else 1

@@ -1,4 +1,5 @@
 import os
+import shlex
 import yaml
 
 from src.cfg import constants
@@ -69,7 +70,7 @@ mkdir -p "$UV_CACHE_DIR"
 echo "Using UV cache: $UV_CACHE_DIR"
 
 export SERVER_HOSTNAME=$(hostname)
-uv run python run_improved.py {constants.OUTPUT_DIR}
+uv run python run_improved.py --checkpoints {shlex.quote(constants.OUTPUT_DIR)} --global_path {shlex.quote(constants.OUTPUT_DIR)}
 """
     replace_script_configuration("run.sh", run_sh)
 
@@ -187,7 +188,9 @@ else
     echo "Skipping island controller submission (SUBMIT_ISLAND_CONTROLLER=${{SUBMIT_ISLAND_CONTROLLER}})"
 fi
 
-uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port {constants.PORT} --workers 1
+PORT=$(uv run python -c "from src.cfg.constants import PORT; print(PORT)")
+echo "Serving on port $PORT"
+uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port $PORT --workers 1
 """
     server_config = sections.get("server-sh", "")
     replace_script_configuration("server.sh", server_config + local_llm_server)

@@ -2,10 +2,15 @@
 
 Run from the repository root on PACE. This checklist covers the shared FRED pipeline and gives working commands for the **currently configured YOLO11n Event-frame run**. Commands for a different detector family become valid only after that family's setup in [“Add another model family”](#add-another-model-family) is complete.
 
+For the separately configured YOLO26-P2 and D-FINE custom-seed searches, use
+[their dedicated PACE runbook](CUSTOM_SEEDS_LLM_GE_RUN.md). Their controller,
+proposal, and Slurm settings differ from the YOLO11 example below.
+
 | Family key | Current state | Can use the YOLO11 commands unchanged? |
 | --- | --- | --- |
 | `yolo11` | YOLO11n seed, adapter, search-space checks, and three-seed baseline runner are wired. | Yes. |
-| `dfine` | A project-owned D-FINE-inspired prototype is registered. It lacks the YOLO11-specific baseline runner and search-space policy. | No. Finish its family setup first. |
+| `yolo26_p2` | Custom YOLO26n-P2 seed, adapter, proposal validation, and tagged search are wired. Use the [custom-seed runbook](CUSTOM_SEEDS_LLM_GE_RUN.md). | No. |
+| `dfine` | A project-owned D-FINE-inspired prototype, adapter, proposal validation, and tagged search are wired. Independent baseline evidence remains separate. Use the [custom-seed runbook](CUSTOM_SEEDS_LLM_GE_RUN.md). | No. |
 | `tiny_yolo11` | Registered, but its protocol uses a smaller proxy dataset rather than the exported challenging-search split. | No, if the goal is a directly comparable FRED search. |
 | `rtdetr`, `faster_rcnn` | Seed-area files exist, but their adapter files are empty and they are not registered. | No. Finish the family setup first. |
 

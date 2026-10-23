@@ -47,3 +47,49 @@ def test_resume_rejects_missing_or_changed_fingerprint():
     with pytest.raises(RuntimeError, match="missing or mismatched"):
         protocol_fingerprint.verify_fingerprint(
             {"protocol_fingerprint": {"sha256": "different"}}, "checkpoint", expected)
+
+
+@pytest.mark.parametrize('family,adapter,proposal,prompt_group', [
+    ('yolo26_p2', 'ultralytics_yolo26_p2', 'fred_yolo26_proposals', 'FRED_YOLO26_P2'),
+    ('dfine', 'dfine', 'fred_dfine_proposals', 'FRED_DFINE'),
+])
+def test_custom_detector_resume_detects_prompt_or_operator_change(
+    tmp_path, monkeypatch, family, adapter, proposal, prompt_group,
+):
+    fred = tmp_path / 'sota/FRED_LLM_GE'
+    protocol = fred / 'configs/phase1/protocol.yaml'
+    protocol.parent.mkdir(parents=True)
+    protocol.write_text(yaml.safe_dump({
+        'families': {family: {'data': 'challenging_search'}},
+        'challenging': {'data_root': 'cache',
+                        'search': {'train_frame_step': 50, 'val_frame_step': 10}},
+    }))
+    seed = fred / 'seeds/seed.py'
+    paths = [seed, fred / 'cache/splits/challenging_train_split.txt',
+             fred / 'cache/search_train_step50/train.txt',
+             fred / 'cache/search_val_step10/train.txt',
+             tmp_path / 'run_improved.py',
+             tmp_path / 'src/cfg/constants_fred_yolo11.py',
+             tmp_path / 'src/llm_utils.py',
+             fred / 'phase1_detection/candidate_runner.py',
+             fred / 'phase1_detection/export_split.py',
+             fred / 'phase1_detection/fitness.py',
+             fred / 'phase1_detection/map_reporter.py',
+             fred / f'phase1_detection/adapters/{adapter}.py',
+             tmp_path / 'src/llm_mutation.py', tmp_path / 'src/llm_crossover.py',
+             tmp_path / f'src/{proposal}.py', tmp_path / 'slurm-config/slurm_config.yaml',
+             tmp_path / f'templates/{prompt_group}/Normal/1.txt',
+             tmp_path / 'templates/CrossOver/crossover.txt']
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('first\n')
+    monkeypatch.setattr(protocol_fingerprint.subprocess, 'run',
+                        lambda *args, **kwargs: SimpleNamespace(stdout='commit-1\n'))
+    monkeypatch.setattr(protocol_fingerprint.importlib.metadata, 'version',
+                        lambda _: 'test-version')
+    first = protocol_fingerprint.compute_fingerprint(tmp_path, family, 'tag', seed)
+    assert 'prompt:templates/CrossOver/crossover.txt' in first['files']
+    prompt = tmp_path / f'templates/{prompt_group}/Normal/1.txt'
+    prompt.write_text('second\n')
+    assert first['sha256'] != protocol_fingerprint.compute_fingerprint(
+        tmp_path, family, 'tag', seed)['sha256']

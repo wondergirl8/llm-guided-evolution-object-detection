@@ -1,13 +1,13 @@
 """Train a supported detector on FRED challenging_train and score challenging_test once.
 
-    uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_scratch
-    uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name best_evolved \\
-        --model network_<gene_id> --variant_dir <run's models dir>
-    uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py \\
+    uv run python -m sota.FRED_LLM_GE.phase1_detection.final_eval --name yolo11n_scratch
+    uv run python -m sota.FRED_LLM_GE.phase1_detection.final_eval --name best_evolved \\
+        --model network_REPLACE_ID --variant_dir fred_runs/REPLACE_TAG/candidates/models
+    uv run python -m sota.FRED_LLM_GE.phase1_detection.final_eval \\
         --family yolo26_p2 --name yolo26n_p2_scratch
-    uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --family dfine --name frozen_dfine --dfine-reg-max 32
+    uv run python -m sota.FRED_LLM_GE.phase1_detection.final_eval --family dfine --name frozen_dfine --dfine-reg-max 32
     # optional: start from COCO-pretrained weights where layers match
-    uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_coco \\
+    uv run python -m sota.FRED_LLM_GE.phase1_detection.final_eval --name yolo11n_coco \\
         --weights yolo11n.pt
 
 Training uses the dataset written by export_split.py --set final (official
