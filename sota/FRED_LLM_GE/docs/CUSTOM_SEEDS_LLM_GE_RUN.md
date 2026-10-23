@@ -20,11 +20,10 @@ HEAD` and any local `git diff`; the tagged checkpoint fingerprint includes the
 protocol, search manifests, family code, prompts, software versions, and
 generated Slurm configuration.
 
-The fixes in this workspace are currently local edits. Checking out the remote
-`fred-custom-seeds` branch alone will omit them until the intended code changes
-are committed and pushed or transferred as an exact patch. Exclude archived
-result folders and generated outputs when transferring the code. Verify the
-PACE checkout against the intended commit and patch before submitting jobs.
+The custom-seed run corrections are included in `fred-custom-seeds` starting
+with commit `3365762ca`. Update older PACE checkouts before submitting jobs.
+Keep archived result folders and generated outputs outside Git; verify the
+PACE checkout's commit and configuration before starting a tagged run.
 
 Before starting evolution, verify that the chosen stock seed has already been
 trained and evaluated independently under the intended FRED protocol, with its
