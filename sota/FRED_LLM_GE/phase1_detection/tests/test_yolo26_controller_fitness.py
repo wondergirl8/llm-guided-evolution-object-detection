@@ -336,6 +336,29 @@ def test_preflight_blocks_invalid_and_duplicate_yolo26_before_submission(
     assert controller.GLOBAL_DATA["retry"]["status"] == "running eval"
 
 
+def test_stock_yolo26_seed_passes_preflight_and_submits(
+    tmp_path, monkeypatch, yolo26_state,
+):
+    seed = candidate_runner.FRED_DIR / "seeds" / "seed_yolo26n_p2.yaml"
+    monkeypatch.setattr(controller, "SEED_NETWORK", str(seed))
+    monkeypatch.setattr(controller, "VARIANT_DIR", str(tmp_path))
+    monkeypatch.setattr(controller, "MODEL", "network")
+    (tmp_path / "network_seed.py").write_bytes(seed.read_bytes())
+    controller.GLOBAL_DATA["seed"] = {
+        "sub_flag": True, "status": "subbed file", "fitness": None,
+        "start_time": time.time(),
+    }
+    submitted = []
+    monkeypatch.setattr(controller, "submit_run", lambda gene_id: submitted.append(gene_id))
+
+    controller.check4model2run("seed")
+
+    assert submitted == ["seed"]
+    assert controller.GLOBAL_DATA["seed"]["architecture_sha256"] == (
+        candidate_runner.ADAPTERS["yolo26_p2"].architecture_hash(seed)
+    )
+
+
 def test_preflight_uses_parent_and_hashed_checkpoint_history(
     tmp_path, monkeypatch, yolo26_state,
 ):

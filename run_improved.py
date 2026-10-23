@@ -758,7 +758,8 @@ def check4model2run(gene_id):
                            if parent_id else SEED_NETWORK)
         try:
             if SEED_FAMILY == 'yolo26_p2':
-                digest = adapter.preflight(check_exist, parent_path)
+                digest = adapter.preflight(check_exist, parent_path,
+                                           stock_seed=gene_id == 'seed')
             else:
                 adapter.preflight(check_exist, protocol['proxy'])
         except ImportError:
@@ -769,7 +770,8 @@ def check4model2run(gene_id):
             return
         if SEED_FAMILY == 'yolo26_p2':
             GLOBAL_DATA[gene_id]['architecture_sha256'] = digest
-            previous = find_yolo26_duplicate(gene_id, digest, adapter)
+            previous = (find_yolo26_duplicate(gene_id, digest, adapter)
+                        if gene_id != 'seed' else None)
             if previous:
                 reject_detection_fitness(gene_id, None,
                                          f'Architecture duplicates {previous} ({digest})',

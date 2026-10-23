@@ -54,6 +54,9 @@ def test_bounded_mutation_builds_and_routing_change_is_rejected(tmp_path):
 def test_preflight_requires_one_valid_layer_edit_and_normalizes_hash(tmp_path):
     adapter = _adapter()
     seed = adapter.variant_path("network", None)
+    assert adapter.preflight(seed, seed, stock_seed=True) == adapter.architecture_hash(seed)
+    with pytest.raises(ValueError, match="exactly one layer"):
+        adapter.preflight(seed, seed)
     config = yaml.safe_load(seed.read_text())
     config["head"][8][1] = 3
     variant = tmp_path / "network_candidate.py"

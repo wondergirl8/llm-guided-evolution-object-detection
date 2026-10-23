@@ -65,8 +65,8 @@ class UltralyticsYolo26P2Adapter(UltralyticsYolo11Adapter):
         config = yaml.safe_load(Path(variant_path).read_text())
         return hashlib.sha256(json.dumps(config, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
-    def preflight(self, variant_path, parent_path):
-        """Validate one focused edit and construct the model on CPU before GPU work."""
+    def preflight(self, variant_path, parent_path, *, stock_seed=False):
+        """Validate the stock seed or one focused edit, then build on CPU."""
         config = yaml.safe_load(Path(variant_path).read_text())
         self._validate_candidate(config)
         parent = yaml.safe_load(Path(parent_path).read_text())
@@ -76,7 +76,9 @@ class UltralyticsYolo26P2Adapter(UltralyticsYolo11Adapter):
             for section in ("backbone", "head")
             for layer, previous in zip(config[section], parent[section])
         )
-        if changed_layers != 1:
+        if stock_seed and changed_layers != 0:
+            raise ValueError(f"YOLO26 stock seed must match its source; found {changed_layers} changed layers")
+        if not stock_seed and changed_layers != 1:
             raise ValueError(
                 f"YOLO26 proposal must change exactly one layer relative to its parent; "
                 f"found {changed_layers}"
