@@ -2,6 +2,7 @@
 
 import csv
 import re
+import zipfile
 from pathlib import Path
 
 from datasets import Image, load_dataset
@@ -10,23 +11,16 @@ REVISION = "980a8fa0331a8f03ffbcb30d4bf673ad439fc0fd"
 STEP_US = 33_333
 
 
-def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step=1):
-    sequence_id = int(sequence_id)
-    archive = (
-        f"hf://datasets/GabrieleMagrini/FRED@{REVISION}/"
-        f"{split}/{sequence_id}.zip"
-    )
-    rows = load_dataset(
-        "imagefolder", data_files={split: archive}, split=split,
-        streaming=True, drop_labels=True, drop_metadata=True,
-    )
-    rows = rows.cast_column("image", Image(decode=False))
+def _select_frames(sequence_id, paths):
+    """Valid event frames [(counter, path)] in time order, plus timestamp findings.
+
+    paths are dataset-streaming URLs ("...png::hf://...") or zip member names.
+    """
     candidates, rgb, bad = [], [], []
-    for row in rows:
-        path = row["image"]["path"] or ""
+    for path in paths:
         if "/RGB/" in path:
             match = re.search(
-                rf"/RGB/Video_{sequence_id}_(\d{{2}})_(\d{{2}})_(\d{{2}})\.(\d{{6}})\.jpg::",
+                rf"/RGB/Video_{sequence_id}_(\d{{2}})_(\d{{2}})_(\d{{2}})\.(\d{{6}})\.jpg(?:::|$)",
                 path,
             )
             if match and all(
@@ -41,7 +35,9 @@ def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step
             continue
         if "/Event/Frames/" not in path:
             continue
-        pattern = rf"/Event/Frames/Video_{sequence_id}_frame_(\d+)\.png::"
+        # Sequences 0-106 name frames Video_<id>_frame_<counter>.png; from 116 on
+        # they are Video_<id>_<counter>.png. The counter is the same in both.
+        pattern = rf"/Event/Frames/Video_{sequence_id}_(?:frame_)?(\d+)\.png(?:::|$)"
         match = re.search(pattern, path)
         counter = int(match[1]) if match else None
         if counter is None or counter < STEP_US or counter % STEP_US:
@@ -65,6 +61,10 @@ def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step
         gap = current - previous
         if not STEP_US / 2 <= gap <= STEP_US * 1.5:
             bad.append((path, "rgb_interval_mismatch", STEP_US, gap))
+    return frames, bad
+
+
+def _write_report(bad_timestamps_path, split, sequence_id, bad):
     report = Path(
         bad_timestamps_path or Path(__file__).with_name("bad_timestamps.csv")
     )
@@ -75,11 +75,47 @@ def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step
             "expected", "observed",
         ))
         writer.writerows((split, sequence_id, *finding) for finding in bad)
+
+
+def stream_event_frames(split, sequence_id, bad_timestamps_path=None, frame_step=1):
+    sequence_id = int(sequence_id)
+    archive = (
+        f"hf://datasets/GabrieleMagrini/FRED@{REVISION}/"
+        f"{split}/{sequence_id}.zip"
+    )
+    rows = load_dataset(
+        "imagefolder", data_files={split: archive}, split=split,
+        streaming=True, drop_labels=True, drop_metadata=True,
+    )
+    rows = rows.cast_column("image", Image(decode=False))
+    frames, bad = _select_frames(
+        sequence_id, (row["image"]["path"] or "" for row in rows))
+    _write_report(bad_timestamps_path, split, sequence_id, bad)
     # frame_step > 1 decodes only every Nth valid frame (timestamp checks above
     # still cover the whole sequence).
     for counter, path in frames[::frame_step]:
         image = Image().decode_example({"path": path, "bytes": None})
         yield image, counter / 1_000_000
+
+
+def zip_event_frames(zip_path, split, sequence_id, bad_timestamps_path=None, frame_step=1):
+    """Same frames and checks as stream_event_frames, from a downloaded <id>.zip.
+
+    Downloading a sequence whole is much faster than streaming its frames.
+    """
+    from PIL import Image as PILImage
+
+    sequence_id = int(sequence_id)
+    with zipfile.ZipFile(zip_path) as archive:
+        # Skip directory entries such as <id>/RGB/, which streaming never lists.
+        members = [name for name in archive.namelist() if not name.endswith("/")]
+        frames, bad = _select_frames(sequence_id, members)
+        _write_report(bad_timestamps_path, split, sequence_id, bad)
+        for counter, name in frames[::frame_step]:
+            with archive.open(name) as file:
+                image = PILImage.open(file)
+                image.load()
+            yield image, counter / 1_000_000
 
 
 if __name__ == "__main__":

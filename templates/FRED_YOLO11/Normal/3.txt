@@ -1,0 +1,8 @@
+Make this section of a YOLO11n model YAML more parameter-efficient while keeping or improving its ability to find small drones in event-camera frames.
+
+Fewer parameters is part of the fitness score, so prefer changes that do more with the same or fewer weights, such as lighter block types or fewer channels where they matter least.
+
+The current section:
+```yaml
+{}
+```

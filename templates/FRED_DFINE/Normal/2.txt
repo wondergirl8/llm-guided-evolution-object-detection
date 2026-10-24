@@ -1,0 +1,7 @@
+Improve multiscale feature quality for small Event-frame objects in this class.
+Preserve all tensor shapes and the protected distribution-refinement contract.
+
+Current class:
+```python
+{}
+```

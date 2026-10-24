@@ -1,9 +1,13 @@
-"""LLM-GE configuration for the project-owned FRED YOLO11 seed.
+"""LLM-GE configuration for the FRED event-only drone detector seeds.
 
 Paths are derived from this checkout so the same configuration can be used on
-a laptop or on PACE ICE. The seed is Ruhi's event-only DroneDetector
-(sota/FRED_LLM_GE/seeds/seed_yolo11.py); candidates are trained and scored by
-train_eval.py, which writes SOTA_ROOT/results/<gene_id>_results.csv.
+a laptop or on PACE ICE. SEED_FAMILY picks the seed: "yolo11" evolves the
+Ultralytics YOLO11n model YAML (sota/FRED_LLM_GE/seeds/seed_yolo11n.yaml);
+"tiny_yolo11" evolves Ruhi's tutorial-sized DroneDetector
+(sota/FRED_LLM_GE/seeds/seed_yolo11.py); "dfine" selects the Event-only
+D-FINE-inspired seed. Every family is trained and
+scored by phase1_detection/candidate_runner.py under
+configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.csv.
 """
 
 import math
@@ -12,23 +16,56 @@ import platform
 
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-SOTA_ROOT = os.path.join(
-    ROOT_DIR, "sota", "FRED_LLM_GE", "phase1_detection", "seeds", "yolo11"
-)
-DATA_PATH = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "phase0_data")
-SEED_NETWORK = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_yolo11.py")
+FRED_DIR = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE")
+SEED_FAMILY = os.getenv("FRED_SEED_FAMILY", "yolo11")
+_FAMILIES = {
+    # SOTA_ROOT holds models/, results/ and trained_models/ for the family.
+    "yolo11": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ultralytics_yolo11"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11n.yaml"),
+        "prompt_group": "FRED_YOLO11/Normal",
+        "rules": "templates/FRED_YOLO11/ConstantRules.txt",
+        # 80 epochs of YOLO11n at 1280 can outlast the 40 min default; the
+        # evaluation job itself is limited to 4 h.
+        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+    },
+    "tiny_yolo11": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo11"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11.py"),
+        "prompt_group": "FRED/Normal",
+        "rules": "templates/FRED/ConstantRules.txt",
+        "eval_timeout": 40 * 60,
+    },
+    "dfine": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "dfine"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_dfine.py"),
+        "prompt_group": "FRED_DFINE/Normal",
+        "rules": "templates/FRED_DFINE/ConstantRules.txt",
+        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+    },
+}
+_FAMILY = _FAMILIES[SEED_FAMILY]
+# Event frames candidates train on: unset for FRED's released frames, or a tag
+# such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
+# keeps its genes, results, outputs and checkpoints apart from the released run.
+FRED_EVENTS = os.getenv("FRED_EVENTS", "")
+_RUN_SUFFIX = f"_{FRED_EVENTS}" if FRED_EVENTS else ""
+SOTA_ROOT = _FAMILY["sota_root"] + _RUN_SUFFIX
+DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
+SEED_NETWORK = _FAMILY["seed"]
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
-TRAIN_FILE = os.path.join(SOTA_ROOT, "train_eval.py")
+TRAIN_FILE = os.path.join(FRED_DIR, "phase1_detection", "candidate_runner.py")
 
 # run_improved.py resolves the prompt glob against ROOT_DIR and loads the
 # domain rules separately. Keep rules outside the selectable prompt glob.
-DEFAULT_PROMPT_GROUP = "FRED/Normal"
+DEFAULT_PROMPT_GROUP = _FAMILY["prompt_group"]
 PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
-CONSTANT_RULES_PATH = "templates/FRED/ConstantRules.txt"
+CONSTANT_RULES_PATH = _FAMILY["rules"]
 
-OUTPUT_DIR = os.path.join(ROOT_DIR, "fred_yolo11_output")
+OUTPUT_DIR = os.path.join(ROOT_DIR, ("fred_dfine_output" if SEED_FAMILY == "dfine"
+                                     else "fred_yolo11_output") + _RUN_SUFFIX)
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
 SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
@@ -44,7 +81,8 @@ MODEL_PATH = os.getenv(
     "LLMGE_MODEL_PATH",
     "/storage/ice-shared/vip-vvk/llm_storage/meta-llama/Llama-3.3-70B-Instruct/",
 )
-LLM_MAX_NEW_TOKENS = int(os.getenv("LLM_MAX_NEW_TOKENS", "1648"))
+LLM_MAX_NEW_TOKENS = int(os.getenv(
+    "LLM_MAX_NEW_TOKENS", "4096" if SEED_FAMILY == "dfine" else "1648"))
 LLM_MODEL = os.getenv("LLMGE_LLM_MODEL", "mixtral")
 LLM_QWEN = "qwen25"
 LLM_MIXTRAL = "mixtral"
@@ -68,13 +106,15 @@ DELAYED_CHECK = not LOCAL
 MACOS = platform.system() == "Darwin"
 RUNLINE_AMP = ""
 EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
-    os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(40 * 60))
+    os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(_FAMILY["eval_timeout"]))
 )
 
-# The generated candidate is named network_<gene_id>.py. The trainer must
-# accept --model and --variant_dir and write results/<gene_id>_results.csv.
+# The generated candidate is named network_<gene_id>.py. The runner trains
+# and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
-EVAL_RUNLINE = "uv run python {} --model {} --variant_dir {VARIANT_DIR}"
+EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
+                "--model {} --variant_dir {VARIANT_DIR}"
+                + (f" --events {FRED_EVENTS}" if FRED_EVENTS else ""))
 
 SLURM_MIXT_INPUT_X = SEED_NETWORK
 SLURM_MIXT_INPUT_Y = os.path.join(VARIANT_DIR, "network_x.py")
@@ -83,7 +123,8 @@ SLURM_MIXT_TOP_P = 0.15
 SLURM_MIXT_TEMPERATURE = 0.1
 SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
-ISLAND_CONTROLLER_RUN_NAME = "fred_yolo11_islands"
+ISLAND_CONTROLLER_RUN_NAME = ("fred_dfine_islands" if SEED_FAMILY == "dfine"
+                              else "fred_yolo11_islands") + _RUN_SUFFIX
 ISLAND_CONTROLLER_NUM_ISLANDS = 1
 ISLAND_CONTROLLER_LLMS = LLM_MODEL
 ISLAND_CONTROLLER_PROMPT_GROUPS = DEFAULT_PROMPT_GROUP
@@ -100,10 +141,10 @@ FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
-# run_improved.py loops range(1, num_generations). This is set high so a run
-# keeps evolving until its Slurm time limit; resubmitting resumes from the
-# latest checkpoint in fred_yolo11_checkpoints.
-num_generations = 1000
+# run_improved.py loops range(1, num_generations), so 21 runs generations
+# 1-20 after the seed population. Resubmitting resumes from the latest
+# checkpoint in fred_yolo11_checkpoints.
+num_generations = 21
 start_population_size = 4
 population_size = 4
 crossover_probability = 0.5
