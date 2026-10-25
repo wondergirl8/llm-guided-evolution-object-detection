@@ -17,7 +17,7 @@ The formal Phase 1 plan puts alternate raw representations outside its initial f
 | `phase1_detection/bn_snn_search_space.py` | Parses Python syntax without executing candidate code. Rejects changed protected code, extra statements, calls, unsupported widths/depths and marker corruption. Builds and checks SSD output shapes, computes graph identity, rejects no-op edits and supplies the existing cache interface. |
 | `templates/FRED_BNSNN/` | Mutation/crossover instructions for Python assignments, not YOLO YAML. Retry feedback uses the existing shared operators; training and neuron definitions cannot be changed by a response. |
 | `.gitignore` | Excludes the derived raw-event cache from source control. |
-| `phase1_detection/bn_snn_data.py` | Prepares a separate raw-event cache; preserves annotation times, boxes and sample IDs from the existing search export. Uses the existing timestamp parser and ECF decoder. Loads events through bounded memory maps and bins counts on demand. |
+| `phase1_detection/bn_snn_data.py` | Prepares a separate raw-event cache; preserves annotation times, boxes and sample IDs from the existing search export. Uses the existing timestamp parser and ECF decoder. Stores only the raw events inside annotated search windows, then loads those events through bounded memory maps and bins counts on demand. |
 | `phase1_detection/seeds/bn_snn/detection.py` | Frozen SSD anchors, box encoding/decoding, IoU assignment and multibox loss. The original backbone did not supply a trainable detection objective or decoded boxes. |
 | `phase1_detection/adapters/bn_snn.py` | Builds, trains and predicts through `FamilyAdapter`. Microbatches limit temporal activation memory; loss weighting preserves the effective optimizer batch. Prediction returns pixel `xyxy` boxes and drone confidence. |
 | `phase1_detection/candidate_runner.py` | Registers BN-SNN in both import modes, dispatches raw-event loading, supports spatial dimensions at the end of either 4-D images or 5-D event tensors, and records BN-SNN recipe, raw-manifest identity and duration. Existing shared scoring and failure sentinels remain in use. |
@@ -47,7 +47,7 @@ A graph hash describes the instantiated architecture, excluding random weights a
 | Event window | 33,333 µs, matching the existing released-frame window. Both endpoints are open. |
 | Temporal bins | Four fixed equal-duration bins, covering two complete periods of the current period-two BIF gates. Provisional cost/temporal-detail choice. |
 | Encoding | Separate negative/positive event **counts**, not `/255` images or binary occupancy. Silent bins remain zero. |
-| Epochs, effective batch, seed | Shared `challenging.search.epochs` (currently 20), `proxy.batch_size` (16), `proxy.seed` (0). Each baseline/candidate uses this recipe. |
+| Epochs, effective batch, seed | BN-SNN-specific `families.bn_snn.training.epochs` (currently 8), shared `proxy.batch_size` (16), `proxy.seed` (0). Each BN-SNN baseline/candidate uses this recipe; other families retain `challenging.search.epochs` (currently 20). |
 | Optimizer | Explicit AdamW, lr 0.001, weight decay 0.0001, gradient norm clip 1.0. A starting recipe for this directly trained prototype, not a tuned or paper-reproduced recipe. |
 | Microbatch | 1, with gradient accumulation to the effective batch. BatchNorm observes microbatches/time steps, not the accumulated batch of 16. |
 | AMP / augmentation | Disabled / none. No Ultralytics AMP probe, pretrained weights, or image-color augmentation. |
@@ -56,7 +56,7 @@ A graph hash describes the instantiated architecture, excluding random weights a
 | Postprocessing | Shared confidence/NMS thresholds; top 1,000 before NMS, at most 300 output detections. Shared COCO evaluator retains its existing maxDet=100 metric definition. |
 | Evolution objectives | Existing mAP50, mAP50:95 and parameter count. Firing activity is not an energy measurement and is not an added fitness objective. |
 
-Changing temporal bins, optimizer, anchors or source code requires a new baseline and fresh evolutionary tag. Adding this protocol section also changes the existing whole-protocol fingerprint: old checkpoints cannot be resumed under this edited protocol. Preserve the original checkout/protocol when resuming an old experiment.
+Changing epochs, temporal bins, optimizer, anchors or source code requires a new baseline and fresh evolutionary tag. Adding this protocol section also changes the existing whole-protocol fingerprint: old checkpoints cannot be resumed under this edited protocol. Preserve the original checkout/protocol when resuming an old experiment.
 
 ## 1. Local checks before using GPUs
 
@@ -77,13 +77,42 @@ uv run python -m sota.FRED_LLM_GE.phase1_detection.candidate_runner --help
 
 First complete the existing checklist's search export and finalize step. BN-SNN reuses its `done/*.json` labels, sequence membership and subsampled annotation times. It does **not** use the exported images as input. This choice avoids creating a second, inconsistent label parser.
 
-Use CPU allocations with sufficient memory to decode one raw sequence. For example, within an existing allocation:
+Use CPU allocations with sufficient memory to decode one raw sequence. Keep Hugging Face's disposable cache on node-local storage rather than home. For example, submit all eight shards with:
 
 ```bash
-uv run python -m sota.FRED_LLM_GE.phase1_detection.bn_snn_data --shard 0 --num-shards 8
+mkdir -p run_job_outputs/raw_events
+sbatch --array=0-7 -c 4 --mem=64G -t 4:00:00 \
+  --output=run_job_outputs/raw_events/raw-%A_%a.out \
+  --wrap 'module load uv
+export HF_HUB_CACHE=/tmp/$USER/huggingface-$SLURM_JOB_ID/hub
+export HF_XET_CACHE=/tmp/$USER/huggingface-$SLURM_JOB_ID/xet
+export HF_HUB_DISABLE_XET=1
+export UV_CACHE_DIR=/tmp/$USER/uv-cache-$SLURM_JOB_ID
+mkdir -p "$HF_HUB_CACHE" "$HF_XET_CACHE" "$UV_CACHE_DIR"
+uv run python -m sota.FRED_LLM_GE.phase1_detection.bn_snn_data \
+  --shard "$SLURM_ARRAY_TASK_ID" --num-shards 8'
 ```
 
-Run shards **0 through 7**, each once, using the same `--num-shards 8`. These are eight separate commands/jobs, not eight repeated calls to shard 0. Raw downloads need HF access. Preparation writes only the new `families.bn_snn.raw_cache`, never raw source archives or the existing image export.
+Run shards **0 through 7**, each once, using the same `--num-shards 8`. Raw downloads need HF access. Preparation writes only the new `families.bn_snn.raw_cache`, never raw source archives or the existing image export.
+
+Cache format `annotated_windows_v1` retains each event tuple `(x,y,p,t)` within every configured 33,333-microsecond sample window and records exact per-sample offsets. It omits events that no search sample can read. Temporal binning still happens lazily during training, so this is raw-event input rather than a cache of rendered PNGs or fixed voxel grids.
+
+Repositories that started with the older full-sequence `.npy` cache can convert and resume without redownloading completed sequences. Run the conversion as one job first so each old file is removed before the next is converted:
+
+```bash
+sbatch -c 4 --mem=64G -t 4:00:00 \
+  --output=run_job_outputs/raw_events/compact-resume-%j.out \
+  --wrap 'module load uv
+export HF_HUB_CACHE=/tmp/$USER/huggingface-$SLURM_JOB_ID/hub
+export HF_XET_CACHE=/tmp/$USER/huggingface-$SLURM_JOB_ID/xet
+export HF_HUB_DISABLE_XET=1
+export UV_CACHE_DIR=/tmp/$USER/uv-cache-$SLURM_JOB_ID
+mkdir -p "$HF_HUB_CACHE" "$HF_XET_CACHE" "$UV_CACHE_DIR"
+uv run python -m sota.FRED_LLM_GE.phase1_detection.bn_snn_data \
+  --shard 0 --num-shards 1'
+```
+
+For every completed sequence this writes `SEQUENCE.windows.npy`, atomically updates its JSON index, and only then deletes the old `SEQUENCE.npy`. It then downloads and prepares any missing sequences. The operation is resumable after interruption.
 
 After all shards succeed:
 
@@ -91,7 +120,7 @@ After all shards succeed:
 uv run python -m sota.FRED_LLM_GE.phase1_detection.bn_snn_data --finalize
 ```
 
-Expect the same search membership/window counts as the existing export (currently train 152 sequences / 10,053 windows and val 20 sequences / 6,733 windows). Finalize checks cached file hashes; preparation reports timestamp findings in `raw_cache/bad_timestamps_<sequence>.csv`. Missing or stale inputs cause an error. Rerunning a completed shard verifies and reuses its cache. This cache holds uncompressed events: check available disk and per-sequence decoding memory before exporting the full dataset. Capacity and GPU throughput have not yet been profiled.
+Expect the same search membership/window counts as the existing export (currently train 152 sequences / 10,053 windows and val 20 sequences / 6,733 windows). Finalize checks cached file hashes, the cache format and the configured window duration; preparation reports timestamp findings in `raw_cache/bad_timestamps_<sequence>.csv`. Missing or stale inputs cause an error. Rerunning a completed shard verifies and reuses its cache. Selected event tuples are uncompressed, while events outside the sampled search windows are discarded because training cannot read them. Check per-sequence decoding memory and final cache size before starting GPU work.
 
 Training reads the prepared cache and labels without downloading data. Memory maps are read-only. Treat finalized event files as immutable; after any intentional cache changes, rerun finalize and start a fresh experiment.
 
@@ -128,7 +157,7 @@ After the baseline is validated, use the existing server/run workflow. These exa
 ```bash
 export FRED_SEED_FAMILY=bn_snn
 export FRED_RUN_TAG=bn_snn_20261024_eot0_trial1
-export FRED_NUM_GENERATIONS=21
+export FRED_NUM_GENERATIONS=12
 unset FRED_EVENTS
 export LLMGE_PORT=8487
 export SUBMIT_ISLAND_CONTROLLER=0
@@ -144,7 +173,7 @@ export LLMGE_SERVER_JOB_ID=YOUR_SERVER_JOB_ID
 sbatch --parsable run.sh
 ```
 
-Tagged state goes under `fred_runs/$FRED_RUN_TAG/`; BN-SNN requires the tag so the shell script's historical YOLO checkpoint fallback is not used. The existing controller includes the stock seed in generation 0 and attempts eight distinct successful graphs. With `FRED_NUM_GENERATIONS=21`, checkpoints are 0 through 20. Server/evaluation time limits still apply; an initial integration does not guarantee completion in one allocation.
+Tagged state goes under `fred_runs/$FRED_RUN_TAG/`; BN-SNN requires the tag so the shell script's historical YOLO checkpoint fallback is not used. The existing controller includes the stock seed in generation 0 and attempts eight distinct successful graphs. With `FRED_NUM_GENERATIONS=12`, checkpoints are 0 through 11. Server/evaluation time limits still apply; an initial integration does not guarantee completion in one allocation.
 
 ## Validation and remaining evidence
 

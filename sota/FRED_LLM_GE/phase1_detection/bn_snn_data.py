@@ -25,6 +25,7 @@ from fred_stream import _select_frames, _write_report
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 PROTOCOL = FRED_DIR / 'configs/phase1/protocol.yaml'
+RAW_CACHE_FORMAT = 'annotated_windows_v1'
 
 
 def digest(path):
@@ -51,18 +52,89 @@ def search_parts(protocol):
     return dataset_parts(challenging, FRED_DIR / challenging['data_root'], 'search')
 
 
-def prepare_sequence(source, sequence, folder, cache):
+def _window_bounds(events, records, window_us):
+    times = events['t']
+    return [(int(np.searchsorted(times, record['end_us'] - window_us, side='right')),
+             int(np.searchsorted(times, record['end_us'], side='left')))
+            for record in records]
+
+
+def write_window_events(events, records, destination, window_us):
+    """Atomically store only each annotated sample's event window.
+
+    Offsets keep samples independent even if future protocols use overlapping
+    windows.  open_memmap writes incrementally instead of copying every selected
+    event into RAM a second time.
+    """
+    validate_events(events)
+    bounds = _window_bounds(events, records, window_us)
+    temporary = destination.with_suffix(f'.{os.getpid()}.tmp')
+    selected_count = sum(hi - lo for lo, hi in bounds)
+    if selected_count:
+        output = np.lib.format.open_memmap(temporary, mode='w+', dtype=events.dtype,
+                                           shape=(selected_count,))
+    else:
+        with temporary.open('wb') as stream:
+            np.save(stream, np.empty(0, dtype=events.dtype), allow_pickle=False)
+        output = np.load(temporary, mmap_mode='r+', allow_pickle=False)
+    enriched, offset = [], 0
+    try:
+        for record, (lo, hi) in zip(records, bounds):
+            stop = offset + hi - lo
+            output[offset:stop] = events[lo:hi]
+            enriched.append(dict(record, event_start=offset, event_stop=stop))
+            offset = stop
+        output.flush()
+    finally:
+        del output
+    temporary.replace(destination)
+    return enriched
+
+
+def _valid_window_index(index, source_hash, destination, window_us):
+    if not (index.get('cache_format') == RAW_CACHE_FORMAT
+            and index.get('source_sha256') == source_hash
+            and index.get('revision') == REVISION
+            and index.get('window_us') == window_us
+            and destination.is_file()
+            and index.get('events_sha256') == digest(destination)):
+        return False
+    event_count = len(np.load(destination, mmap_mode='r', allow_pickle=False))
+    return all(0 <= record.get('event_start', -1) <= record.get('event_stop', -1) <= event_count
+               for record in index.get('records', ()))
+
+
+def prepare_sequence(source, sequence, folder, cache, window_us):
     marker = source / 'done' / f'{sequence}.json'
     annotation = json.loads(marker.read_text())
-    destination = cache / f'{sequence}.npy'
+    legacy_destination = cache / f'{sequence}.npy'
+    destination = cache / f'{sequence}.windows.npy'
     index_path = cache / f'{sequence}.json'
     source_hash = digest(marker)
     if index_path.is_file():
         index = json.loads(index_path.read_text())
-        if (index['source_sha256'] != source_hash or index['revision'] != REVISION
-                or index['events_sha256'] != digest(destination)):
+        if _valid_window_index(index, source_hash, destination, window_us):
+            legacy_destination.unlink(missing_ok=True)
+            return
+        # Migrate the original full-sequence cache without another download.
+        if (index.get('cache_format') is None
+                and index.get('source_sha256') == source_hash
+                and index.get('revision') == REVISION
+                and legacy_destination.is_file()
+                and index.get('events_sha256') == digest(legacy_destination)):
+            events = np.load(legacy_destination, mmap_mode='r', allow_pickle=False)
+            try:
+                records = write_window_events(events, index['records'], destination, window_us)
+            finally:
+                if getattr(events, '_mmap', None) is not None:
+                    events._mmap.close()
+            atomic_json(index_path, dict(index, cache_format=RAW_CACHE_FORMAT,
+                window_us=window_us, events_file=destination.name,
+                events_sha256=digest(destination), records=records))
+            legacy_destination.unlink()
+            return
+        else:
             raise ValueError(f'stale/corrupt raw cache {index_path}; use a fresh cache directory')
-        return
     if annotation['sequence'] != sequence or annotation['hf_folder'] != folder:
         raise ValueError(f'annotation identity mismatch: {marker}')
     if annotation['size'] != [1280, 720]:
@@ -80,14 +152,12 @@ def prepare_sequence(source, sequence, folder, cache):
                 times[frame] = timestamp
             with tempfile.TemporaryDirectory(dir=cache) as temporary:
                 events = load_events(archive.extract(f'{sequence}/Event/events.hdf5', temporary))
-            validate_events(events)
-            temporary = destination.with_suffix(f'.{os.getpid()}.tmp')
-            with temporary.open('wb') as stream:
-                np.save(stream, events, allow_pickle=False)
-            temporary.replace(destination)
     records = [dict(record, end_us=times[record['frame_index']]) for record in annotation['records']]
+    records = write_window_events(events, records, destination, window_us)
     atomic_json(index_path, dict(sequence=sequence, folder=folder, revision=REVISION,
-        source_sha256=source_hash, events_sha256=digest(destination), size=annotation['size'], records=records))
+        cache_format=RAW_CACHE_FORMAT, window_us=window_us, events_file=destination.name,
+        source_sha256=source_hash, events_sha256=digest(destination),
+        size=annotation['size'], records=records))
 
 
 def validate_events(events):
@@ -130,16 +200,20 @@ class LazyEvents:
         self.events = lru_cache(maxsize=2)(self._open)
 
     def _open(self, sequence):
-        return np.load(self.cache / f'{sequence}.npy', mmap_mode='r', allow_pickle=False)
+        return np.load(self.cache / f'{sequence}.windows.npy', mmap_mode='r', allow_pickle=False)
 
     def __len__(self):
         return len(self.records)
 
     def __getitem__(self, index):
         indices = range(*index.indices(len(self))) if isinstance(index, slice) else index
-        return torch.stack([voxelize(self.events(self.records[int(i)]['sequence']),
-            self.records[int(i)]['end_us'], self.settings['window_us'], self.settings['time_steps'],
-            self.shape[-1], self.shape[-2]) for i in indices])
+        samples = []
+        for i in indices:
+            record = self.records[int(i)]
+            events = self.events(record['sequence'])[record['event_start']:record['event_stop']]
+            samples.append(voxelize(events, record['end_us'], self.settings['window_us'],
+                                    self.settings['time_steps'], self.shape[-1], self.shape[-2]))
+        return torch.stack(samples)
 
 
 def load_search(protocol):
@@ -160,7 +234,10 @@ def load_search(protocol):
             index = json.loads(index_path.read_text())
             if (index['source_sha256'] != digest(source / 'done' / f'{sequence}.json')
                     or index['revision'] != REVISION or index['sequence'] != sequence
-                    or index['folder'] != folder or index['size'] != [1280, 720]):
+                    or index['folder'] != folder or index['size'] != [1280, 720]
+                    or index.get('cache_format') != RAW_CACHE_FORMAT
+                    or index.get('window_us') != temporal['window_us']
+                    or index.get('events_file') != f'{sequence}.windows.npy'):
                 raise ValueError(f'stale raw event index: {index_path}')
             expected[sequence] = digest(index_path)
             records.extend(dict(r, sequence=sequence, folder=folder) for r in index['records'])
@@ -171,7 +248,7 @@ def load_search(protocol):
             boxes=boxes, orig_boxes=boxes, orig_size=(1280, 720),
             sample_ids=[f"{r['folder']}/{r['sequence']}:{r['frame_index']}" for r in records],
             manifest_sha256=digest(cache / f'{name}_manifest.json')))
-    proxy = dict(protocol['proxy'], epochs=protocol['challenging']['search']['epochs'],
+    proxy = dict(protocol['proxy'], epochs=settings['training']['epochs'],
         train_sequences=[s for s, _ in parts[0][1]], val_sequences=[s for s, _ in parts[1][1]],
         frame_step=parts[0][2], val_frame_step=parts[1][2])
     if proxy['img_width'] != 1280:
@@ -189,7 +266,9 @@ def main():
     if not 0 <= args.shard < args.num_shards:
         parser.error('require 0 <= shard < num-shards')
     protocol = yaml.safe_load(args.protocol.read_text())
-    cache = FRED_DIR / protocol['families']['bn_snn']['raw_cache']
+    settings = protocol['families']['bn_snn']
+    cache = FRED_DIR / settings['raw_cache']
+    window_us = settings['events']['window_us']
     offset = 0
     for name, (source, sequences, _) in zip(('train', 'val'), search_parts(protocol)):
         manifest = {}
@@ -198,11 +277,14 @@ def main():
                 index_path = cache / f'{sequence}.json'
                 index = json.loads(index_path.read_text())
                 if (index['source_sha256'] != digest(source / 'done' / f'{sequence}.json')
-                        or index['events_sha256'] != digest(cache / f'{sequence}.npy')):
+                        or index.get('cache_format') != RAW_CACHE_FORMAT
+                        or index.get('window_us') != window_us
+                        or index.get('events_file') != f'{sequence}.windows.npy'
+                        or index['events_sha256'] != digest(cache / index['events_file'])):
                     raise ValueError(f'stale/corrupt cache: {index_path}')
                 manifest[sequence] = digest(index_path)
             elif offset % args.num_shards == args.shard:
-                prepare_sequence(source, sequence, folder, cache)
+                prepare_sequence(source, sequence, folder, cache, window_us)
                 print(f'Prepared {folder}/{sequence}', flush=True)
             offset += 1
         if args.finalize:

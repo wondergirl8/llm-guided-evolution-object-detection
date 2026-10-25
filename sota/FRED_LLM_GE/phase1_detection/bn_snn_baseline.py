@@ -39,7 +39,7 @@ def validate(root, seed):
             or metadata['input_representation'] != 'raw_event_temporal_counts'
             or args['initialization'] != 'scratch' or args['proxy']['seed'] != seed
             or args['family_settings'] != protocol['families']['bn_snn']
-            or args['proxy']['epochs'] != protocol['challenging']['search']['epochs']
+            or args['proxy']['epochs'] != protocol['families']['bn_snn']['training']['epochs']
             or any(args['proxy'][k] != protocol['proxy'][k]
                    for k in ('batch_size', 'img_width', 'eval_conf', 'nms_iou'))):
         raise ValueError(f'baseline provenance mismatch: {root}')
