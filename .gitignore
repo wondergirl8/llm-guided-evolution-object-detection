@@ -77,3 +77,6 @@ hostname.log
 fred_yolo11_checkpoints/
 fred_yolo11_output/
 run_job_outputs/
+
+# BN-SNN derived raw-event cache (rebuild with bn_snn_data).
+sota/FRED_LLM_GE/phase1_detection/seeds/bn_snn/raw_cache/

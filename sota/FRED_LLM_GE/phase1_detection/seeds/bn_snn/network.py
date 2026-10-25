@@ -19,7 +19,6 @@ from typing import Iterable
 
 import torch
 from torch import Tensor, nn
-from torch.nn import functional as F
 
 
 class SurrogateSpike(torch.autograd.Function):
@@ -155,17 +154,23 @@ class SpikingResidualBlock(nn.Module):
 class SpikingResNet(nn.Module):
     """Compact ResNet backbone returning three multiscale spike feature maps."""
 
-    def __init__(self, in_channels: int = 2, base_channels: int = 32):
+    def __init__(self, in_channels: int = 2, base_channels: int = 32,
+                 stage_depths=(2, 2, 2, 2)):
         super().__init__()
         self.stem = nn.Sequential(
             nn.Conv2d(in_channels, base_channels, 7, stride=2, padding=3, bias=False),
             nn.BatchNorm2d(base_channels),
         )
         self.stem_neuron = BIFPair(base_channels)
-        self.stage1 = nn.Sequential(SpikingResidualBlock(base_channels, base_channels), SpikingResidualBlock(base_channels, base_channels))
-        self.stage2 = nn.Sequential(SpikingResidualBlock(base_channels, base_channels * 2, stride=2), SpikingResidualBlock(base_channels * 2, base_channels * 2))
-        self.stage3 = nn.Sequential(SpikingResidualBlock(base_channels * 2, base_channels * 4, stride=2), SpikingResidualBlock(base_channels * 4, base_channels * 4))
-        self.stage4 = nn.Sequential(SpikingResidualBlock(base_channels * 4, base_channels * 8, stride=2), SpikingResidualBlock(base_channels * 8, base_channels * 8))
+        if len(stage_depths) != 4 or any(type(d) is not int or d < 1 for d in stage_depths):
+            raise ValueError("stage_depths must contain four positive integers")
+        previous = base_channels
+        for index, depth in enumerate(stage_depths):
+            channels = base_channels * 2 ** index
+            blocks = [SpikingResidualBlock(previous, channels, stride=1 if index == 0 else 2)]
+            blocks.extend(SpikingResidualBlock(channels, channels) for _ in range(depth - 1))
+            setattr(self, f"stage{index + 1}", nn.Sequential(*blocks))
+            previous = channels
 
     def reset_state(self) -> None:
         for module in self.modules():
@@ -174,15 +179,13 @@ class SpikingResNet(nn.Module):
 
     def forward(self, x: Tensor, time_index: int) -> list[Tensor]:
         x = self.stem_neuron(self.stem(x), time_index)
-        x = self.stage1[0](x, time_index)
-        x = self.stage1[1](x, time_index)
-        f2 = self.stage2[0](x, time_index)
-        f2 = self.stage2[1](f2, time_index)
-        f3 = self.stage3[0](f2, time_index)
-        f3 = self.stage3[1](f3, time_index)
-        f4 = self.stage4[0](f3, time_index)
-        f4 = self.stage4[1](f4, time_index)
-        return [f2, f3, f4]
+        features = []
+        for index in range(1, 5):
+            for block in getattr(self, f"stage{index}"):
+                x = block(x, time_index)
+            if index > 1:
+                features.append(x)
+        return features
 
 
 class SSDDetectionHead(nn.Module):
@@ -213,13 +216,15 @@ class BNSNN(nn.Module):
     """Complete temporal BN-SNN detector.
 
     Input shape is ``[B,T,2,H,W]`` as emitted by ``dataset.py``. The SSD head
-    returns time-aggregated predictions while ``firing_rate`` exposes the mean
-    binary activity for the energy-efficiency metric used in Step 3.
+    returns time-aggregated predictions. ``firing_rate`` is a diagnostic mean
+    binary activity, not measured energy or an evolution fitness objective.
     """
 
-    def __init__(self, num_classes: int, *, in_channels: int = 2, base_channels: int = 32, anchors_per_location: int = 4):
+    def __init__(self, num_classes: int, *, in_channels: int = 2, base_channels: int = 32, anchors_per_location: int = 4,
+                 stage_depths=(2, 2, 2, 2)):
         super().__init__()
-        self.backbone = SpikingResNet(in_channels=in_channels, base_channels=base_channels)
+        self.backbone = SpikingResNet(in_channels=in_channels, base_channels=base_channels,
+                                      stage_depths=stage_depths)
         self.head = SSDDetectionHead([base_channels * 2, base_channels * 4, base_channels * 8], num_classes, anchors_per_location)
         self._spike_sum = 0.0
         self._spike_count = 0
@@ -241,8 +246,9 @@ class BNSNN(nn.Module):
         return self._spike_sum / max(self._spike_count, 1)
 
     def forward(self, events: Tensor) -> dict[str, Tensor | float]:
-        if events.ndim != 5:
-            raise ValueError("events must have shape [B,T,C,H,W]")
+        if (events.ndim != 5 or events.shape[1] < 2 or events.shape[2] != 2
+                or min(events.shape[-2:]) < 32 or not events.is_floating_point()):
+            raise ValueError("events must be floating [B,T>=2,2,H>=32,W>=32]")
         self.reset_state()
         location_steps: list[Tensor] = []
         confidence_steps: list[Tensor] = []
