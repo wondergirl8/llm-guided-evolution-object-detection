@@ -34,6 +34,17 @@ def compute_fingerprint(root, family, run_tag, seed_path):
             files[name] = fred_root / "phase1_detection" / name
         for name in ("data/fred_events.py", "data/fred_stream.py", "configs/phase0/default.yaml"):
             files[name] = fred_root / name
+    if family == "ems_yolo":
+        for name in ("candidate_runner.py", "ems_yolo_search_space.py",
+                     "adapters/ems_yolo.py", "seeds/ems_yolo/network.py",
+                     "seeds/ems_yolo/detection.py", "ems_yolo_baseline.py",
+                     "map_reporter.py", "fitness.py", "result_contract.py",
+                     "proxy_data.py", "fred_splits.py", "export_split.py"):
+            files[name] = fred_root / "phase1_detection" / name
+        upstream = fred_root / "third_party/ems_yolo"
+        for path in sorted(upstream.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                files[f"upstream/{path.relative_to(upstream)}"] = path
     file_hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest()
                    for name, path in files.items()}
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
@@ -45,6 +56,9 @@ def compute_fingerprint(root, family, run_tag, seed_path):
     if family == "bn_snn":
         identity["dependencies"] = {name: importlib.metadata.version(name)
                                     for name in ("torchvision", "numpy", "h5py", "pycocotools")}
+    if family == "ems_yolo":
+        identity["dependencies"] = {name: importlib.metadata.version(name)
+                                    for name in ("torchvision", "numpy", "pycocotools")}
     identity["sha256"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return identity
 
