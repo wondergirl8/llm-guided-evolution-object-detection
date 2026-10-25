@@ -15,7 +15,9 @@ palette frames that wait just as long.
     uv run python sota/FRED_LLM_GE/phase1_detection/retrain_renderers.py summary
 
 Evolved renderers are read from seeds/renderer/models and their search score
-counts as seed 0. Palette renderers are written to <out>/models. Palette frames
+counts as seed 0. Each setup adds to the earlier plan, so jobs.txt holds only
+the new jobs while the summary covers all of them. Palette renderers are
+written to <out>/models. Palette frames
 at 10 ms and 33.3 ms already have seeds 0-2 from event_sweep.py, which the
 summary includes. Each job writes to <data_root>/renderer_retrain/<name>/seed<k>/.
 """
@@ -75,7 +77,12 @@ def setup(protocol, out_dir, genes, windows, seeds):
                 f"uv run python {FRED_DIR / 'phase1_detection' / 'render_runner.py'} "
                 f"--model network_{name} --variant_dir {variant_dir} "
                 f"--protocol {job_dir / 'protocol.yaml'} --sota_root {job_dir}")
-    (out_dir / "plan.json").write_text(json.dumps({"genes": genes, "palette": windows}, indent=2) + "\n")
+    # Add to an earlier plan, so the summary still covers its renderers.
+    plan_file = out_dir / "plan.json"
+    plan = json.loads(plan_file.read_text()) if plan_file.is_file() else {"genes": [], "palette": []}
+    plan = {"genes": list(dict.fromkeys(plan["genes"] + genes)),
+            "palette": sorted(set(plan["palette"] + windows), reverse=True)}
+    plan_file.write_text(json.dumps(plan, indent=2) + "\n")
     jobs_file = out_dir / "jobs.txt"
     jobs_file.write_text("\n".join(commands) + "\n")
     script = out_dir / "train_renderers.sbatch"
