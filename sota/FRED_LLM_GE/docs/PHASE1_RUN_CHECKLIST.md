@@ -6,6 +6,7 @@ Run from the repository root on PACE. This checklist covers the shared FRED pipe
 | --- | --- | --- |
 | `yolo11` | YOLO11n seed, adapter, search-space checks, and three-seed baseline runner are wired. | Yes. |
 | `bn_snn` | Experimental raw-event temporal SNN: seed, policy, adapter and independent baseline path are wired. Full FRED baseline still required. See [BN-SNN guide](BN_SNN_RUN_GUIDE.md). | No. Use its raw-cache preparation and family baseline commands. |
+| `ems_yolo` | Experimental EMS-ResNet34-style SNN over repeated released Event frames: seed, policy, adapter, and independent baseline path are wired. See [EMS-YOLO guide](EMS_YOLO_RUN_GUIDE.md). | No formal comparison until its three-seed FRED baseline is complete. |
 | `dfine` | A project-owned D-FINE-inspired prototype is registered. It lacks the YOLO11-specific baseline runner and search-space policy. | No. Finish its family setup first. |
 | `tiny_yolo11` | Registered, but its protocol uses a smaller proxy dataset rather than the exported challenging-search split. | No, if the goal is a directly comparable FRED search. |
 | `rtdetr`, `faster_rcnn` | Seed-area files exist, but their adapter files are empty and they are not registered. | No. Finish the family setup first. |
