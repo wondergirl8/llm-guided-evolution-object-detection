@@ -65,8 +65,9 @@ def test_temporal_bins_preserve_silence_polarity_and_open_endpoints(tmp_path):
     assert tensor.sum() == 3
     assert tensor[0, 0, 2, 1] == tensor[0, 1, 2, 1] == tensor[3, 1, 2, 1] == 1
     assert tensor[1:3].sum() == 0
-    np.save(tmp_path / '4.npy', events)
-    lazy = data_io.LazyEvents([{'sequence': '4', 'end_us': 10}], tmp_path,
+    np.save(tmp_path / '4.windows.npy', events[1:4])
+    lazy = data_io.LazyEvents([{'sequence': '4', 'end_us': 10,
+                               'event_start': 0, 'event_stop': 3}], tmp_path,
                              {'window_us': 10, 'time_steps': 4}, (4, 4))
     assert torch.equal(lazy[torch.tensor([0])][0], tensor)
 
@@ -107,6 +108,8 @@ def tiny_data():
 
 def test_train_predict_and_shared_evaluator(setup, tmp_path, monkeypatch):
     protocol, adapter = setup
+    protocol = copy.deepcopy(protocol)
+    protocol['families']['bn_snn']['training']['epochs'] = 1
     proxy = dict(protocol['proxy'], epochs=1, batch_size=2, eval_conf=0.05)
     data = tiny_data()
     model = adapter.build(policy.SEED, 1, 'cpu')
@@ -130,7 +133,6 @@ def test_train_predict_and_shared_evaluator(setup, tmp_path, monkeypatch):
     import yaml
     baseline_protocol = copy.deepcopy(protocol)
     baseline_protocol['proxy'] = proxy
-    baseline_protocol['challenging']['search']['epochs'] = 1
     protocol_path = tmp_path / 'baseline_protocol.yaml'
     protocol_path.write_text(yaml.safe_dump(baseline_protocol))
     monkeypatch.setattr(baseline, 'PROTOCOL', protocol_path)
@@ -180,17 +182,46 @@ def test_prepare_reuses_labels_exact_timestamps_and_detects_corruption(tmp_path,
     events = np.array([(2, 3, 1, 100)], dtype=[('x','i2'),('y','i2'),('p','i2'),('t','i8')])
     monkeypatch.setattr(data_io, 'downloaded_sequence', downloaded)
     monkeypatch.setattr(data_io, 'load_events', lambda _: events)
-    data_io.prepare_sequence(source, '4', 'train', cache)
+    data_io.prepare_sequence(source, '4', 'train', cache, 33333)
     index = json.loads((cache / '4.json').read_text())
     assert index['records'][0]['end_us'] == 33333
     assert index['records'][0]['boxes'] == [[1, 2, 3, 4]]
+    assert index['cache_format'] == data_io.RAW_CACHE_FORMAT
+    assert index['records'][0]['event_start'] == 0
+    assert index['records'][0]['event_stop'] == 1
     # Rerun succeeds without another download.
     monkeypatch.setattr(data_io, 'downloaded_sequence', lambda *a: pytest.fail('unexpected download'))
-    data_io.prepare_sequence(source, '4', 'train', cache)
-    with (cache / '4.npy').open('ab') as stream:
+    data_io.prepare_sequence(source, '4', 'train', cache, 33333)
+    with (cache / '4.windows.npy').open('ab') as stream:
         stream.write(b'corruption')
     with pytest.raises(ValueError, match='corrupt'):
-        data_io.prepare_sequence(source, '4', 'train', cache)
+        data_io.prepare_sequence(source, '4', 'train', cache, 33333)
+
+
+def test_prepare_migrates_full_sequence_cache_without_download(tmp_path, monkeypatch):
+    source, cache = tmp_path / 'export', tmp_path / 'raw'
+    (source / 'done').mkdir(parents=True)
+    marker = source / 'done/4.json'
+    marker.write_text(json.dumps(dict(sequence='4', hf_folder='train', size=[1280, 720],
+        records=[dict(name='4_000001', frame_index=1, boxes=[])])))
+    cache.mkdir()
+    events = np.array([(1, 1, 0, -1), (2, 2, 1, 100), (3, 3, 0, 40000)],
+        dtype=[('x','i2'),('y','i2'),('p','i2'),('t','i8')])
+    np.save(cache / '4.npy', events)
+    legacy = dict(sequence='4', folder='train', revision=data_io.REVISION,
+        source_sha256=data_io.digest(marker), events_sha256=data_io.digest(cache / '4.npy'),
+        size=[1280, 720], records=[dict(name='4_000001', frame_index=1,
+        boxes=[], end_us=33333)])
+    (cache / '4.json').write_text(json.dumps(legacy))
+    monkeypatch.setattr(data_io, 'downloaded_sequence', lambda *a: pytest.fail('unexpected download'))
+    data_io.prepare_sequence(source, '4', 'train', cache, 33333)
+    index = json.loads((cache / '4.json').read_text())
+    selected = np.load(cache / '4.windows.npy', allow_pickle=False)
+    assert index['cache_format'] == data_io.RAW_CACHE_FORMAT
+    assert index['records'][0]['event_start'] == 0
+    assert index['records'][0]['event_stop'] == 1
+    assert selected.tolist() == events[1:2].tolist()
+    assert not (cache / '4.npy').exists()
 
 
 def test_bn_baseline_summarizes_and_rejects_stale_records(tmp_path, monkeypatch):
