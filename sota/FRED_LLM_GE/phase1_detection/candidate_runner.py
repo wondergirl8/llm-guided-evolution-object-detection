@@ -30,6 +30,7 @@ if __package__:
     from . import map_reporter
     from .adapters.bn_snn import BNSNNAdapter
     from .adapters.dfine import DFINEAdapter
+    from .adapters.ems_yolo import EMSYoloAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from .export_split import dataset_parts, events_from_tag
@@ -42,6 +43,7 @@ else:
     from sota.FRED_LLM_GE.phase1_detection import map_reporter
     from sota.FRED_LLM_GE.phase1_detection.adapters.bn_snn import BNSNNAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.dfine import DFINEAdapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.ems_yolo import EMSYoloAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Adapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from sota.FRED_LLM_GE.phase1_detection.export_split import dataset_parts, events_from_tag
@@ -52,7 +54,8 @@ FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
 ADAPTERS = {adapter.name: adapter for adapter in
-            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter, BNSNNAdapter)}
+            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter,
+             BNSNNAdapter, EMSYoloAdapter)}
 
 # Excluded by the orchestrator's INVALID_FITNESS_MAX filter.
 FAILED_RESULT = DetectionResult(-math.inf, -math.inf, math.inf)
@@ -146,6 +149,13 @@ def report_metadata(adapter, proxy, config, variant_path, model_path):
                         input_representation="raw_event_temporal_counts",
                         temporal_settings=adapter.settings["events"],
                         raw_manifests=config["raw_manifests"])
+    elif adapter.name == "ems_yolo":
+        metadata.update(family=adapter.name, initialization="scratch",
+                        input_representation="released_event_frame_repeated_over_time",
+                        temporal_settings={
+                            "time_steps": adapter.settings["training"]["time_steps"],
+                            "input_size": adapter.settings["training"]["input_size"],
+                        }, upstream=adapter.settings["upstream"])
     return metadata
 
 
@@ -175,7 +185,7 @@ def challenging_search(protocol, family=None):
     proxy = dict(protocol["proxy"], train_sequences=[s for s, _ in train],
                  val_sequences=[s for s, _ in val], frame_step=train_step,
                  val_frame_step=val_step, epochs=challenging["search"]["epochs"])
-    if family == "dfine":
+    if family in ("dfine", "ems_yolo"):
         train_data = load_exported_split(train_root, train)
     else:
         frames = len((train_root / "train.txt").read_text().split())
@@ -208,9 +218,12 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
         else:
             val_data = load_val()
         train_frames = train_data.get("frames") or len(train_data["images"])
-        if family == "bn_snn":
-            config["raw_manifests"] = {"train": train_data["manifest_sha256"],
-                                       "val": val_data["manifest_sha256"]}
+        if family in ("bn_snn", "ems_yolo"):
+            if family == "ems_yolo":
+                proxy["epochs"] = adapter.settings["training"]["epochs"]
+            if family == "bn_snn":
+                config["raw_manifests"] = {"train": train_data["manifest_sha256"],
+                                           "val": val_data["manifest_sha256"]}
             args_path = Path(sota_root) / "training_args" / gene_id / "args.yaml"
             args_path.parent.mkdir(parents=True, exist_ok=True)
             args_path.write_text(yaml.safe_dump(dict(config, initialization="scratch")))
@@ -249,7 +262,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
         return
     train_time = time.time() - start_time
 
-    if family == "bn_snn":
+    if family in ("bn_snn", "ems_yolo"):
         run_path = Path(sota_root) / "training_args" / gene_id / "run.json"
         run_path.write_text(json.dumps(dict(config, wall_time_seconds=train_time,
             mAP50=result.map50, mAP50_95=result.map50_95, params=result.params,

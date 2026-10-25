@@ -95,6 +95,45 @@ challenging:
     - {source: raw, window_us: 50000, encoding: polarity}
 
 families:
+  ems_yolo:
+    # Experimental EMS-ResNet34-style SNN over the released FRED Event frame.
+    # One frame is repeated for four timesteps, matching the public Gen1 loader's
+    # frame-repetition behavior. This is not a raw asynchronous-event experiment.
+    seed_file: seeds/seed_ems_yolo.py
+    data: challenging_search
+    initialization: scratch
+    upstream:
+      repository: https://github.com/BICLab/EMS-YOLO
+      commit: fbfc2caeac5ff4d60cbc2ad23864911df63d0f85
+      model_config: g1-resnet/models/resnet34-cat.yaml
+      license: GPL-3.0
+    max_detections: 300
+    training:
+      # The public Gen1 loader materializes 320x320 inputs even when its CLI
+      # advertises --img 640. Freeze that observed implementation behavior for
+      # this preliminary, time-bounded integration.
+      input_size: 320
+      time_steps: 4
+      epochs: 8
+      microbatch_size: 1
+      nominal_batch_size: 64
+      optimizer: SGD
+      lr0: 0.01
+      lrf: 0.1
+      momentum: 0.937
+      weight_decay: 0.0005
+      warmup_epochs: 3.0
+      warmup_momentum: 0.8
+      grad_clip: 10.0
+      amp: true
+      ema: false
+      mosaic: false
+      augmentation: {fliplr: 0.5}
+      loss:
+        box: 0.05
+        obj: 1.0
+        obj_pw: 1.0
+        anchor_t: 4.0
   bn_snn:
     # Experimental temporal-event extension. All initialization is from scratch.
     # This provisional recipe is not the paper's ANN-to-SNN conversion recipe.
@@ -110,6 +149,9 @@ families:
     pre_nms_topk: 1000
     max_detections: 300
     training:
+      # Family-specific proxy budget; other detector families retain the shared
+      # challenging.search.epochs value.
+      epochs: 8
       optimizer: AdamW
       lr: 0.001
       weight_decay: 0.0001
