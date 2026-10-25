@@ -1,0 +1,12 @@
+Combine these corresponding architectural assignments from two spiking detector parents.
+Return one Python code fence containing only the replacement assignment, with the same name.
+For depths, combine tuple entries; for width, choose a permitted value informed by both parents.
+If copying would reproduce a parent, make a bounded architectural change instead.
+Parent A:
+```python
+{}
+```
+Parent B:
+```python
+{}
+```

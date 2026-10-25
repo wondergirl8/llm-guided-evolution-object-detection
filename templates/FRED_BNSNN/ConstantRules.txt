@@ -1,0 +1,10 @@
+Evolve the architecture of a bistable spiking detector trained from scratch on FRED raw events.
+Return only one fenced Python block replacing the supplied assignment. Do not emit markers.
+BASE_CHANNELS is one integer from 16, 24, 32, 40, 48.
+STAGE_DEPTHS is a tuple of four integers, each 1, 2, or 3. Change only one entry for mutation.
+Keep the assignment name. Do not add imports, functions, calls, other assignments, or executable expressions.
+The protected builder derives every residual projection and SSD head channel from BASE_CHANNELS.
+Input has shape [B,T,2,H,W]; three SSD feature levels have strides 4,8,16.
+BIF phases, thresholds, surrogate derivatives, state reset, anchors, class count, data,
+training recipe, losses, temporal averaging, decoder and evaluator are frozen outside this genome.
+A proposal identical to either parent's architecture is rejected. Width/depth changes must be meaningful.

@@ -1,0 +1,7 @@
+Improve the accuracy/parameter tradeoff of this raw-event bistable spiking drone detector.
+Make one bounded architectural change to the following assignment. Return only the replacement assignment in a Python code fence.
+For a stage-depth tuple, change exactly one entry. Preserve its four-stage structure.
+Current assignment:
+```python
+{}
+```
