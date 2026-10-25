@@ -1,0 +1,11 @@
+Evolve only the architecture of the experimental EMS-YOLO detector trained from scratch on FRED.
+Return one fenced Python block replacing the supplied assignment. Do not emit # --OPTION-- markers.
+BASE_CHANNELS is one integer from 48, 64, 80.
+STAGE_DEPTHS is a tuple of four integers in 1..8 whose sum is 6..24. A mutation changes one entry only.
+NECK_CHANNELS is one integer from 128, 192, 256, 320.
+Keep the assignment name and use literal values only. Do not add imports, calls, expressions, functions, or assignments.
+The protected builder derives all residual projections, concatenation widths, and detection inputs from these values.
+Input is a released FRED Event frame repeated over four timesteps with shape [B,T,3,H,W].
+EMS threshold, membrane decay, surrogate derivative, timestep count, input conversion, anchors, strides 16/32,
+class count, initialization, optimizer, loss, augmentation, split, decoder, NMS, and evaluator are frozen.
+A candidate whose built architecture matches either parent is rejected. The parameter count must remain within 0.5x--2x the seed.

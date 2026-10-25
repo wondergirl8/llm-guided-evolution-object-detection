@@ -1,0 +1,8 @@
+Improve the accuracy/parameter tradeoff of this EMS-ResNet drone detector.
+Make one bounded architectural change to the supplied assignment.
+Return only the replacement assignment in one Python code fence.
+For STAGE_DEPTHS, change exactly one tuple entry.
+Current assignment:
+```python
+{}
+```

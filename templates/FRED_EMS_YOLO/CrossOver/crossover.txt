@@ -1,0 +1,12 @@
+Combine the corresponding EMS-YOLO architecture assignments from two parents.
+Return one Python code fence containing only the replacement assignment with the same name.
+For STAGE_DEPTHS, combine tuple entries from the parents. For channel assignments, choose a permitted value informed by both parents.
+If the result would copy either parent, make one bounded architectural change.
+Parent A:
+```python
+{}
+```
+Parent B:
+```python
+{}
+```
