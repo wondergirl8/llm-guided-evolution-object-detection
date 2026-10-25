@@ -30,6 +30,13 @@ if RUN_TAG and not re.fullmatch(
 RUN_ROOT = os.path.join(ROOT_DIR, "fred_runs", RUN_TAG) if RUN_TAG else None
 RUN_CHECKPOINT_DIR = os.path.join(RUN_ROOT, "checkpoints") if RUN_ROOT else None
 _FAMILIES = {
+    "ems_yolo": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ems_yolo"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_ems_yolo.py"),
+        "prompt_group": "FRED_EMS_YOLO/Normal",
+        "rules": "templates/FRED_EMS_YOLO/ConstantRules.txt",
+        "eval_timeout": 8 * 60 * 60,
+    },
     "bn_snn": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "bn_snn"),
         "seed": os.path.join(FRED_DIR, "seeds", "seed_bn_snn.py"),
@@ -64,11 +71,13 @@ _FAMILY = _FAMILIES[SEED_FAMILY]
 CANDIDATE_POLICY_MODULE = (
     "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
     if SEED_FAMILY == "yolo11" else
-    "sota.FRED_LLM_GE.phase1_detection.bn_snn_search_space" if SEED_FAMILY == "bn_snn" else None
+    "sota.FRED_LLM_GE.phase1_detection.bn_snn_search_space" if SEED_FAMILY == "bn_snn" else
+    "sota.FRED_LLM_GE.phase1_detection.ems_yolo_search_space" if SEED_FAMILY == "ems_yolo" else None
 )
 CROSSOVER_TEMPLATE_DIR = (
     "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
     else "templates/FRED_BNSNN/CrossOver" if SEED_FAMILY == "bn_snn"
+    else "templates/FRED_EMS_YOLO/CrossOver" if SEED_FAMILY == "ems_yolo"
     else "templates/CrossOver"
 )
 # Event frames candidates train on: unset for FRED's released frames, or a tag
@@ -77,8 +86,10 @@ CROSSOVER_TEMPLATE_DIR = (
 FRED_EVENTS = os.getenv("FRED_EVENTS", "")
 if SEED_FAMILY == "bn_snn" and FRED_EVENTS:
     raise ValueError("BN-SNN uses families.bn_snn.events, not FRED_EVENTS frame encodings")
-if SEED_FAMILY == "bn_snn" and not RUN_TAG:
-    raise ValueError("BN-SNN requires an explicit FRED_RUN_TAG for isolated run artifacts")
+if SEED_FAMILY == "ems_yolo" and FRED_EVENTS:
+    raise ValueError("EMS-YOLO preliminary protocol is frozen to released FRED Event frames")
+if SEED_FAMILY in ("bn_snn", "ems_yolo") and not RUN_TAG:
+    raise ValueError(f"{SEED_FAMILY} requires an explicit FRED_RUN_TAG for isolated run artifacts")
 _RUN_SUFFIX = f"_{FRED_EVENTS}" if FRED_EVENTS else ""
 SOTA_ROOT = (os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else
              _FAMILY["sota_root"] + _RUN_SUFFIX)
@@ -180,7 +191,7 @@ PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 # run_improved.py checkpoints generation 0 (seed and initial candidates), then
 # runs generations 1 through num_generations - 1. Resubmitting resumes from the latest
 # checkpoint in the configured run directory.
-num_generations = int(os.getenv('FRED_NUM_GENERATIONS', '21'))
+num_generations = int(os.getenv('FRED_NUM_GENERATIONS', '13'))
 if num_generations < 1:
     raise ValueError('FRED_NUM_GENERATIONS must include generation 0')
 EVAL_GPU_CONSTRAINT = os.getenv('FRED_EVAL_GPU_CONSTRAINT', 'H200')
