@@ -95,6 +95,28 @@ challenging:
     - {source: raw, window_us: 50000, encoding: polarity}
 
 families:
+  bn_snn:
+    # Experimental temporal-event extension. All initialization is from scratch.
+    # This provisional recipe is not the paper's ANN-to-SNN conversion recipe.
+    seed_file: seeds/seed_bn_snn.py
+    data: challenging_raw_search
+    raw_cache: phase1_detection/seeds/bn_snn/raw_cache
+    events:
+      window_us: 33333
+      time_steps: 4
+      representation: count
+    # Frozen SSD prior sizes (pixels), one per stride 4/8/16 feature level.
+    anchor_sizes: [16, 32, 64]
+    pre_nms_topk: 1000
+    max_detections: 300
+    training:
+      optimizer: AdamW
+      lr: 0.001
+      weight_decay: 0.0001
+      grad_clip: 1.0
+      microbatch_size: 1
+      amp: false
+      augmentation: none
   dfine:
     # Self-contained Event-frame seed, using the same challenging search split
     # and shared evaluator as the Ultralytics family.
