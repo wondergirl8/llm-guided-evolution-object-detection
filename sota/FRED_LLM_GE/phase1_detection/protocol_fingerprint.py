@@ -23,6 +23,17 @@ def compute_fingerprint(root, family, run_tag, seed_path):
             "search_train": data_root / f"search_train_step{search['train_frame_step']}" / "train.txt",
             "search_val": data_root / f"search_val_step{search['val_frame_step']}" / "train.txt",
         })
+    if family == "bn_snn":
+        cache = fred_root / protocol["families"][family]["raw_cache"]
+        files.update({"raw_train": cache / "train_manifest.json",
+                      "raw_val": cache / "val_manifest.json"})
+        for name in ("candidate_runner.py", "bn_snn_data.py", "bn_snn_search_space.py",
+                     "adapters/bn_snn.py", "seeds/bn_snn/network.py", "seeds/bn_snn/detection.py",
+                     "bn_snn_baseline.py", "map_reporter.py", "fitness.py", "result_contract.py",
+                     "proxy_data.py", "fred_splits.py", "export_split.py"):
+            files[name] = fred_root / "phase1_detection" / name
+        for name in ("data/fred_events.py", "data/fred_stream.py", "configs/phase0/default.yaml"):
+            files[name] = fred_root / name
     file_hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest()
                    for name, path in files.items()}
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
@@ -31,6 +42,9 @@ def compute_fingerprint(root, family, run_tag, seed_path):
                 "git_commit": commit, "torch_version": importlib.metadata.version("torch")}
     if family == "yolo11":
         identity["ultralytics_version"] = importlib.metadata.version("ultralytics")
+    if family == "bn_snn":
+        identity["dependencies"] = {name: importlib.metadata.version(name)
+                                    for name in ("torchvision", "numpy", "h5py", "pycocotools")}
     identity["sha256"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return identity
 

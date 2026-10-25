@@ -28,6 +28,7 @@ import yaml
 
 if __package__:
     from . import map_reporter
+    from .adapters.bn_snn import BNSNNAdapter
     from .adapters.dfine import DFINEAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
@@ -39,6 +40,7 @@ else:
     # importable so adapters retain their relative imports in that mode too.
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
     from sota.FRED_LLM_GE.phase1_detection import map_reporter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.bn_snn import BNSNNAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.dfine import DFINEAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Adapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
@@ -50,7 +52,7 @@ FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
 ADAPTERS = {adapter.name: adapter for adapter in
-            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter)}
+            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter, BNSNNAdapter)}
 
 # Excluded by the orchestrator's INVALID_FITNESS_MAX filter.
 FAILED_RESULT = DetectionResult(-math.inf, -math.inf, math.inf)
@@ -93,7 +95,7 @@ def write_failure_results(sota_root, gene_id, start_time, message):
 def predict_frames(adapter, model, data, proxy, device):
     """Predict every val frame and pair it with ground truth in original pixels."""
     width, height = data["orig_size"]
-    scale = torch.tensor([width / data["images"].shape[3], height / data["images"].shape[2]] * 2)
+    scale = torch.tensor([width / data["images"].shape[-1], height / data["images"].shape[-2]] * 2)
     frames = []
     batch_size = proxy["batch_size"]
     for start in range(0, len(data["images"]), batch_size):
@@ -119,7 +121,7 @@ def predict_frames(adapter, model, data, proxy, device):
 
 
 def report_metadata(adapter, proxy, config, variant_path, model_path):
-    return {
+    metadata = {
         "dataset_revision": REVISION,
         "manifest_identity": hashlib.sha256(json.dumps(
             {k: proxy[k] for k in ("train_sequences", "val_sequences", "frame_step")},
@@ -138,6 +140,13 @@ def report_metadata(adapter, proxy, config, variant_path, model_path):
         "project_split": "validation",
         "official_split": proxy["official_split"],
     }
+
+    if adapter.name == "bn_snn":
+        metadata.update(family=adapter.name, initialization="scratch",
+                        input_representation="raw_event_temporal_counts",
+                        temporal_settings=adapter.settings["events"],
+                        raw_manifests=config["raw_manifests"])
+    return metadata
 
 
 def proxy_data(proxy):
@@ -179,7 +188,10 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
     start_time = time.time()
     try:
         adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
-        if adapter.settings.get("data") == "challenging_search":
+        if adapter.settings.get("data") == "challenging_raw_search":
+            from sota.FRED_LLM_GE.phase1_detection.bn_snn_data import load_search
+            proxy, train_data, load_val = load_search(protocol)
+        elif adapter.settings.get("data") == "challenging_search":
             proxy, train_data, load_val = challenging_search(protocol, family)
         else:
             proxy = protocol["proxy"]
@@ -196,6 +208,12 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
         else:
             val_data = load_val()
         train_frames = train_data.get("frames") or len(train_data["images"])
+        if family == "bn_snn":
+            config["raw_manifests"] = {"train": train_data["manifest_sha256"],
+                                       "val": val_data["manifest_sha256"]}
+            args_path = Path(sota_root) / "training_args" / gene_id / "args.yaml"
+            args_path.parent.mkdir(parents=True, exist_ok=True)
+            args_path.write_text(yaml.safe_dump(dict(config, initialization="scratch")))
     except Exception as e:
         write_failure_results(sota_root, gene_id, start_time, f"setup_or_build_failed: {e!r}")
         return
@@ -231,6 +249,11 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
         return
     train_time = time.time() - start_time
 
+    if family == "bn_snn":
+        run_path = Path(sota_root) / "training_args" / gene_id / "run.json"
+        run_path.write_text(json.dumps(dict(config, wall_time_seconds=train_time,
+            mAP50=result.map50, mAP50_95=result.map50_95, params=result.params,
+            report=str(report_path)), indent=2) + "\n")
     print(f"mAP50: {result.map50}, mAP50:95: {result.map50_95}, "
           f"Params: {result.params}, Time: {train_time:.1f}s")
     print(f"Saved model: {model_path}")
@@ -256,6 +279,8 @@ def main():
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
+    if args.family == "bn_snn" and args.events:
+        parser.error("BN-SNN uses families.bn_snn.events; --events is for frame encodings")
 
     # this will get the gene id value: "network_XXXX" -> "XXXX"
     try:

@@ -30,6 +30,13 @@ if RUN_TAG and not re.fullmatch(
 RUN_ROOT = os.path.join(ROOT_DIR, "fred_runs", RUN_TAG) if RUN_TAG else None
 RUN_CHECKPOINT_DIR = os.path.join(RUN_ROOT, "checkpoints") if RUN_ROOT else None
 _FAMILIES = {
+    "bn_snn": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "bn_snn"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_bn_snn.py"),
+        "prompt_group": "FRED_BNSNN/Normal",
+        "rules": "templates/FRED_BNSNN/ConstantRules.txt",
+        "eval_timeout": 8 * 60 * 60,
+    },
     # SOTA_ROOT holds models/, results/ and trained_models/ for the family.
     "yolo11": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ultralytics_yolo11"),
@@ -56,16 +63,22 @@ _FAMILIES = {
 _FAMILY = _FAMILIES[SEED_FAMILY]
 CANDIDATE_POLICY_MODULE = (
     "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
-    if SEED_FAMILY == "yolo11" else None
+    if SEED_FAMILY == "yolo11" else
+    "sota.FRED_LLM_GE.phase1_detection.bn_snn_search_space" if SEED_FAMILY == "bn_snn" else None
 )
 CROSSOVER_TEMPLATE_DIR = (
     "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
+    else "templates/FRED_BNSNN/CrossOver" if SEED_FAMILY == "bn_snn"
     else "templates/CrossOver"
 )
 # Event frames candidates train on: unset for FRED's released frames, or a tag
 # such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
 # keeps its genes, results, outputs and checkpoints apart from the released run.
 FRED_EVENTS = os.getenv("FRED_EVENTS", "")
+if SEED_FAMILY == "bn_snn" and FRED_EVENTS:
+    raise ValueError("BN-SNN uses families.bn_snn.events, not FRED_EVENTS frame encodings")
+if SEED_FAMILY == "bn_snn" and not RUN_TAG:
+    raise ValueError("BN-SNN requires an explicit FRED_RUN_TAG for isolated run artifacts")
 _RUN_SUFFIX = f"_{FRED_EVENTS}" if FRED_EVENTS else ""
 SOTA_ROOT = (os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else
              _FAMILY["sota_root"] + _RUN_SUFFIX)
@@ -194,5 +207,5 @@ if offspring_size + num_elites != population_size:
 hof_size = 4
 max_gen_attempts = 5
 migration_gen = 0
-DNA_TXT = "FRED YOLO11"
+DNA_TXT = f"FRED {SEED_FAMILY}"
 FORBIDDEN_PATTERNS = []
