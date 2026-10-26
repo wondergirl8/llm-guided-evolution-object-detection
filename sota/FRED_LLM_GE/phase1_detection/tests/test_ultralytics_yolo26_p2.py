@@ -87,6 +87,49 @@ def test_final_evaluation_selects_yolo26_adapter():
         "ultralytics YOLO26 head=one_to_many nms=True imgsz=1280 conf=0.05 nms_iou=0.5")
 
 
+def test_final_evaluation_uses_yolo26_training_overrides(monkeypatch, tmp_path):
+    from sota.FRED_LLM_GE.phase1_detection import final_eval
+    from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo26_p2 import (
+        UltralyticsYolo26P2Adapter,
+    )
+
+    protocol = candidate_runner.load_protocol(candidate_runner.DEFAULT_PROTOCOL)
+    protocol["challenging"]["data_root"] = str(tmp_path)
+    final = protocol["challenging"]["final"]
+    data_dir = tmp_path / f"final_train_step{final['train_frame_step']}"
+    data_dir.mkdir()
+    (data_dir / "data.yaml").write_text("train: synthetic\n")
+    variant = tmp_path / "network_selected.py"
+    variant.write_text("nc: 1\n")
+    options = {}
+
+    class TrainingReached(Exception):
+        pass
+
+    class Model:
+        def train(self, **kwargs):
+            options.update(kwargs)
+            raise TrainingReached
+
+    monkeypatch.setattr(final_eval, "load_protocol", lambda path: protocol)
+    monkeypatch.setattr(final_eval, "challenging_split", lambda root: ([], []))
+    monkeypatch.setattr(UltralyticsYolo26P2Adapter, "variant_path",
+                        lambda self, model, directory: variant)
+    monkeypatch.setattr(UltralyticsYolo26P2Adapter, "build",
+                        lambda self, path, num_classes, device: Model())
+    monkeypatch.setattr(UltralyticsYolo26P2Adapter, "param_count",
+                        lambda self, model: 1)
+
+    arguments = ["final_eval.py", "--family", "yolo26_p2", "--name", "selected_final",
+                 "--model", "network_selected", "--epochs", "1", "--device", "cpu"]
+    with patch.object(sys, "argv", arguments), pytest.raises(TrainingReached):
+        final_eval.main()
+
+    assert options["data"] == str(data_dir / "data.yaml")
+    assert options["epochs"] == 1
+    assert options["pretrained"] is False
+
+
 def test_prediction_selects_each_real_yolo26_head():
     adapter = _adapter()
     model = adapter.build(adapter.variant_path("network", None), num_classes=1, device="cpu")
