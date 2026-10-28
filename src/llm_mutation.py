@@ -20,7 +20,7 @@ from candidate_policy import load_candidate_policy
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, generate_augmented_code, 
                        extract_note, clean_code_from_llm, retrieve_base_code,
-                       strip_leading_imports)
+                       strip_leading_imports, is_renderer_gene, RENDERER_SAMPLING)
 
 def validate_generated_chunk(code_from_llm):
     """Reject common invalid patterns as defined by config"""
@@ -37,6 +37,10 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
                     top_p=0.15, llm_model=LLM_DEEPSEEK, temperature=0.1, apply_quality_control=False):
     
     print(f'Loading {input_filename} code')
+    if is_renderer_gene(input_filename):
+        temperature = max(temperature, RENDERER_SAMPLING["temperature"])
+        top_p = max(top_p, RENDERER_SAMPLING["top_p"])
+        print(f'Renderer gene: sampling with temperature {temperature}, top_p {top_p}')
     print('Using')
     parts = split_file(input_filename)
     # prompt_templates = glob.glob(f'{ROOT_DIR}/templates/FixedPrompts/*/*.txt')
@@ -116,7 +120,7 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
             previous_error = 'llm_unavailable: no usable YAML response'
             code_from_llm = code2llm.strip()
         else:
-            if "dfine" in os.path.basename(input_filename) or "/dfine/" in input_filename:
+            if any(f in os.path.basename(input_filename) or f"/{f}/" in input_filename for f in ("dfine", "renderer")):
                 code_from_llm = strip_leading_imports(code_from_llm)
             valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
             if not valid_code:

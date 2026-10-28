@@ -1,0 +1,8 @@
+Rewrite this event-camera frame renderer so the three image channels carry different information, to help a fixed YOLO11n find tiny, fast drones. For example, split the window into three equal time slices and mark the pixels that had events in each slice in its own channel, so the detector can see which way the drone moves.
+
+Return the complete code: the WINDOW_US line and the full render function.
+
+The current code:
+```python
+{}
+```

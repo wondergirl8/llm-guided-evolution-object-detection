@@ -148,17 +148,21 @@ def proxy_data(proxy):
             load_split(cache_dir, split, proxy["val_sequences"], step, width))
 
 
-def challenging_search(protocol, family=None):
+def challenging_search(protocol, family=None, roots=None):
     """Settings and data for the challenging search split (export_split.py --set search).
 
     Candidates train on challenging_train minus the held-out val_sequences
     and are scored on the val_sequences. D-FINE reads the exported images
-    lazily; Ultralytics consumes the export's data.yaml directly.
+    lazily; Ultralytics consumes the export's data.yaml directly. roots, if
+    given, replaces the (train, val) export folders.
     """
     challenging = protocol["challenging"]
     data_root = FRED_DIR / challenging["data_root"]
     (train_root, train, train_step), (val_root, val, val_step) = dataset_parts(
         challenging, data_root, "search")
+    if roots:
+        # Frames rendered elsewhere in the same layout (render_runner.py).
+        train_root, val_root = roots
     data_yaml = train_root / "data.yaml"
     if not data_yaml.is_file():
         raise FileNotFoundError(f"{data_yaml} missing: run export_split.py --set search "
@@ -175,12 +179,12 @@ def challenging_search(protocol, family=None):
         val_root, val)
 
 
-def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
+def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device, data_roots=None):
     start_time = time.time()
     try:
         adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
         if adapter.settings.get("data") == "challenging_search":
-            proxy, train_data, load_val = challenging_search(protocol, family)
+            proxy, train_data, load_val = challenging_search(protocol, family, data_roots)
         else:
             proxy = protocol["proxy"]
             train_data = load_val = None

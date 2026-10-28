@@ -13,7 +13,8 @@ from utils.print_utils import box_print
 from candidate_policy import load_candidate_policy
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, extract_note, generate_augmented_code, 
-                       clean_code_from_llm, retrieve_base_code, strip_leading_imports)
+                       clean_code_from_llm, retrieve_base_code, strip_leading_imports,
+                       is_renderer_gene, RENDERER_SAMPLING)
 
 
 def augment_network(input_filename_x, input_filename_y, output_filename,
@@ -40,6 +41,18 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     # Split the input files
     parts_x = split_file(input_filename_x)
     parts_y = split_file(input_filename_y)
+    if is_renderer_gene(input_filename_x):
+        if all(x.strip() == y.strip() for x, y in zip(parts_x[1:], parts_y[1:])):
+            # Identical parents can only give back a copy: mutate one of them instead.
+            import glob
+            from llm_mutation import augment_network as mutate
+            template = random.choice(sorted(glob.glob(os.path.join(ROOT_DIR, "templates/FRED_RENDER/Normal/*.txt"))))
+            print(f"Renderer parents are identical: mutating with {os.path.relpath(template, ROOT_DIR)} instead")
+            mutate(input_filename_x, output_filename, os.path.relpath(template, ROOT_DIR),
+                   top_p, llm_model, temperature, apply_quality_control)
+            return
+        temperature = max(temperature, RENDERER_SAMPLING["temperature"])
+        top_p = max(top_p, RENDERER_SAMPLING["top_p"])
     # Create tuples of parts to be augmented. parts_x[0] is the protected
     # preamble, so indices start at 1 to address the mutable chunks.
     parts = [(x, y, idx) for idx, (x, y) in enumerate(zip(parts_x[1:], parts_y[1:]), start=1)]
@@ -84,7 +97,7 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
         if not code_from_llm or code_from_llm == "ERROR":
             previous_error = 'llm_unavailable: no usable YAML response'
             code_from_llm = x.strip()
-        elif "dfine" in os.path.basename(input_filename_x) or "/dfine/" in input_filename_x:
+        elif any(f in os.path.basename(input_filename_x) or f"/{f}/" in input_filename_x for f in ("dfine", "renderer")):
             code_from_llm = strip_leading_imports(code_from_llm)
         if policy is not None and hasattr(policy, 'repair_channel_values'):
             code_from_llm = policy.repair_channel_values(code_from_llm)

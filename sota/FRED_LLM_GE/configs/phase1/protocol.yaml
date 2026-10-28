@@ -118,6 +118,16 @@ families:
     # Relative to sota/FRED_LLM_GE; used when --model is "network".
     seed_file: seeds/seed_yolo11.py
     lr: 0.001
+  renderer:
+    # Evolves how raw events become frames (seeds/seed_renderer.py); every
+    # renderer is scored by training this fixed family's seed on its frames
+    # (phase1_detection/render_runner.py).
+    model_family: yolo11
+    # Processes drawing frames on the eval node (12 CPUs, 32 GB; a big sequence
+    # decodes to ~1.6 GB of events), and how long drawing the whole search
+    # split may take before the renderer fails.
+    render_workers: 8
+    render_timeout_s: 1800
   yolo11:
     # Ultralytics YOLO11n, trained from scratch with the Ultralytics trainer.
     seed_file: seeds/seed_yolo11n.yaml

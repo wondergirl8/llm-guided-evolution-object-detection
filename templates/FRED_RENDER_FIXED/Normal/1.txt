@@ -1,0 +1,8 @@
+Improve how this event-camera frame renderer encodes events into the three channels, so a fixed YOLO11n finds tiny, fast drones more accurately.
+
+The window is fixed: keep the WINDOW_US line unchanged.
+
+The current code:
+```python
+{}
+```

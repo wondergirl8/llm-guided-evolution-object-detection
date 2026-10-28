@@ -1,0 +1,8 @@
+Replace this renderer with a polarity-count encoding for a fixed YOLO11n that detects tiny drones.
+
+Count brighter events (p == 1) and darker events (p == 0) per pixel with np.add.at or np.bincount on y * WIDTH + x. Put min(count * 64, 255) of the brighter events in channel 0 and of the darker events in channel 1, and put 255 in channel 2 wherever the pixel had any event. Pixels without events stay 0. Choose WINDOW_US between 5000 and 20000.
+
+The current code:
+```python
+{}
+```

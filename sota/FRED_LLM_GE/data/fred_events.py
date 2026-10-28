@@ -52,15 +52,14 @@ def _ecf_library():
     return lib
 
 
-def load_events(hdf5_path):
-    """All CD events of an events.hdf5 as a structured array (x, y, p, t), sorted by t."""
+def iter_event_chunks(hdf5_path):
+    """The CD events of an events.hdf5 one decoded chunk at a time, in file order."""
     import h5py
 
     lib = _ecf_library()
     with h5py.File(hdf5_path, "r") as file:
         dataset = file["CD/events"]
         dtype, total = dataset.dtype, dataset.shape[0]
-        events = np.empty(total, dtype)
         for i in range(dataset.id.get_num_chunks()):
             start = dataset.id.get_chunk_info(i).chunk_offset[0]
             _, raw = dataset.id.read_direct_chunk((start,))
@@ -70,7 +69,12 @@ def load_events(hdf5_path):
             if size // dtype.itemsize < count:
                 raise ValueError(f"{hdf5_path}: chunk {i} decoded {size} bytes, "
                                  f"expected {count} events")
-            events[start:start + count] = decoded[:count]
+            yield decoded[:count]
+
+
+def load_events(hdf5_path):
+    """All CD events of an events.hdf5 as a structured array (x, y, p, t), sorted by t."""
+    events = np.concatenate(list(iter_event_chunks(hdf5_path)))
     if np.any(np.diff(events["t"]) < 0):
         raise ValueError(f"{hdf5_path}: event timestamps are not sorted")
     return events

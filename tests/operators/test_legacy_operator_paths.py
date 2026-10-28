@@ -28,7 +28,8 @@ def _load_operator(monkeypatch, filename, root):
     llm_utils.generate_augmented_code = lambda *args, **kwargs: "edited: true"
     llm_utils.extract_note = lambda text: ""
     for name in ("submit_mixtral", "submit_mixtral_hf", "llm_code_qc", "str2bool",
-                 "clean_code_from_llm", "retrieve_base_code", "strip_leading_imports"):
+                 "clean_code_from_llm", "retrieve_base_code", "strip_leading_imports",
+                 "is_renderer_gene", "RENDERER_SAMPLING"):
         setattr(llm_utils, name, lambda *args, **kwargs: None)
     stubs = {"cfg": config_package, "cfg.constants": constants,
              "utils": utils_package, "utils.print_utils": print_utils,

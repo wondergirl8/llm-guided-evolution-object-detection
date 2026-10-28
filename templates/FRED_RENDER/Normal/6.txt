@@ -1,0 +1,8 @@
+Replace this renderer with a decaying time surface for a fixed YOLO11n that detects tiny drones.
+
+For each pixel take its most recent event time (np.maximum.at on a (HEIGHT, WIDTH) array that starts at -window_us). Brightness is 255 * np.exp(latest / (window_us / 3)), where latest is that most recent time (between -window_us and 0, so newer events are brighter), only where the pixel had an event; other pixels stay 0. Put that decay in channel 0 for brighter events and in channel 1 for darker events, and the decay of any event in channel 2. Choose WINDOW_US between 5000 and 20000.
+
+The current code:
+```python
+{}
+```

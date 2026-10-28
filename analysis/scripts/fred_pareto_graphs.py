@@ -21,6 +21,8 @@ fronts include it; the independent three-seed baseline is not a GE candidate.
 Usage:
     uv run python analysis/scripts/fred_pareto_graphs.py
     uv run python analysis/scripts/fred_pareto_graphs.py --checkpoints fred_yolo11_checkpoints --output analysis/results/analysis/fred_pareto
+    # Same axes as another run's plots:
+    uv run python analysis/scripts/fred_pareto_graphs.py ... --axes_from analysis/results/analysis/fred_pareto_other/candidates.csv
 """
 
 import argparse
@@ -45,6 +47,10 @@ PROTOCOL = os.path.join(FRED_DIR, "configs", "phase1", "protocol.yaml")
 METRICS = [("mAP50", "mAP50"), ("mAP50_95", "mAP50:95")]
 # train_eval.py writes (0, 0, 999999999) for candidates that crashed.
 FAILED_PARAMS = 999_999_999
+# The third objective as plotted: (divisor, axis label, point label format).
+# Renderer runs (FRED_SEED_FAMILY=renderer) store WINDOW_US there instead of params.
+X_AXES = {"params": (1e6, "Parameters (millions)", "{:.2f}M"),
+          "window": (1e3, "Frame window (ms)", "{:.1f} ms")}
 
 
 def is_valid_fitness(fitness):
@@ -103,44 +109,45 @@ def front_2d(df, metric):
     return rows.loc[front]
 
 
-def plot_fronts_2d(df, title, limits, path, dpi=150):
+def plot_fronts_2d(df, title, limits, path, dpi=150, x_axis="params"):
     """mAP50 vs params and mAP50:95 vs params, each with its own Pareto front."""
+    scale, x_label, x_format = X_AXES[x_axis]
     fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
     seed_rows = df[df["gene_id"] == "seed"]
     for ax, (metric, label) in zip(axes, METRICS):
         front = front_2d(df, metric)
         front_candidates = front[front["gene_id"] != "seed"]
         others = df[(~df.index.isin(front.index)) & (df["gene_id"] != "seed")]
-        ax.scatter(others["params"] / 1e6, others[metric] * 100, color="lightgray",
+        ax.scatter(others["params"] / scale, others[metric] * 100, color="lightgray",
                    edgecolor="gray", s=25, alpha=0.7, label="Candidates")
         # Staircase: at any size, the best score reachable with at most that many params.
         staircase = front.drop_duplicates(subset=["params", metric])
-        ax.step(staircase["params"] / 1e6, staircase[metric] * 100, where="post", color="crimson",
+        ax.step(staircase["params"] / scale, staircase[metric] * 100, where="post", color="crimson",
                 lw=1.2, alpha=0.7)
-        ax.scatter(front_candidates["params"] / 1e6, front_candidates[metric] * 100, color="crimson",
+        ax.scatter(front_candidates["params"] / scale, front_candidates[metric] * 100, color="crimson",
                    edgecolor="black", s=55, zorder=3, label="Pareto front")
         for i, (_, row) in enumerate(front_candidates.iterrows()):
-            ax.annotate(f"{row[metric] * 100:.1f}%, {row['params'] / 1e6:.2f}M",
-                        (row["params"] / 1e6, row[metric] * 100), fontsize=7.5,
+            ax.annotate(f"{row[metric] * 100:.1f}%, " + x_format.format(row['params'] / scale),
+                        (row["params"] / scale, row[metric] * 100), fontsize=7.5,
                         xytext=(6, -11 if i % 2 else 5), textcoords="offset points")
         if len(seed_rows):
             seed = seed_rows.iloc[0]
             seed_on_front = seed_rows.index[0] in front.index
-            ax.scatter(seed["params"] / 1e6, seed[metric] * 100, color="black", marker="x",
+            ax.scatter(seed["params"] / scale, seed[metric] * 100, color="black", marker="x",
                        s=90, linewidths=2, zorder=4,
                        label="Stock seed (front)" if seed_on_front else "Stock seed")
-            ax.annotate(f"seed {seed[metric] * 100:.1f}%", (seed["params"] / 1e6, seed[metric] * 100),
+            ax.annotate(f"seed {seed[metric] * 100:.1f}%", (seed["params"] / scale, seed[metric] * 100),
                         fontsize=7.5, xytext=(-8, 7), textcoords="offset points", ha="right")
         # Identical coordinates still represent separate evaluated candidates.
         for (params, score), count in df.groupby(["params", metric]).size().items():
             if count > 1:
-                ax.annotate(f"×{count}", (params / 1e6, score * 100), fontsize=8,
+                ax.annotate(f"×{count}", (params / scale, score * 100), fontsize=8,
                             xytext=(7, 11), textcoords="offset points")
-        ax.set_xlim(limits["params"][0] / 1e6, limits["params"][1] / 1e6)
+        ax.set_xlim(limits["params"][0] / scale, limits["params"][1] / scale)
         ax.set_ylim(*limits[metric])
-        ax.set_xlabel("Parameters (millions)")
+        ax.set_xlabel(x_label)
         ax.set_ylabel(f"{label} %")
-        ax.set_title(f"{label} vs parameters")
+        ax.set_title(f"{label} vs {x_label.split(' (')[0].lower()}")
         ax.grid(True, linestyle=":", alpha=0.6)
         ax.legend(loc="lower right")
     fig.suptitle(title)
@@ -200,6 +207,10 @@ def main():
                       if run_tag else None)
     parser.add_argument("--models_dir", default=default_models,
                         help="Where the run's network_<id> files are (for pareto_models.csv)")
+    parser.add_argument("--axes_from", nargs="*", default=[],
+                        help="Other runs' candidates.csv to include in the axis limits, so plots share axes")
+    parser.add_argument("--x_axis", choices=sorted(X_AXES), default="params",
+                        help='Third objective: "window" for renderer runs, whose fitness holds WINDOW_US')
     parser.add_argument("--no_gif", action="store_true", help="Skip the animated GIF")
     parser.add_argument("--family", default=os.getenv("FRED_SEED_FAMILY", "yolo11"),
                         help="Family key in protocol.yaml")
@@ -226,7 +237,10 @@ def main():
     last_gen, final = by_gen[-1]
 
     # Same axes for every generation so the GIF frames line up.
-    limits = {"params": padded(list(final["params"]), lower=0)}
+    extra = []
+    for csv in args.axes_from:
+        extra += pd.read_csv(csv).to_dict("records")
+    limits = {"params": padded(list(final["params"]) + [s["params"] for s in extra], lower=0)}
     for metric, _ in METRICS:
         limits[metric] = padded([v * 100 for v in list(final[metric])],
                                 lower=0)
@@ -235,7 +249,8 @@ def main():
     for gen, df in by_gen:
         title = f"FRED {args.family} LLM-GE: generation {gen} ({n_candidates(df)} valid candidates)"
         frames.append(plot_fronts_2d(df, title, limits,
-                                     os.path.join(args.output, f"pareto2d_gen_{gen}.png")))
+                                     os.path.join(args.output, f"pareto2d_gen_{gen}.png"),
+                                     x_axis=args.x_axis))
         history.append({"generation": gen, "mAP50": df["mAP50"].max(),
                         "mAP50_95": df["mAP50_95"].max()})
     print(f"Saved {len(frames)} per-generation plots to {args.output}")
@@ -243,7 +258,8 @@ def main():
     final_title = (f"FRED {args.family} LLM-GE: final Pareto front after generation {last_gen} "
                    f"({n_candidates(final)} valid candidates)")
     print("Saved " + plot_fronts_2d(final, final_title, limits,
-                                    os.path.join(args.output, "pareto2d_final.png"), dpi=300))
+                                    os.path.join(args.output, "pareto2d_final.png"), dpi=300,
+                                    x_axis=args.x_axis))
 
     if not args.no_gif and len(frames) > 1:
         make_gif(frames, os.path.join(args.output, "pareto2d_fronts.gif"))

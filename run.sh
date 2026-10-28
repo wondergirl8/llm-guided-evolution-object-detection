@@ -20,10 +20,15 @@ mkdir -p run_job_outputs/{islands,evolution,evaluation,server}
 run_tag="fred_yolo11"
 if [[ "${FRED_SEED_FAMILY:-yolo11}" == "dfine" ]]; then
   run_tag="fred_dfine"
+elif [[ "${FRED_SEED_FAMILY:-yolo11}" == "renderer" ]]; then
+  run_tag="fred_renderer"
 fi
 # FRED_EVENTS (e.g. raw_w10000_polarity) trains on other event frames; keep
 # that run's checkpoints apart too (src/cfg/constants_fred_yolo11.py).
 if [[ -n "${FRED_EVENTS:-}" ]]; then
   run_tag="${run_tag}_${FRED_EVENTS}"
+# FRED_RENDER_WINDOW_US (e.g. 2000) fixes every renderer's window; its own run too.
+elif [[ "${FRED_SEED_FAMILY:-yolo11}" == "renderer" && -n "${FRED_RENDER_WINDOW_US:-}" ]]; then
+  run_tag="${run_tag}_w${FRED_RENDER_WINDOW_US}"
 fi
 uv run python run_improved.py --checkpoints "${run_tag}_checkpoints" --global_path "${run_tag}_checkpoints"

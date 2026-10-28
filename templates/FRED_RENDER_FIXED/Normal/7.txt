@@ -1,0 +1,6 @@
+Keep how this renderer encodes events, but make each event easier to see: draw every event as a small square of 3x3 pixels instead of one pixel (also write at y-1, y+1, x-1 and x+1, clipped to the image), so a tiny drone covered by only a few events still forms a visible blob. Keep the WINDOW_US line unchanged.
+
+The current code:
+```python
+{}
+```

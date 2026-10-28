@@ -1,0 +1,6 @@
+Keep how this renderer encodes events, but lower WINDOW_US by about a third, and change the encoding only as much as needed so the drone stays visible with fewer events (for example brighter colours for single events or slightly larger marks for each event).
+
+The current code:
+```python
+{}
+```
