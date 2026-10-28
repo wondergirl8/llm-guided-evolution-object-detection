@@ -14,7 +14,7 @@ palette frames that wait just as long.
     # 2. once the jobs finish
     uv run python sota/FRED_LLM_GE/phase1_detection/retrain_renderers.py summary
 
-Evolved renderers are read from seeds/renderer/models and their search score
+Evolved renderers are read from seeds/renderer/models (or --run_root) and their search score
 counts as seed 0. Each setup adds to the earlier plan, so jobs.txt holds only
 the new jobs while the summary covers all of them. Palette renderers are
 written to <out>/models. Palette frames
@@ -57,10 +57,10 @@ def palette_renderer(models, window_us):
     return path.stem.split("network_")[1]
 
 
-def setup(protocol, out_dir, genes, windows, seeds):
+def setup(protocol, out_dir, genes, windows, seeds, run_root):
     models = out_dir / "models"
     models.mkdir(parents=True, exist_ok=True)
-    jobs = [(gene, RUN_ROOT / "models", seeds) for gene in genes]
+    jobs = [(gene, run_root / "models", seeds) for gene in genes]
     # Palette renderers have no search score, so they also need seed 0.
     jobs += [(palette_renderer(models, w), models, sorted({0, *seeds})) for w in windows]
     commands = []
@@ -81,6 +81,7 @@ def setup(protocol, out_dir, genes, windows, seeds):
     plan_file = out_dir / "plan.json"
     plan = json.loads(plan_file.read_text()) if plan_file.is_file() else {"genes": [], "palette": []}
     plan = {"genes": list(dict.fromkeys(plan["genes"] + genes)),
+            "run_roots": dict(plan.get("run_roots", {}), **{g: str(run_root) for g in genes}),
             "palette": sorted(set(plan["palette"] + windows), reverse=True)}
     plan_file.write_text(json.dumps(plan, indent=2) + "\n")
     jobs_file = out_dir / "jobs.txt"
@@ -102,7 +103,8 @@ def summary(out_dir, sweep_dir):
     rows += [(f"palette {w}", [read_score(p) for p in sorted((out_dir / f"palette_w{w}").glob(
         "seed*/results/*_results.csv"))]) for w in plan["palette"]]
     for gene in plan["genes"]:
-        search = read_score(RUN_ROOT / "results" / f"{gene}_results.csv")
+        run_root = Path(plan.get("run_roots", {}).get(gene, RUN_ROOT))
+        search = read_score(run_root / "results" / f"{gene}_results.csv")
         rows.append((gene, [search] + [read_score(p) for p in sorted((out_dir / gene).glob(
             "seed*/results/*_results.csv"))]))
     header = "renderer,window_us,runs,mAP50_mean,mAP50_sd,mAP50_95_mean,mAP50_95_sd"
@@ -131,6 +133,8 @@ def main():
                         help="Windows in us to score plain palette frames at (setup only)")
     parser.add_argument("--protocol", default=str(DEFAULT_PROTOCOL))
     parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2])
+    parser.add_argument("--run_root", default=str(RUN_ROOT),
+                        help="Renderer run the --genes come from, e.g. seeds/renderer_w2000 (setup only)")
     args = parser.parse_args()
     protocol = yaml.safe_load(Path(args.protocol).read_text())
     data_root = FRED_DIR / protocol["challenging"]["data_root"]
@@ -140,7 +144,7 @@ def main():
             parser.error("setup needs --genes or --palette")
         if 0 in args.seeds:
             parser.error("seed 0 is the search score; retrain other seeds")
-        setup(protocol, out_dir, args.genes, args.palette, args.seeds)
+        setup(protocol, out_dir, args.genes, args.palette, args.seeds, Path(args.run_root))
     else:
         summary(out_dir, data_root / "event_sweep")
 
