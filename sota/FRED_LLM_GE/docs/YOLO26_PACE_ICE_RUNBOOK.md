@@ -136,27 +136,39 @@ interpret it as a completed search.
 
 ## 2. Set the variables for a chosen tag
 
-For the **existing trial 2**, use this block in every new PACE shell:
+For **any YOLO26-P2 run**, paste these common settings in every new PACE shell
+before using the run tag or importing `src.cfg.constants`:
 
 ```bash
 export FRED_SEED_FAMILY=yolo26_p2
-export FRED_RUN_TAG=yolo26_p2_20261023_eot0_trial2
 export FRED_NUM_GENERATIONS=21
 export LLMGE_PORT=8479 LLMGE_CLUSTER=pace-ice
 export LOCAL=false LOCAL_LLM=true INFERENCE_SUBMISSION=false
 export LLMGE_LLM_MODEL=mixtral SUBMIT_ISLAND_CONTROLLER=0
 export HF_HUB_DISABLE_XET=1
-export LLMGE_MIN_SERVER_REMAINING_SECONDS=7200
 unset FRED_EVENTS LLMGE_BOUNDED_SESSION LLMGE_MODEL_PATH
 unset LLM_MAX_NEW_TOKENS LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS
 ```
 
-For a **new experiment**, use the same settings but choose a **new, unused**
-`FRED_RUN_TAG` matching `yolo26_p2_YYYYMMDD_eot0_trialN`. Record it, the
-commit, port, and every server/controller job ID. Never change the tag while
-resuming one experiment. Before a fresh run, verify that both search exports
-exist and that their finalized counts were 10,053 training and 6,733
-validation frames:
+For the **existing trial 2**, also set its original tag and server margin:
+
+```bash
+export FRED_RUN_TAG=yolo26_p2_20261023_eot0_trial2
+export LLMGE_MIN_SERVER_REMAINING_SECONDS=7200
+```
+
+For a **new experiment**, clear any old tag and trial-2-only settings here;
+section 3 creates a **new, unused** tag. The family export above is required:
+without it, the default `yolo11` family rejects a `yolo26_p2_...` tag.
+
+```bash
+unset FRED_RUN_TAG LLMGE_MIN_SERVER_REMAINING_SECONDS LLMGE_REAL_SQUEUE
+```
+
+Record the new tag, commit, port, and every server/controller job ID. Never
+change the tag while resuming one experiment. Before a fresh run, verify that
+both search exports exist and that their finalized counts were 10,053
+training and 6,733 validation frames:
 
 ```bash
 test -s sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/data_cache/challenging/search_train_step50/data.yaml && echo 'train export OK'
