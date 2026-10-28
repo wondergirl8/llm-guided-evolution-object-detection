@@ -25,9 +25,9 @@ Choose **one** path before pasting launch commands:
 
 - **New experiment:** sections 1, 2 (use the common exports, then let section 3
   assign a new tag), 3, and 5. Confirm the dataset, model path, generated
-  scripts, server-time parser test, and server readiness at the indicated
-  stops. Section 3 clears the old trial-2-only time margin. This starts at
-  generation 0, including the stock seed.
+  scripts, and server readiness at the indicated stops. Section 3 clears the
+  old trial-2-only time margin. This starts at generation 0, including the
+  stock seed.
 - **Resume trial 2:** sections 1, 2 (existing trial-2 block), 4, and 5. Use
   the **current PACE** job and checkpoint evidence. The IDs and generation
   recorded in this document are historical examples. Do not launch a second
@@ -182,21 +182,27 @@ This fresh-run path requires commit `ad3e60f03` or a descendant, which
 contains the `MM:SS` parser fix and its regression tests. Pull **only after**
 deciding that no older tag needs to resume from this checkout; a changed Git
 commit invalidates that tag's checkpoint fingerprint. Then synchronize
-dependencies and check quota:
+dependencies:
 
 ```bash
 git pull --ff-only origin fred-custom-seeds
 unset LLMGE_MIN_SERVER_REMAINING_SECONDS LLMGE_REAL_SQUEUE
 uv sync
-pace-quota
-grep -n 'adapter.training_overrides()' sota/FRED_LLM_GE/phase1_detection/final_eval.py
-LLMGE_AUTO_START_SERVER=0 uv run pytest tests/operators/test_fred_population_integrity.py -q -k server_window
 ```
 
-For a new run, stop before creating a tag if the pull fails, the `grep` finds
-no line, or the parser tests fail. The matching line is the YOLO26
-final-evaluation fix; the tests cover the `MM:SS` server-time format that
-crashed trial 2.
+Stop if the pull or dependency sync fails. The next block creates the tag and
+generates the Slurm scripts; these are the normal new-run commands. The
+following checks are optional diagnostics, not commands that start the run:
+
+```bash
+pace-quota
+LLMGE_AUTO_START_SERVER=0 uv run python -m pytest tests/operators/test_fred_population_integrity.py -q -k server_window
+```
+
+The test covers the `MM:SS` server-time format that crashed trial 2. Use
+`python -m pytest` as shown: invoking `uv run pytest` directly can fail to
+import the repository-root `run_improved.py` during test collection. The
+final-evaluation code is checked separately in section 9, when needed.
 
 ```bash
 RUN_DATE=$(date +%Y%m%d)
