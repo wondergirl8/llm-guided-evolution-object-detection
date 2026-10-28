@@ -186,7 +186,6 @@ dependencies and check quota:
 
 ```bash
 git pull --ff-only origin fred-custom-seeds
-git merge-base --is-ancestor ad3e60f03 HEAD && echo 'YOLO26 server-time fix present'
 unset LLMGE_MIN_SERVER_REMAINING_SECONDS LLMGE_REAL_SQUEUE
 uv sync
 pace-quota
@@ -194,10 +193,10 @@ grep -n 'adapter.training_overrides()' sota/FRED_LLM_GE/phase1_detection/final_e
 LLMGE_AUTO_START_SERVER=0 uv run pytest tests/operators/test_fred_population_integrity.py -q -k server_window
 ```
 
-For a new run, stop before creating a tag if the pull fails, the
-`YOLO26 server-time fix present` message is absent, the `grep` finds no line,
-or the parser tests fail. The matching line is the YOLO26 final-evaluation
-fix; the tests cover the `MM:SS` server-time format that crashed trial 2.
+For a new run, stop before creating a tag if the pull fails, the `grep` finds
+no line, or the parser tests fail. The matching line is the YOLO26
+final-evaluation fix; the tests cover the `MM:SS` server-time format that
+crashed trial 2.
 
 ```bash
 RUN_DATE=$(date +%Y%m%d)
