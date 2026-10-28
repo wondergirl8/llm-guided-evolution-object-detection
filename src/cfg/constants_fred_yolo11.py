@@ -21,6 +21,16 @@ import re
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FRED_DIR = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE")
 SEED_FAMILY = os.getenv("FRED_SEED_FAMILY", "yolo11")
+RUN_TAG = os.getenv("FRED_RUN_TAG", "")
+if RUN_TAG and not re.fullmatch(
+    rf"{re.escape(SEED_FAMILY)}_[0-9]{{8}}_eot[01]_[a-z0-9][a-z0-9_-]*", RUN_TAG
+):
+    raise ValueError(
+        "FRED_RUN_TAG must be <family>_YYYYMMDD_eot0-or-eot1_<experiment>, "
+        "for example yolo11_20261017_eot0_trial1"
+    )
+RUN_ROOT = os.path.join(ROOT_DIR, "fred_runs", RUN_TAG) if RUN_TAG else None
+RUN_CHECKPOINT_DIR = os.path.join(RUN_ROOT, "checkpoints") if RUN_ROOT else None
 _FAMILIES = {
     # SOTA_ROOT holds models/, results/ and trained_models/ for the family.
     "yolo11": {
@@ -28,9 +38,7 @@ _FAMILIES = {
         "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11n.yaml"),
         "prompt_group": "FRED_YOLO11/Normal",
         "rules": "templates/FRED_YOLO11/ConstantRules.txt",
-        # 80 epochs of YOLO11n at 1280 can outlast the 40 min default; the
-        # evaluation job itself is limited to 4 h.
-        "eval_timeout": 3 * 60 * 60 + 30 * 60,
+        "eval_timeout": 8 * 60 * 60,
     },
     "tiny_yolo11": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo11"),
@@ -64,13 +72,22 @@ if RENDER_WINDOW_US:
                                  rules="templates/FRED_RENDER_FIXED/ConstantRules.txt")
 _FAMILY = _FAMILIES[SEED_FAMILY]
 _RUN_NAME = {"dfine": "fred_dfine", "renderer": "fred_renderer"}.get(SEED_FAMILY, "fred_yolo11")
+CANDIDATE_POLICY_MODULE = (
+    "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
+    if SEED_FAMILY == "yolo11" else None
+)
+CROSSOVER_TEMPLATE_DIR = (
+    "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
+    else "templates/CrossOver"
+)
 # Event frames candidates train on: unset for FRED's released frames, or a tag
 # such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
 # keeps its genes, results, outputs and checkpoints apart from the released run.
 FRED_EVENTS = os.getenv("FRED_EVENTS", "")
 _RUN_SUFFIX = (f"_{FRED_EVENTS}" if FRED_EVENTS else
                f"_w{RENDER_WINDOW_US}" if RENDER_WINDOW_US else "")
-SOTA_ROOT = _FAMILY["sota_root"] + _RUN_SUFFIX
+SOTA_ROOT = (os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else
+             _FAMILY["sota_root"] + _RUN_SUFFIX)
 DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
 SEED_NETWORK = _FAMILY["seed"]
 if RENDER_WINDOW_US:
@@ -98,7 +115,10 @@ PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/**/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
-OUTPUT_DIR = os.path.join(ROOT_DIR, f"{_RUN_NAME}_output{_RUN_SUFFIX}")
+OUTPUT_DIR = (os.path.join(RUN_ROOT, "operator_jobs") if RUN_ROOT else
+              os.path.join(ROOT_DIR, f"fred_renderer_output{_RUN_SUFFIX}") if SEED_FAMILY == "renderer" else
+              os.path.join(ROOT_DIR, "fred_dfine_output" if SEED_FAMILY == "dfine"
+                           else "fred_yolo11_output"))
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
 SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
@@ -138,6 +158,8 @@ RUN_COMMAND = "bash" if LOCAL else "sbatch"
 DELAYED_CHECK = not LOCAL
 MACOS = platform.system() == "Darwin"
 RUNLINE_AMP = ""
+# This clock starts at sbatch submission, including queue time. The evaluation
+# job's own four-hour Slurm limit still caps its runtime after it starts.
 EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
     os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(_FAMILY["eval_timeout"]))
 )
@@ -169,6 +191,8 @@ QC_CHECK_BOOL = False
 HUGGING_FACE_BOOL = False
 PROB_QC = 0.0
 PROB_EOT = 0.0
+if RUN_TAG and f"_eot{int(PROB_EOT > 0)}_" not in RUN_TAG:
+    raise ValueError("FRED_RUN_TAG EoT flag does not match PROB_EOT")
 NUM_EOT_ELITES = 1
 GENERATION = 0
 
@@ -178,18 +202,33 @@ FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 
-# run_improved.py loops range(1, num_generations), so 21 runs generations
-# 1-20 after the seed population. Resubmitting resumes from the latest
-# checkpoint in fred_yolo11_checkpoints.
-num_generations = 21
-start_population_size = 4
-population_size = 4
+# run_improved.py checkpoints generation 0 (seed and initial candidates), then
+# runs generations 1 through num_generations - 1. Resubmitting resumes from the latest
+# checkpoint in the configured run directory.
+num_generations = int(os.getenv('FRED_NUM_GENERATIONS', '21'))
+if num_generations < 1:
+    raise ValueError('FRED_NUM_GENERATIONS must include generation 0')
+EVAL_GPU_CONSTRAINT = os.getenv('FRED_EVAL_GPU_CONSTRAINT', 'H200')
+# Respect SLURM's per-job CUDA_VISIBLE_DEVICES instead of the shared template's
+# hard-coded 0. PACE may remap an allocated physical GPU to logical device 0.
+PRESERVE_SLURM_CUDA_VISIBLE_DEVICES = True
+# Retry a GPU allocation that CUDA cannot use; this is an infrastructure
+# failure, not evidence that the candidate architecture is invalid.
+EVAL_GPU_RETRY_LIMIT = 2
+FRED_MAX_REFILL_ATTEMPTS = 24
+start_population_size = 8
+# Six selected parents enter the operators; two unmodified elites bring the
+# next generation to at most eight distinct candidates.
+population_size = 8
+offspring_size = 6
 crossover_probability = 0.5
 mutation_probability = 0.8
 num_elites = 2
-# Reserve one elite slot for the highest-mAP50 model; SPEA2 alone kept the
-# smallest model and dropped the most accurate ones.
-KEEP_BEST_ELITE = True
+# SPEA2 selects both elites using all three objectives; no individual gets a
+# reserved slot based on mAP50, mAP50:95, or parameter count alone.
+KEEP_BEST_ELITE = False
+if offspring_size + num_elites != population_size:
+    raise ValueError("FRED offspring_size + num_elites must equal population_size")
 hof_size = 4
 max_gen_attempts = 5
 migration_gen = 0

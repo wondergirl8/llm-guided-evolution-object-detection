@@ -29,27 +29,18 @@ from pathlib import Path
 import yaml
 
 try:
-    from .event_sweep import REPO_ROOT, SBATCH, mean_sd
+    from .event_sweep import REPO_ROOT, SBATCH, mean_sd, read_result
     from .export_split import DEFAULT_PROTOCOL, FRED_DIR, events_from_tag
 except ImportError:
-    from event_sweep import REPO_ROOT, SBATCH, mean_sd
+    from event_sweep import REPO_ROOT, SBATCH, mean_sd, read_result
     from export_split import DEFAULT_PROTOCOL, FRED_DIR, events_from_tag
 
 SEEDS_DIR = FRED_DIR / "phase1_detection" / "seeds"
-FAILED_PARAMS = 999999999  # candidate_runner.FAILED_RESULT
 
 
 def run_root(tag):
     """The LLM-GE run's SOTA_ROOT (constants_fred_yolo11.py appends the events tag)."""
     return SEEDS_DIR / ("ultralytics_yolo11" if tag == "released" else f"ultralytics_yolo11_{tag}")
-
-
-def read_score(path):
-    """(mAP50, mAP50:95, params) from a results CSV, or None if missing or failed."""
-    if not path.is_file():
-        return None
-    map50, map50_95, params = (float(v) for v in path.read_text().split(","))
-    return None if params == FAILED_PARAMS else (map50, map50_95, int(params))
 
 
 def front_genes(tag, pareto_csv):
@@ -106,11 +97,11 @@ def summary(out_dir, sweep_dir):
           f"{'mAP50:95 mean ± sd':>20}{'search mAP50':>14}")
     for tag, genes in plan.items():
         # YOLO11n first: all its seeds come from the event sweep.
-        rows = [("YOLO11n", None, [read_score(p) for p in
+        rows = [("YOLO11n", None, [read_result(p) for p in
                                    sorted((sweep_dir / tag).glob("seed*/results/seed_results.csv"))])]
         for gene in genes:
-            search = read_score(run_root(tag) / "results" / f"{gene}_results.csv")
-            retrained = [read_score(p) for p in sorted((out_dir / tag / gene).glob("seed*/results/*_results.csv"))]
+            search = read_result(run_root(tag) / "results" / f"{gene}_results.csv")
+            retrained = [read_result(p) for p in sorted((out_dir / tag / gene).glob("seed*/results/*_results.csv"))]
             rows.append((gene, search, [search] + retrained))
         for name, search, scores in rows:
             scores = [s for s in scores if s]

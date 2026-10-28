@@ -133,9 +133,9 @@ def main():
     parser.add_argument("--seed", type=int, default=None,
                         help="Training seed (default protocol proxy.seed); repeat with others to confirm")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--test_workers", type=int, default=4,
+    parser.add_argument("--test_workers", type=int, default=1,
                         help="Processes downloading and rendering test sequences (each holds one "
-                             "sequence's events in memory)")
+                             "sequence's events in memory); use 4 for raw-event windows like 10 ms")
     # Training and testing can run as two jobs when together they exceed the
     # Slurm time limit (10 ms test frames are rendered from raw events, ~10 h).
     stage = parser.add_mutually_exclusive_group()
@@ -191,6 +191,7 @@ def main():
             seed=seed, deterministic=True, pretrained=args.weights or False,
             device=_ultralytics_device(args.device), workers=adapter.settings.get("workers", 8),
             project=str(out), name="train", exist_ok=True, val=False, plots=False, verbose=False,
+            **adapter.training_options(),
         )
         model.save(checkpoint)
     if args.train_only:

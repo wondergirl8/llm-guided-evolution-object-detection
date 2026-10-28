@@ -38,12 +38,14 @@ try:
     from .candidate_runner import (DEFAULT_PROTOCOL, FRED_DIR, load_protocol, run,
                                    write_failure_results)
     from .cache_events import MAX_WINDOW_US, slices_dir
+    from .event_sweep import read_result
     from .export_split import STEP_US, dataset_parts, finalize
     from .result_contract import DetectionResult, write_results
 except ImportError:
     from candidate_runner import (DEFAULT_PROTOCOL, FRED_DIR, load_protocol, run,
                                   write_failure_results)
     from cache_events import MAX_WINDOW_US, slices_dir
+    from event_sweep import read_result
     from export_split import STEP_US, dataset_parts, finalize
     from result_contract import DetectionResult, write_results
 from fred_events import HEIGHT, WIDTH  # on sys.path via proxy_data
@@ -105,7 +107,7 @@ def earlier_score(renderer_path, sota_root, variant_dir):
     for done in sorted((Path(sota_root) / "results").glob("*_results.csv")):
         gene = done.name[:-len("_results.csv")]
         path = Path(variant_dir or "") / f"network_{gene}.py"
-        if done.read_text().strip().endswith(",999999999") and path.is_file() \
+        if read_result(done) is None and path.is_file() \
                 and Path(path) != Path(renderer_path) and code_key(path) == key:
             return gene, {"failed": True}
     for done in sorted((Path(sota_root) / "renders").glob("*.json")):
@@ -280,15 +282,13 @@ def main():
         eval_root = workdir / "eval"
         try:
             run(gene_id, "network", None, settings["model_family"], protocol, eval_root, device, roots)
-            map50, map50_95, params = (float(v) for v in
-                                       (eval_root / "results" / f"{gene_id}_results.csv").read_text().split(","))
+            score, error = read_result(eval_root / "results" / f"{gene_id}_results.csv"), "training or scoring failed"
         except Exception as e:
-            params, error = None, repr(e)
-        else:
-            error = "training or scoring failed"
-        if params in (None, 999999999):  # 999999999: candidate_runner.FAILED_RESULT
+            score, error = None, repr(e)
+        if score is None:
             write_failure_results(args.sota_root, gene_id, start, error)
             return
+        map50, map50_95, _ = score
         renders = Path(args.sota_root) / "renders"
         renders.mkdir(parents=True, exist_ok=True)
         (renders / f"{gene_id}.json").write_text(json.dumps(dict(stats, mAP50=map50, mAP50_95=map50_95)))

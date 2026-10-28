@@ -31,15 +31,13 @@ from pathlib import Path
 import yaml
 
 try:
-    from .event_sweep import REPO_ROOT, SBATCH, mean_sd
+    from .event_sweep import REPO_ROOT, SBATCH, mean_sd, read_result
     from .export_split import DEFAULT_PROTOCOL, FRED_DIR
     from .render_runner import SEED_RENDERER
-    from .retrain_front import read_score
 except ImportError:
-    from event_sweep import REPO_ROOT, SBATCH, mean_sd
+    from event_sweep import REPO_ROOT, SBATCH, mean_sd, read_result
     from export_split import DEFAULT_PROTOCOL, FRED_DIR
     from render_runner import SEED_RENDERER
-    from retrain_front import read_score
 
 RUN_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "renderer"
 # Palette settings event_sweep.py already scored on seeds 0-2.
@@ -98,14 +96,14 @@ def setup(protocol, out_dir, genes, windows, seeds, run_root):
 
 def summary(out_dir, sweep_dir):
     plan = json.loads((out_dir / "plan.json").read_text())
-    rows = [(label, [read_score(p) for p in sorted((sweep_dir / tag).glob("seed*/results/seed_results.csv"))])
+    rows = [(label, [read_result(p) for p in sorted((sweep_dir / tag).glob("seed*/results/seed_results.csv"))])
             for label, tag in SWEPT.items()]
-    rows += [(f"palette {w}", [read_score(p) for p in sorted((out_dir / f"palette_w{w}").glob(
+    rows += [(f"palette {w}", [read_result(p) for p in sorted((out_dir / f"palette_w{w}").glob(
         "seed*/results/*_results.csv"))]) for w in plan["palette"]]
     for gene in plan["genes"]:
         run_root = Path(plan.get("run_roots", {}).get(gene, RUN_ROOT))
-        search = read_score(run_root / "results" / f"{gene}_results.csv")
-        rows.append((gene, [search] + [read_score(p) for p in sorted((out_dir / gene).glob(
+        search = read_result(run_root / "results" / f"{gene}_results.csv")
+        rows.append((gene, [search] + [read_result(p) for p in sorted((out_dir / gene).glob(
             "seed*/results/*_results.csv"))]))
     header = "renderer,window_us,runs,mAP50_mean,mAP50_sd,mAP50_95_mean,mAP50_95_sd"
     lines = [header]

@@ -16,15 +16,17 @@ elites are retrained at full budget later.
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import torch
 import yaml
 
-try:
+if __package__:
     from . import map_reporter
     from .adapters.dfine import DFINEAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
@@ -32,14 +34,17 @@ try:
     from .export_split import dataset_parts, events_from_tag
     from .proxy_data import REVISION, load_exported_split, load_split
     from .result_contract import DetectionResult, write_results
-except ImportError:
-    import map_reporter
-    from adapters.dfine import DFINEAdapter
-    from adapters.tiny_yolo11 import TinyYolo11Adapter
-    from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
-    from export_split import dataset_parts, events_from_tag
-    from proxy_data import REVISION, load_exported_split, load_split
-    from result_contract import DetectionResult, write_results
+else:
+    # SLURM invokes this file directly. Make the repository namespace package
+    # importable so adapters retain their relative imports in that mode too.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from sota.FRED_LLM_GE.phase1_detection import map_reporter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.dfine import DFINEAdapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Adapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
+    from sota.FRED_LLM_GE.phase1_detection.export_split import dataset_parts, events_from_tag
+    from sota.FRED_LLM_GE.phase1_detection.proxy_data import REVISION, load_exported_split, load_split
+    from sota.FRED_LLM_GE.phase1_detection.result_contract import DetectionResult, write_results
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
@@ -47,8 +52,8 @@ DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
 ADAPTERS = {adapter.name: adapter for adapter in
             (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter)}
 
-# Worst-case values for FITNESS_WEIGHTS = (1.0, 1.0, -1.0).
-FAILED_RESULT = DetectionResult(0.0, 0.0, 999999999)
+# Excluded by the orchestrator's INVALID_FITNESS_MAX filter.
+FAILED_RESULT = DetectionResult(-math.inf, -math.inf, math.inf)
 
 
 def load_protocol(path):
@@ -79,7 +84,7 @@ def code_revision():
 def write_failure_results(sota_root, gene_id, start_time, message):
     """Record worst-case fitness for candidates that cannot be evaluated."""
     train_time = time.time() - start_time
-    write_results(sota_root, gene_id, FAILED_RESULT)
+    write_results(sota_root, gene_id, FAILED_RESULT, reason=message)
     print(f"ERROR evaluating generated model: {message}")
     print(f"Wrote worst-case fitness after {train_time:.1f}s")
     print('='*120);print('job done');print('='*120)
@@ -176,37 +181,40 @@ def challenging_search(protocol, family=None, roots=None):
 
 def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device, data_roots=None):
     start_time = time.time()
-    adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
-    if adapter.settings.get("data") == "challenging_search":
-        proxy, train_data, load_val = challenging_search(protocol, family, data_roots)
-    else:
-        proxy = protocol["proxy"]
-        train_data = load_val = None
-    torch.manual_seed(proxy["seed"])
-    config = {"family": family, "proxy": proxy, "family_settings": adapter.settings}
-
-    # This is LLM Guided Code
-    # Build the candidate; a broken LLM-generated architecture gets worst-case fitness
     try:
+        adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
+        if adapter.settings.get("data") == "challenging_search":
+            proxy, train_data, load_val = challenging_search(protocol, family, data_roots)
+        else:
+            proxy = protocol["proxy"]
+            train_data = load_val = None
+        torch.manual_seed(proxy["seed"])
+        config = {"family": family, "proxy": proxy, "family_settings": adapter.settings}
+
+        # Build and prepare the candidate before starting expensive training.
         variant_path = adapter.variant_path(model_name, variant_dir)
         model = adapter.build(variant_path, num_classes=1, device=device)
+        param_count = adapter.param_count(model)
+        if load_val is None:
+            train_data, val_data = proxy_data(proxy)
+        else:
+            val_data = load_val()
+        train_frames = train_data.get("frames") or len(train_data["images"])
     except Exception as e:
-        write_failure_results(sota_root, gene_id, start_time, repr(e))
+        write_failure_results(sota_root, gene_id, start_time, f"setup_or_build_failed: {e!r}")
         return
 
-    param_count = adapter.param_count(model)
-
-    if load_val is None:
-        train_data, val_data = proxy_data(proxy)
-    else:
-        val_data = load_val()
-    train_frames = train_data.get("frames") or len(train_data["images"])
     print(f"family: {family}, train frames: {train_frames}, "
           f"val frames: {len(val_data['images'])}, params: {param_count}, device: {device}",
           flush=True)
 
     try:
-        adapter.train(model, train_data, proxy, device)
+        if family == "yolo11":
+            args_path = Path(sota_root) / "training_args" / gene_id / "args.yaml"
+            adapter.train(model, train_data, proxy, device, args_path=args_path)
+            print(f"Saved Ultralytics training arguments: {args_path}", flush=True)
+        else:
+            adapter.train(model, train_data, proxy, device)
 
         model_dir = Path(sota_root) / "trained_models"
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -223,7 +231,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device, d
         result, report_path = map_reporter.report(payload, sota_root=sota_root,
                                                   gene_id=gene_id, mode="validation")
     except Exception as e:
-        write_failure_results(sota_root, gene_id, start_time, repr(e))
+        write_failure_results(sota_root, gene_id, start_time, f"train_or_eval_failed: {e!r}")
         return
     train_time = time.time() - start_time
 
@@ -242,6 +250,8 @@ def main():
     parser.add_argument("--variant_dir", type=str, default=str(DEFAULT_SOTA_ROOT / "models"),
                         help="Directory where models are written by LLM-GE")
     parser.add_argument("--protocol", type=str, default=str(DEFAULT_PROTOCOL))
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Override only the training/evaluation random seed; baseline repeats use 0, 1, 2")
     parser.add_argument("--events", type=str, default=None,
                         help='Event frames, e.g. "raw_w10000_polarity" (default: protocol\'s '
                              "challenging.events)")
@@ -262,10 +272,14 @@ def main():
     if args.device == "cpu" and os.environ.get("CUDA_VISIBLE_DEVICES"):
         message = (f"GPU allocated (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}) "
                    "but CUDA is unavailable on this node; not training on CPU")
-        write_failure_results(args.sota_root, gene_id, time.time(), message)
+        write_failure_results(args.sota_root, gene_id, time.time(), f"gpu_unavailable: {message}")
         raise SystemExit(1)
 
     protocol = load_protocol(args.protocol)
+    if args.seed is not None:
+        if args.seed < 0:
+            parser.error("--seed must be nonnegative")
+        protocol["proxy"]["seed"] = args.seed
     if args.events:
         protocol["challenging"]["events"] = events_from_tag(args.events)
     run(gene_id, args.model, args.variant_dir, args.family, protocol, args.sota_root, args.device)

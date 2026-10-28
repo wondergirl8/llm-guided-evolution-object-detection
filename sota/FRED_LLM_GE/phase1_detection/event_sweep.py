@@ -84,6 +84,20 @@ def setup(protocol, sweep_dir, seeds, family):
     print(f"from {REPO_ROOT}:\n  sbatch --array=0-{len(commands) - 1}%4 {script}")
 
 
+def read_result(path):
+    """(mAP50, mAP50:95, params) from a results CSV, or None if it is missing or failed.
+
+    Failures were once written as 0,0,999999999 and are now -inf,-inf,inf
+    (result_contract.py, which also appends a reason column).
+    """
+    if not Path(path).is_file():
+        return None
+    map50, map50_95, params = (float(v) for v in Path(path).read_text().split(",")[:3])
+    if params == 999999999 or params == float("inf"):
+        return None
+    return map50, map50_95, int(params)
+
+
 def mean_sd(values):
     """(mean, sample sd) of a list of scores; (None, None) if empty."""
     if not values:
@@ -97,9 +111,8 @@ def summary(protocol, sweep_dir):
     for events in settings(protocol):
         scores = []
         for csv in sorted((sweep_dir / tag(events)).glob("seed*/results/seed_results.csv")):
-            map50, map50_95, params = (float(v) for v in csv.read_text().split(","))
-            if params != 999999999:  # candidate_runner.FAILED_RESULT
-                scores.append((map50, map50_95))
+            if score := read_result(csv):
+                scores.append(score[:2])
         stats = [*mean_sd([s[0] for s in scores]), *mean_sd([s[1] for s in scores])]
         shown = [f"{stats[i]:.4f} ± {stats[i + 1]:.4f}" if scores else "-" for i in (0, 2)]
         window_ms = events["window_us"] / 1000

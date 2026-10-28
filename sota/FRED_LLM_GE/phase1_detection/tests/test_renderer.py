@@ -156,4 +156,4 @@ def test_a_renderer_that_changes_the_fixed_window_fails_unscored(tmp_path, monke
                                       str(models), "--sota_root", str(tmp_path), "--window_us", "2000",
                                       "--device", "cpu"])
     render_runner.main()
-    assert (tmp_path / "results" / "a_results.csv").read_text().strip().endswith(",999999999")
+    assert render_runner.read_result(tmp_path / "results" / "a_results.csv") is None
