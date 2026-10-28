@@ -71,7 +71,7 @@ A PENDING job is queued. Wait for RUNNING, then inspect its log:
 tail -F "run_job_outputs/server/slurm-$LLMGE_SERVER_JOB_ID.out"
 ~~~
 
-Wait for “Serving on port 8479” and “Skipping island controller submission”; then press Ctrl-C. If the server exits or the log reports an error, inspect it before submitting the controller. The coe-gpu partition avoided a prior BadConstraints submission.
+Wait for “Skipping island controller submission” and Uvicorn's “Application startup complete” or “Uvicorn running” message; then press Ctrl-C. The earlier “Serving on port 8479” line is printed before the model finishes loading. The controller also polls the server's HTTP readiness, so an early controller submission waits for it. If the server exits or the log reports an error, inspect it before submitting the controller. The coe-gpu partition avoided a prior BadConstraints submission.
 
 Submit **one** controller from the same shell, while the server is ready:
 
