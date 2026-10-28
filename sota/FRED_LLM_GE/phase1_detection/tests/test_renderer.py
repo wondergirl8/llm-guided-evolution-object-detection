@@ -142,3 +142,18 @@ def test_a_twin_of_a_failed_renderer_fails_without_rerunning(tmp_path):
     (results / "a_results.csv").write_text("0.000000,0.000000,999999999")
     (models / "network_b.py").write_text(body)
     assert render_runner.earlier_score(models / "network_b.py", tmp_path, models) == ("a", {"failed": True})
+
+
+def test_a_renderer_that_changes_the_fixed_window_fails_unscored(tmp_path, monkeypatch):
+    import sys
+
+    models = tmp_path / "models"
+    models.mkdir()
+    body = "import numpy as np\n# --OPTION--\nWINDOW_US = 10000\ndef render(events, window_us):\n    return 1\n"
+    (models / "network_a.py").write_text(body)
+    monkeypatch.setattr(render_runner, "render_split", lambda *a: pytest.fail("must not render"))
+    monkeypatch.setattr(sys, "argv", ["render_runner.py", "--model", "network_a", "--variant_dir",
+                                      str(models), "--sota_root", str(tmp_path), "--window_us", "2000",
+                                      "--device", "cpu"])
+    render_runner.main()
+    assert (tmp_path / "results" / "a_results.csv").read_text().strip().endswith(",999999999")

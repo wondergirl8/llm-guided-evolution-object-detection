@@ -15,6 +15,7 @@ configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.c
 import math
 import os
 import platform
+import re
 
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -54,16 +55,38 @@ _FAMILIES = {
         "train_file": os.path.join(FRED_DIR, "phase1_detection", "render_runner.py"),
     },
 }
+# Renderer family only: every renderer draws frames from exactly this many
+# microseconds of events (e.g. 2000), so LLM-GE evolves only the encoding.
+# Unset lets each renderer choose its own WINDOW_US.
+RENDER_WINDOW_US = int(os.getenv("FRED_RENDER_WINDOW_US") or 0) if SEED_FAMILY == "renderer" else 0
+if RENDER_WINDOW_US:
+    _FAMILIES["renderer"].update(prompt_group="FRED_RENDER_FIXED/Normal",
+                                 rules="templates/FRED_RENDER_FIXED/ConstantRules.txt")
 _FAMILY = _FAMILIES[SEED_FAMILY]
 _RUN_NAME = {"dfine": "fred_dfine", "renderer": "fred_renderer"}.get(SEED_FAMILY, "fred_yolo11")
 # Event frames candidates train on: unset for FRED's released frames, or a tag
 # such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
 # keeps its genes, results, outputs and checkpoints apart from the released run.
 FRED_EVENTS = os.getenv("FRED_EVENTS", "")
-_RUN_SUFFIX = f"_{FRED_EVENTS}" if FRED_EVENTS else ""
+_RUN_SUFFIX = (f"_{FRED_EVENTS}" if FRED_EVENTS else
+               f"_w{RENDER_WINDOW_US}" if RENDER_WINDOW_US else "")
 SOTA_ROOT = _FAMILY["sota_root"] + _RUN_SUFFIX
 DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
 SEED_NETWORK = _FAMILY["seed"]
+if RENDER_WINDOW_US:
+    # The LLM starts from the seed renderer with the fixed window written in.
+    SEED_NETWORK = os.path.join(SOTA_ROOT, f"seed_renderer_w{RENDER_WINDOW_US}.py")
+    if not os.path.isfile(SEED_NETWORK):
+        with open(_FAMILY["seed"]) as _file:
+            _seed, _count = re.subn(r"^WINDOW_US = \d+$", f"WINDOW_US = {RENDER_WINDOW_US}",
+                                    _file.read(), flags=re.M)
+        if _count != 1:
+            raise ValueError(f"{_FAMILY['seed']}: expected one WINDOW_US line")
+        _seed = _seed.replace("# FRED's released frames: 33.3 ms of events,",
+                              f"# FRED's released palette, from {RENDER_WINDOW_US / 1000:g} ms of events:")
+        os.makedirs(SOTA_ROOT, exist_ok=True)
+        with open(SEED_NETWORK, "w") as _file:
+            _file.write(_seed)
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
 TRAIN_FILE = _FAMILY.get("train_file", os.path.join(FRED_DIR, "phase1_detection", "candidate_runner.py"))
@@ -123,7 +146,8 @@ EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
 # and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
 # A renderer gene draws its own frames, so it takes no family or --events.
-EVAL_RUNLINE = ((f"uv run python {{}} --sota_root {SOTA_ROOT} --model {{}} --variant_dir {{VARIANT_DIR}}")
+EVAL_RUNLINE = ((f"uv run python {{}} --sota_root {SOTA_ROOT} --model {{}} --variant_dir {{VARIANT_DIR}}"
+                 + (f" --window_us {RENDER_WINDOW_US}" if RENDER_WINDOW_US else ""))
                 if SEED_FAMILY == "renderer" else
                 (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
                  "--model {} --variant_dir {VARIANT_DIR}"

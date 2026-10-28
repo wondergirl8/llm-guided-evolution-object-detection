@@ -3,7 +3,10 @@
     uv run python sota/FRED_LLM_GE/phase1_detection/render_runner.py \\
         --model network_<gene_id> --variant_dir <models dir> --sota_root <sota root>
 
-"--model network" scores the seed renderer (seeds/seed_renderer.py). The
+"--model network" scores the seed renderer (seeds/seed_renderer.py). With
+--window_us (a run with FRED_RENDER_WINDOW_US set), the seed is drawn with
+that window and every other renderer must keep it, so only the encoding
+evolves. The
 renderer draws every frame of the challenging search split from the raw events
 cached and sliced by cache_events.py; the frames go to node-local scratch ($TMPDIR) in the
 layout export_split.py writes, reusing the released export's frame list and
@@ -141,9 +144,10 @@ def wait_for_twin(renderer_path, sota_root, gene_id, poll_s=30, max_wait_s=3 * 3
 _renderer = None
 
 
-def _init_worker(path):
+def _init_worker(path, window_us):
     global _renderer
     _renderer = load_renderer(path)
+    _renderer.WINDOW_US = window_us
 
 
 def _render_sequence(job):
@@ -158,8 +162,9 @@ def _render_sequence(job):
     return len(records), used
 
 
-def render_split(renderer_path, protocol, workdir, workers, timeout_s):
-    """Render the search split into workdir; returns ((train_root, val_root), stats)."""
+def render_split(renderer_path, protocol, workdir, workers, timeout_s, window_us):
+    """Render the search split into workdir with window_us of events per frame;
+    returns ((train_root, val_root), stats)."""
     challenging = dict(protocol["challenging"], events=RELEASED)
     data_root = FRED_DIR / challenging["data_root"]
     cache = slices_dir(challenging)
@@ -181,7 +186,8 @@ def render_split(renderer_path, protocol, workdir, workers, timeout_s):
         roots.append(out)
         parts.append((sequences, out))
     start = time.time()
-    with multiprocessing.get_context("spawn").Pool(workers, _init_worker, (str(renderer_path),)) as pool:
+    with multiprocessing.get_context("spawn").Pool(workers, _init_worker,
+                                                   (str(renderer_path), window_us)) as pool:
         # A renderer that is too slow (e.g. a Python loop over events) fails here.
         results = pool.map_async(_render_sequence, jobs, chunksize=1).get(timeout=timeout_s)
     frames = sum(n for n, _ in results)
@@ -200,6 +206,9 @@ def main():
     parser.add_argument("--protocol", default=str(DEFAULT_PROTOCOL))
     parser.add_argument("--sota_root", required=True, help="Where results/ and renders/ are written")
     parser.add_argument("--device", default=None)
+    parser.add_argument("--window_us", type=int, default=None,
+                        help="Fixed window (FRED_RENDER_WINDOW_US): the seed is drawn with it, "
+                             "and any other renderer fails unless its WINDOW_US equals it")
     args = parser.parse_args()
 
     import torch
@@ -214,6 +223,19 @@ def main():
     settings = protocol["families"]["renderer"]
     renderer_path = (SEED_RENDERER if args.model == "network"
                      else Path(args.variant_dir) / f"{args.model}.py")
+    # Before the duplicate check, which could otherwise reuse the seed's
+    # fixed-window score for a copy of the seed that set another window.
+    if args.window_us and args.model != "network":
+        try:
+            window = load_renderer(renderer_path).WINDOW_US
+        except Exception as e:
+            window = None
+            error = f"renderer failed: {e!r}"
+        else:
+            error = f"WINDOW_US must stay {args.window_us}, got {window}"
+        if window != args.window_us:
+            write_failure_results(args.sota_root, gene_id, start, error)
+            return
     try:
         claim = wait_for_twin(renderer_path, args.sota_root, gene_id)
     except Exception as e:
@@ -243,8 +265,10 @@ def main():
         # This is LLM Guided Code: a broken renderer gets worst-case fitness.
         try:
             renderer = load_renderer(renderer_path)
-            roots, stats = render_split(renderer_path, protocol, workdir,
-                                        settings["render_workers"], settings["render_timeout_s"])
+            if args.window_us and args.model == "network":
+                renderer.WINDOW_US = args.window_us  # plain palette at the fixed window
+            roots, stats = render_split(renderer_path, protocol, workdir, settings["render_workers"],
+                                        settings["render_timeout_s"], renderer.WINDOW_US)
         except Exception as e:
             write_failure_results(args.sota_root, gene_id, start, f"renderer failed: {e!r}")
             return

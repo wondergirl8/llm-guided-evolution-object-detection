@@ -27,5 +27,8 @@ fi
 # that run's checkpoints apart too (src/cfg/constants_fred_yolo11.py).
 if [[ -n "${FRED_EVENTS:-}" ]]; then
   run_tag="${run_tag}_${FRED_EVENTS}"
+# FRED_RENDER_WINDOW_US (e.g. 2000) fixes every renderer's window; its own run too.
+elif [[ "${FRED_SEED_FAMILY:-yolo11}" == "renderer" && -n "${FRED_RENDER_WINDOW_US:-}" ]]; then
+  run_tag="${run_tag}_w${FRED_RENDER_WINDOW_US}"
 fi
 uv run python run_improved.py --checkpoints "${run_tag}_checkpoints" --global_path "${run_tag}_checkpoints"

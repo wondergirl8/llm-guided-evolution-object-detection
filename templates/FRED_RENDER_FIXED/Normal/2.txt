@@ -1,0 +1,6 @@
+This event-camera frame renderer gets only a few events per frame, because its window is very short. Change the encoding so the drone stays easy to detect from so few events, for example by using event counts or how recent each pixel's last event was. Keep the WINDOW_US line unchanged.
+
+The current code:
+```python
+{}
+```
