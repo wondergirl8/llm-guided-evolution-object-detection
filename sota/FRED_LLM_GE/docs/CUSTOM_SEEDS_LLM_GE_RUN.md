@@ -1,5 +1,9 @@
 # YOLO26-P2 and D-FINE: complete FRED LLM-GE run on PACE ICE
 
+For YOLO26-only commands, including a current-tag resume, historical-run
+inspection, Pareto plots, and copying results to a Mac, use
+[YOLO26_PACE_ICE_RUNBOOK.md](YOLO26_PACE_ICE_RUNBOOK.md).
+
 Run every command from the repository root on PACE. This procedure uses the
 released 33.3 ms Event frames, `challenging_train` for search training and
 validation, and a separate `challenging_test` evaluation after model selection.

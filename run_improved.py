@@ -86,9 +86,15 @@ def check_server_window():
         day_text, remaining = remaining.split('-', 1)
         days = int(day_text)
     parts = remaining.split(':')
-    if len(parts) != 3 or not all(part.isdecimal() for part in parts):
+    if len(parts) not in (2, 3) or not all(part.isdecimal() for part in parts):
         raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
-    hours, minutes, seconds = map(int, parts)
+    if len(parts) == 2:
+        hours = 0
+        minutes, seconds = map(int, parts)
+    else:
+        hours, minutes, seconds = map(int, parts)
+    if minutes >= 60 or seconds >= 60:
+        raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
     seconds_left = days * 86400 + hours * 3600 + minutes * 60 + seconds
     margin = int(os.getenv('LLMGE_MIN_SERVER_REMAINING_SECONDS', '3600'))
     if seconds_left < margin:
