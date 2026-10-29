@@ -1,0 +1,32 @@
+gpu_selection: H200
+llm_bash_script: |
+  #!/bin/bash
+  #SBATCH --job-name=frcnn_scratch_llm
+  #SBATCH -t 8:00:00
+  #SBATCH --mem 16G
+  #SBATCH -c 2
+  #SBATCH -N 1
+  #SBATCH --output=run_job_outputs/evolution/slurm-%j.out
+  module load cuda
+  module load uv
+  export CUDA_VISIBLE_DEVICES=0
+  export UV_CACHE_DIR="${TMPDIR:-/tmp}/uv-cache-${SLURM_JOB_ID:-$$}"
+  mkdir -p "$UV_CACHE_DIR"
+  {}
+python_bash_script: |
+  #!/bin/bash
+  #SBATCH --job-name=frcnn_scratch_eval
+  #SBATCH -t 4:00:00
+  #SBATCH --gres=gpu:1
+  #SBATCH -C H200
+  #SBATCH --mem 16G
+  #SBATCH -c 12
+  #SBATCH -N 1
+  #SBATCH --output=run_job_outputs/evaluation/slurm-%j.out
+  module load cuda
+  module load uv
+  export CUDA_VISIBLE_DEVICES=0
+  unset VIRTUAL_ENV
+  export UV_CACHE_DIR="${TMPDIR:-/tmp}/uv-cache-${SLURM_JOB_ID:-$$}"
+  mkdir -p "$UV_CACHE_DIR"
+  {}
