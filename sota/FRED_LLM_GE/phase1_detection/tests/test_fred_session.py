@@ -82,6 +82,8 @@ def test_dfine_resume_reuses_recorded_evaluation_job(tmp_path, monkeypatch):
     assert data['population'][0][0] == 'candidate'
     assert state['GLOBAL_DATA']['candidate']['status'] == 'running eval'
     assert state['GLOBAL_DATA']['candidate']['results_job'] == '42'
+    assert state['GLOBAL_DATA']['candidate']['eval_submitted_at'] == (
+        session.eval_submission(tmp_path, 'candidate')['at'])
     with pytest.raises(RuntimeError, match='refusing duplicate'):
         session.eval_submission(tmp_path, 'candidate', state='intent')
     monkeypatch.setattr(controller, 'GLOBAL_DATA', state['GLOBAL_DATA'])
@@ -95,7 +97,16 @@ def test_dfine_resume_reuses_recorded_evaluation_job(tmp_path, monkeypatch):
     assert individual.fitness.values == (.5, .1, 1000)
 
 
-def test_dfine_submission_records_job_identity(tmp_path, monkeypatch):
+def test_submitted_eval_jobs_are_preserved_until_journal_marks_cancellation(tmp_path):
+    session.eval_submission(tmp_path, 'candidate', state='intent')
+    session.eval_submission(tmp_path, 'candidate', state='submitted', job_id='42')
+    assert session.submitted_eval_job_ids(tmp_path) == ('42',)
+    session.mark_cancelled_evaluations(tmp_path, ['42'])
+    assert session.submitted_eval_job_ids(tmp_path) == ()
+
+
+@pytest.mark.parametrize('retry_counter', [None, 'gpu_retry_count', 'infrastructure_retries'])
+def test_dfine_submission_records_job_identity(tmp_path, monkeypatch, retry_counter):
     monkeypatch.setenv('LLMGE_BOUNDED_SESSION', '1')
     monkeypatch.setattr(controller, 'SEED_FAMILY', 'dfine')
     monkeypatch.setattr(controller, 'LOCAL', False)
@@ -108,6 +119,10 @@ def test_dfine_submission_records_job_identity(tmp_path, monkeypatch):
     (tmp_path / '0').mkdir()
     monkeypatch.setattr(controller, 'GLOBAL_DATA', {
         'candidate': {'sub_flag': True, 'status': 'subbed file', 'fitness': None}})
+    if retry_counter:
+        controller.GLOBAL_DATA['candidate'][retry_counter] = 1
+        session.eval_submission(tmp_path, 'candidate', state='intent')
+        session.eval_submission(tmp_path, 'candidate', state='submitted', job_id='41')
     monkeypatch.setattr(controller.subprocess, 'run', lambda *args, **kwargs:
                         SimpleNamespace(returncode=0, stdout='Submitted batch job 42', stderr=''))
 
@@ -115,6 +130,8 @@ def test_dfine_submission_records_job_identity(tmp_path, monkeypatch):
 
     assert session.eval_submission(tmp_path, 'candidate')['job_id'] == '42'
     assert controller.GLOBAL_DATA['candidate']['results_job'] == '42'
+    if retry_counter:
+        assert len(json.loads((tmp_path / 'eval_submission_candidate.json').read_text())) == 2
 
 
 def test_dfine_resume_resubmits_only_after_confirmed_cleanup(tmp_path, monkeypatch):
@@ -190,6 +207,18 @@ def test_slurm_status_retries_timeout_but_not_terminal_job_state(monkeypatch):
     assert len(calls) == 3
 
 
+def test_slurm_job_timing_reads_state_and_days(monkeypatch):
+    calls = []
+    monkeypatch.setattr(fred_runtime, 'slurm_status', lambda command: (
+        calls.append(command) or SimpleNamespace(
+            returncode=0, stdout='JobId=42 JobState=RUNNING RunTime=1-02:03:04', stderr='')))
+    assert fred_runtime.slurm_job_timing('42') == {
+        'state': 'RUNNING', 'runtime_seconds': 93784}
+    assert calls == [['scontrol', 'show', 'job', '42', '-o']]
+    with pytest.raises(ValueError, match='Invalid Slurm job ID'):
+        fred_runtime.slurm_job_timing('42;scancel')
+
+
 def test_unverified_cleanup_blocks_a_new_controller(tmp_path, monkeypatch):
     from src import fred_recovery_controller as recovery
     from src.cfg import constants as cfg
@@ -260,22 +289,32 @@ def test_cleanup_cancels_only_owned_jobs_in_the_exact_run(tmp_path, monkeypatch)
     assert session.cancel_owned_jobs(tmp_path) == ['2']
     assert ['scancel', '2'] in calls
 
+    calls.clear()
+    assert session.cancel_owned_jobs(tmp_path, exclude_jobs=('2',)) == []
+    assert not any(args[0] == 'scancel' for args in calls)
 
 
-def test_controller_pause_keeps_checkpoint_and_cleans_up_its_run(tmp_path, monkeypatch):
+
+@pytest.mark.parametrize('tagged', [False, True])
+def test_controller_pause_keeps_checkpoint_and_cleans_up_its_run(tmp_path, monkeypatch, tagged):
     from src import fred_recovery_controller as recovery, fred_runtime
     from src.cfg import constants as cfg
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(recovery, 'ROOT', tmp_path)
     monkeypatch.setattr(cfg, 'SEED_FAMILY', 'dfine')
+    tagged_folder = tmp_path / 'fred_runs' / 'dfine_trial' / 'checkpoints'
+    monkeypatch.setattr(cfg, 'RUN_CHECKPOINT_DIR', str(tagged_folder) if tagged else None,
+                        raising=False)
     monkeypatch.setenv('LLMGE_BOUNDED_SESSION', '1')
     monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
     monkeypatch.setenv('LLMGE_SESSION_DEADLINE', '0')
     monkeypatch.setattr(recovery.signal, 'signal', lambda *args: None)
     (tmp_path / 'five-hour-deadline-123.txt').write_text('600')
-    folder = tmp_path / 'fred_dfine_checkpoints'
+    folder = tagged_folder if tagged else tmp_path / 'fred_dfine_checkpoints'
     session.save_pair(folder, folder, 0, {'population': [], 'hof': []},
         {'GLOBAL_DATA': {}, 'GLOBAL_DATA_HIST': {}, 'GLOBAL_DATA_ANCESTRY': {}}, 'dfine')
+    session.eval_submission(folder, 'candidate', state='intent')
+    session.eval_submission(folder, 'candidate', state='submitted', job_id='99')
     monkeypatch.setattr(controller, 'wait_for_llm_server', lambda **kw: True)
     monkeypatch.setattr(recovery, 'smoke_generation', lambda: pytest.fail('Repeated smoke on a checkpoint resume'))
     monkeypatch.setattr(fred_runtime, 'assert_llm_job_active', lambda: None)
@@ -292,7 +331,34 @@ def test_controller_pause_keeps_checkpoint_and_cleans_up_its_run(tmp_path, monke
             return 0
     monkeypatch.setattr(recovery.subprocess, 'Popen', lambda *a, **kw: Child())
     monkeypatch.setattr(recovery.os, 'killpg', lambda pid, sig: events.append(('stop', pid)))
-    monkeypatch.setattr(session, 'cancel_owned_jobs', lambda root: events.append(('cleanup', root)))
+    monkeypatch.setattr(session, 'cancel_owned_jobs',
+                        lambda root, exclude_jobs=(): events.append(
+                            ('cleanup', root, tuple(exclude_jobs))))
     recovery.main()
-    assert events == [('stop', 4242), ('cleanup', tmp_path)]
+    assert events == [('stop', 4242), ('cleanup', tmp_path, ('99',))]
     assert session.latest_pair(folder, folder, 'dfine')[1] == 1
+
+
+def test_expired_controller_keeps_recorded_evaluation_job(tmp_path, monkeypatch):
+    from src import fred_recovery_controller as recovery
+    from src.cfg import constants as cfg
+
+    monkeypatch.setattr(recovery, 'ROOT', tmp_path)
+    monkeypatch.setattr(cfg, 'SEED_FAMILY', 'dfine')
+    monkeypatch.setattr(cfg, 'RUN_CHECKPOINT_DIR', None, raising=False)
+    monkeypatch.setenv('LLMGE_BOUNDED_SESSION', '1')
+    monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
+    (tmp_path / 'five-hour-deadline-123.txt').write_text('0')
+    folder = tmp_path / 'fred_dfine_checkpoints'
+    folder.mkdir()
+    session.eval_submission(folder, 'candidate', state='intent')
+    session.eval_submission(folder, 'candidate', state='submitted', job_id='42')
+    monkeypatch.setattr(recovery.signal, 'signal', lambda *args: None)
+    cleaned = []
+    monkeypatch.setattr(session, 'cancel_owned_jobs',
+                        lambda root, exclude_jobs=(): cleaned.append(tuple(exclude_jobs)) or [])
+
+    recovery.main()
+
+    assert cleaned == [('42',)]
+    assert session.submitted_eval_job_ids(folder) == ('42',)

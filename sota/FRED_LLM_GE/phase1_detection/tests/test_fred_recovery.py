@@ -442,3 +442,45 @@ def test_http_timeouts_are_scoped_to_recovered_families(monkeypatch, family):
     assert llm_utils.submit_deepseek_local('fixture') == 'ok'
     expected = None if family == 'unrelated' else (10, 600)
     assert all(call['timeout'] == expected for call in calls)
+
+
+@pytest.mark.parametrize('client_name', ['submit_mixtral_local', 'submit_deepseek_local'])
+def test_dfine_local_llm_retries_transient_read_timeout(monkeypatch, client_name):
+    from src import llm_utils, local_llm_request
+
+    monkeypatch.setattr(llm_utils, 'SEED_FAMILY', 'dfine')
+    monkeypatch.setenv('LLMGE_LLM_REQUEST_ATTEMPTS', '2')
+    monkeypatch.setenv('LLMGE_LLM_HTTP_TIMEOUT_SECONDS', '600')
+    monkeypatch.setattr(local_llm_request.time, 'sleep', lambda _: None)
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise llm_utils.requests.exceptions.ReadTimeout('temporary stall')
+        return SimpleNamespace(status_code=200,
+                               json=lambda: {'generated_text': 'valid', 'response_time_sec': 1})
+
+    monkeypatch.setattr(llm_utils.requests, 'post', post)
+    client = getattr(llm_utils, client_name)
+    assert client('prompt', server_url='http://fixture/generate') == 'valid'
+    assert len(calls) == 2
+    assert all(call['timeout'] == (10, 600) for call in calls)
+
+
+def test_dfine_local_llm_exhausted_timeout_fails_visibly(monkeypatch):
+    from src import llm_utils, local_llm_request
+
+    monkeypatch.setattr(llm_utils, 'SEED_FAMILY', 'dfine')
+    monkeypatch.setenv('LLMGE_LLM_REQUEST_ATTEMPTS', '2')
+    monkeypatch.setattr(local_llm_request.time, 'sleep', lambda _: None)
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(kwargs)
+        raise llm_utils.requests.exceptions.ReadTimeout('stalled')
+
+    monkeypatch.setattr(llm_utils.requests, 'post', fail)
+    with pytest.raises(RuntimeError, match='failed after 2 attempt'):
+        llm_utils.submit_mixtral_local('prompt', server_url='http://fixture/generate')
+    assert len(calls) == 2

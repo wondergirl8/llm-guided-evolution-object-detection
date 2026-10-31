@@ -1,0 +1,3 @@
+Choose one bounded D-FINE architecture value for the targeted gene.
+Current genome and allowed values:
+{}

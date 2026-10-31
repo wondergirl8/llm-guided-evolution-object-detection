@@ -122,6 +122,9 @@ class DFINEAdapter(FamilyAdapter):
     def preflight(self, variant_path, proxy):
         """Check training and inference interfaces before submitting a GPU job."""
         model = self.build(variant_path, num_classes=1, device="cpu")
+        max_params = self.settings.get("search_resource_limits", {}).get("max_params")
+        if max_params is not None and self.param_count(model) > max_params:
+            raise ValueError("D-FINE candidate exceeds parameter limit")
         images = torch.randint(0, 256, (2, 3, 65, 97), dtype=torch.uint8,
                                generator=torch.Generator().manual_seed(0))
         targets = [_targets_from_pixels(boxes, 97, 65, "cpu") for boxes in (
@@ -135,6 +138,61 @@ class DFINEAdapter(FamilyAdapter):
             raise ValueError("D-FINE preflight produced missing or non-finite gradients")
         if len(self.predict(model, images, proxy, "cpu")) != len(images):
             raise ValueError("D-FINE preflight prediction count does not match the input")
+
+    def screen_resources(self, model, image_shape, batch_size, device,
+                         selection_limits=None):
+        """One full-resolution forward/backward before a structured candidate trains.
+
+        Optional absolute limits belong to the experiment protocol. The probe
+        does not update parameters or BatchNorm statistics.
+        """
+        if len(image_shape) != 2 or min(image_shape) < 32 or batch_size < 1:
+            raise ValueError("invalid D-FINE resource-screen shape or batch")
+        limits = dict(self.settings.get("search_resource_limits", {}))
+        if selection_limits is not None:
+            limits["max_peak_bytes"] = min(
+                limits.get("max_peak_bytes", float("inf")),
+                selection_limits["max_peak_memory_bytes"])
+        if not isinstance(limits, dict) or set(limits) - {"max_params", "max_peak_bytes", "max_step_ms"}:
+            raise ValueError("invalid D-FINE search resource limits")
+        if any(type(value) not in (int, float) or value <= 0 for value in limits.values()):
+            raise ValueError("D-FINE search resource limits must be positive numbers")
+        height, width = image_shape
+        params = self.param_count(model)
+        if params > limits.get("max_params", float("inf")):
+            raise ValueError(f"D-FINE candidate parameters {params} exceed resource limit")
+        was_training = model.training
+        model.eval()
+        model.zero_grad(set_to_none=True)
+        event = torch.zeros((batch_size, 3, height, width), device=device)
+        one_box = torch.tensor([[width * .4, height * .4, width * .6, height * .6]])
+        targets = [_targets_from_pixels(one_box if index == 0 else torch.empty(0, 4),
+                                        width, height, device)
+                   for index in range(batch_size)]
+        is_cuda = torch.device(device).type == "cuda"
+        if is_cuda:
+            torch.cuda.synchronize(device)
+            torch.cuda.reset_peak_memory_stats(device)
+        start = time.perf_counter()
+        try:
+            loss = self.criterion(model(event), targets)["loss_total"]
+            loss.backward()
+            if is_cuda:
+                torch.cuda.synchronize(device)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            peak_bytes = torch.cuda.max_memory_allocated(device) if is_cuda else None
+            if peak_bytes is not None and peak_bytes > limits.get("max_peak_bytes", float("inf")):
+                raise ValueError(f"D-FINE candidate peak memory {peak_bytes} exceeds resource limit")
+            if elapsed_ms > limits.get("max_step_ms", float("inf")):
+                raise ValueError(f"D-FINE candidate probe time {elapsed_ms:.1f} ms exceeds resource limit")
+            return {"full_resolution_probe_batch": batch_size,
+                    "full_resolution_probe_shape": [height, width],
+                    "full_resolution_probe_params": params,
+                    "full_resolution_probe_step_ms": elapsed_ms,
+                    "full_resolution_probe_peak_bytes": peak_bytes}
+        finally:
+            model.zero_grad(set_to_none=True)
+            model.train(was_training)
 
     def train(self, model, data, proxy, device, on_epoch_end=None):
         images, boxes = data.get("images"), data.get("boxes")

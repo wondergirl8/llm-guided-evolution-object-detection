@@ -55,17 +55,22 @@ def validate_dfine_proposal(parent, proposal):
 
 def augment_network(input_filename='network.py', output_filename='network_x.py', template_txt=None,
                     top_p=0.15, llm_model=LLM_DEEPSEEK, temperature=0.1,
-                    apply_quality_control=False, coverage_target=None):
+                    apply_quality_control=False, coverage_target=None,
+                    dfine_search_space=None):
     
     print(f'Loading {input_filename} code')
     print('Using')
+    dfine_search_space = dfine_search_space or globals().get('DFINE_SEARCH_SPACE', 'legacy')
     parts = split_file(input_filename)
     if coverage_target is not None:
-        if globals().get('SEED_FAMILY') != 'yolo26_p2':
-            raise ValueError('coverage_target is only supported for YOLO26')
-        from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS
+        if globals().get('SEED_FAMILY') == 'yolo26_p2':
+            from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS
+        elif globals().get('SEED_FAMILY') == 'dfine' and dfine_search_space == 'motifs_v1':
+            from src.fred_dfine_genome import INITIAL_COVERAGE_TARGETS
+        else:
+            raise ValueError('coverage_target requires YOLO26 or D-FINE motifs v1')
         if coverage_target not in INITIAL_COVERAGE_TARGETS:
-            raise ValueError(f'unknown YOLO26 coverage target: {coverage_target}')
+            raise ValueError(f'unknown initial coverage target: {coverage_target}')
     # prompt_templates = glob.glob(f'{ROOT_DIR}/templates/FixedPrompts/*/*.txt')
     # template_path = np.random.choice(prompt_templates)
     # template_path = f'{ROOT_DIR}/templates/{fname}'
@@ -80,6 +85,16 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
         raise ValueError(f"Prompt template {fname} must contain a literal {{}} code placeholder")
     output_file = Path(output_filename)
     output_file.parent.mkdir(exist_ok=True, parents=True)
+    if globals().get('SEED_FAMILY') == 'dfine' and dfine_search_space == 'motifs_v1':
+        from src.fred_dfine_genome import generate_mutation
+        generate_mutation(
+            input_filename, output_filename, SEED_NETWORK, template_txt,
+            lambda prompt: generate_augmented_code(
+                prompt, 0, False, top_p, llm_model, temperature, return_raw=True),
+            coverage_target=coverage_target,
+            attempts=globals().get('max_gen_attempts', 5))
+        print('Job Done', flush=True)
+        return
     if globals().get('SEED_FAMILY') == 'dfine':
         from src.fred_dfine_proposals import generate_validated_section
         augment_idx = np.random.randint(1, len(parts))
@@ -229,7 +244,9 @@ if __name__ == "__main__":
     parser.add_argument('--temperature', type=float, default=0.1, help='Temperature value for text generation')
     parser.add_argument('--apply_quality_control', type=str2bool, default=False, help='Use LLM QC')
     parser.add_argument('--coverage_target', default=None,
-                        help='YOLO26 initial candidate target; assigned by the controller')
+                        help='Initial candidate target; assigned by the controller')
+    parser.add_argument('--dfine_search_space', choices=('legacy', 'motifs_v1'),
+                        default=globals().get('DFINE_SEARCH_SPACE', 'legacy'))
 
     # Parse the arguments
     args = parser.parse_args()
@@ -244,4 +261,5 @@ if __name__ == "__main__":
                     temperature=args.temperature,
                     apply_quality_control=args.apply_quality_control,
                     coverage_target=args.coverage_target,
+                    dfine_search_space=args.dfine_search_space,
                    )

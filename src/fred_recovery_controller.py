@@ -51,14 +51,21 @@ def smoke_generation():
 
 def main():
     from src.cfg import constants as cfg
+    if cfg.SEED_FAMILY == 'dfine' and cfg.DFINE_SEARCH_SPACE == 'motifs_v1':
+        from src.fred_dfine_selection import resource_limits
+        resource_limits()
     from src.fred_runtime import assert_llm_job_active
     import run_improved as controller
     from src.fred_session import (atomic_write, enabled, cancel_owned_jobs, latest_pair,
-                                  mark_cancelled_evaluations, server_deadline)
+                                  mark_cancelled_evaluations, server_deadline,
+                                  submitted_eval_job_ids)
     os.chdir(ROOT)
     process = None
-    pending_cleanup = None
     bounded = enabled()
+    checkpoints = ('fred_yolo26_p2_map5095_coverage_v1_checkpoints' if cfg.SEED_FAMILY == 'yolo26_p2'
+                   else cfg.RUN_CHECKPOINT_DIR or 'fred_dfine_checkpoints')
+    pending_cleanup = (ROOT / checkpoints / '.cleanup_pending'
+                       if bounded and cfg.SEED_FAMILY == 'dfine' else None)
     stop = [False]
     if bounded:
         def on_signal(signum, frame):
@@ -73,12 +80,11 @@ def main():
             if time.time() >= float(os.environ['LLMGE_SESSION_DEADLINE']):
                 return
         controller.wait_for_llm_server(timeout=1800)
-        checkpoints = ('fred_yolo26_p2_map5095_coverage_v1_checkpoints' if cfg.SEED_FAMILY == 'yolo26_p2'
-                       else 'fred_dfine_checkpoints')
-        if bounded and cfg.SEED_FAMILY == 'dfine':
-            pending_cleanup = ROOT / checkpoints / '.cleanup_pending'
+        if pending_cleanup is not None:
             if pending_cleanup.exists():
-                cancelled = cancel_owned_jobs(ROOT, exclude_jobs=(os.environ['LLMGE_SERVER_JOB_ID'],))
+                preserve = submitted_eval_job_ids(pending_cleanup.parent)
+                cancelled = cancel_owned_jobs(
+                    ROOT, exclude_jobs=(os.environ['LLMGE_SERVER_JOB_ID'], *preserve))
                 mark_cancelled_evaluations(pending_cleanup.parent, cancelled or [])
                 pending_cleanup.unlink()
         previous = latest_pair(ROOT / checkpoints, ROOT / checkpoints, cfg.SEED_FAMILY)[0] if bounded else None
@@ -127,7 +133,9 @@ def main():
                     process.kill()
         try:
             if bounded:
-                cancelled = cancel_owned_jobs(ROOT)
+                preserve = (submitted_eval_job_ids(pending_cleanup.parent)
+                            if pending_cleanup is not None else ())
+                cancelled = cancel_owned_jobs(ROOT, exclude_jobs=preserve)
                 if pending_cleanup is not None:
                     mark_cancelled_evaluations(pending_cleanup.parent, cancelled or [])
                     pending_cleanup.unlink(missing_ok=True)

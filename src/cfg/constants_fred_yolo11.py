@@ -61,6 +61,16 @@ _FAMILIES = {
     },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
+DFINE_SEARCH_SPACE = os.getenv("FRED_DFINE_SEARCH_SPACE", "legacy")
+if SEED_FAMILY == "dfine":
+    if DFINE_SEARCH_SPACE not in ("legacy", "motifs_v1"):
+        raise ValueError(f"Unsupported FRED_DFINE_SEARCH_SPACE: {DFINE_SEARCH_SPACE}")
+    if DFINE_SEARCH_SPACE == "motifs_v1":
+        _FAMILY = {**_FAMILY,
+                   "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds",
+                                             "dfine_motifs_v1"),
+                   "prompt_group": "FRED_DFINE/MotifsV1",
+                   "rules": "templates/FRED_DFINE/MotifsV1Rules.txt"}
 CANDIDATE_POLICY_MODULE = (
     "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
     if SEED_FAMILY == "yolo11" else None
@@ -90,7 +100,8 @@ PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
 _OUTPUT_FOLDER = {
-    "dfine": "fred_dfine_output",
+    "dfine": ("fred_dfine_motifs_v1_output" if DFINE_SEARCH_SPACE == "motifs_v1"
+              else "fred_dfine_output"),
     "yolo26_p2": "fred_yolo26_p2_map5095_coverage_v1_output",
     "tiny_yolo11": "fred_tiny_yolo11_output",
 }.get(SEED_FAMILY, "fred_yolo11_output")
@@ -113,7 +124,8 @@ MODEL_PATH = os.getenv(
     "/storage/ice-shared/vip-vvk/llm_storage/meta-llama/Llama-3.3-70B-Instruct/",
 )
 LLM_MAX_NEW_TOKENS = int(os.getenv(
-    "LLM_MAX_NEW_TOKENS", "4096" if SEED_FAMILY == "dfine" else "1648"))
+    "LLM_MAX_NEW_TOKENS", "256" if SEED_FAMILY == "dfine" and
+    DFINE_SEARCH_SPACE == "motifs_v1" else "4096" if SEED_FAMILY == "dfine" else "1648"))
 LLM_MODEL = os.getenv("LLMGE_LLM_MODEL", "mixtral")
 LLM_QWEN = "qwen25"
 LLM_MIXTRAL = "mixtral"
@@ -136,11 +148,15 @@ RUN_COMMAND = "bash" if LOCAL else "sbatch"
 DELAYED_CHECK = not LOCAL
 MACOS = platform.system() == "Darwin"
 RUNLINE_AMP = ""
-# This clock starts at sbatch submission, including queue time. The evaluation
-# job's own four-hour Slurm limit still caps its runtime after it starts.
+# The controller uses this as a runtime allowance after Slurm starts a D-FINE
+# evaluation. Other seed families retain their existing submission clock.
 EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
     os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(_FAMILY["eval_timeout"]))
 )
+EVAL_QUEUE_TIMEOUT_SECONDS = int(os.getenv("LLMGE_EVAL_QUEUE_TIMEOUT_SECONDS", "0"))
+EVAL_TERMINAL_GRACE_SECONDS = int(os.getenv("LLMGE_EVAL_TERMINAL_GRACE_SECONDS", "300"))
+if EVAL_QUEUE_TIMEOUT_SECONDS < 0 or EVAL_TERMINAL_GRACE_SECONDS <= 0:
+    raise ValueError("evaluation queue timeout must be nonnegative and terminal grace positive")
 
 # The generated candidate is named network_<gene_id>.py. The runner trains
 # and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
@@ -148,6 +164,8 @@ RUNLINE_TMP = "{}_{}"
 EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
                 "--model {} --variant_dir {VARIANT_DIR}"
                 + (" --device cuda" if SEED_FAMILY == "dfine" else "")
+                + (" --dfine-search-space motifs_v1" if SEED_FAMILY == "dfine" and
+                   DFINE_SEARCH_SPACE == "motifs_v1" else "")
                 + (f" --events {FRED_EVENTS}" if FRED_EVENTS else ""))
 
 SLURM_MIXT_INPUT_X = SEED_NETWORK
@@ -203,8 +221,8 @@ offspring_size = 6
 crossover_probability = 0.5
 mutation_probability = 0.8
 num_elites = 2
-# SPEA2 selects both elites using all three objectives; no individual gets a
-# reserved slot based on mAP50, mAP50:95, or parameter count alone.
+# Legacy D-FINE and YOLO11 retain SPEA2 selection. D-FINE motifs v1 uses
+# accuracy-first, resource-gated selection in run_improved.py.
 KEEP_BEST_ELITE = False
 if offspring_size + num_elites != population_size:
     raise ValueError("FRED offspring_size + num_elites must equal population_size")

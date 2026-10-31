@@ -13,11 +13,15 @@ def _positive_number(name, default, cast):
     return value
 
 
-def post_with_retry(url, *, headers, payload, sleep=time.sleep):
+def post_with_retry(url, *, headers, payload, read_timeout=None, sleep=None):
     """Retry one transient transport failure; never retry a completed response."""
     connect = _positive_number("LLMGE_LLM_CONNECT_TIMEOUT_SECONDS", "10", float)
-    read = _positive_number("LLMGE_LLM_READ_TIMEOUT_SECONDS", "1800", float)
+    read = (float(read_timeout) if read_timeout is not None else
+            _positive_number("LLMGE_LLM_READ_TIMEOUT_SECONDS", "1800", float))
+    if read <= 0:
+        raise ValueError("LLM read timeout must be positive")
     attempts = _positive_number("LLMGE_LLM_REQUEST_ATTEMPTS", "2", int)
+    sleep = sleep or time.sleep
     for attempt in range(1, attempts + 1):
         try:
             return requests.post(url, headers=headers, json=payload,

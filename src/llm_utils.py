@@ -586,9 +586,13 @@ def submit_mixtral_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature=
     try:
         if globals().get('SEED_FAMILY') == 'yolo11':
             response = post_with_retry(server_url, headers=headers, payload=payload)
+        elif globals().get('SEED_FAMILY') == 'dfine':
+            response = post_with_retry(
+                server_url, headers=headers, payload=payload,
+                read_timeout=float(os.getenv("LLMGE_LLM_HTTP_TIMEOUT_SECONDS", "600")))
         else:
             timeout = ((10, float(os.getenv("LLMGE_LLM_HTTP_TIMEOUT_SECONDS", "600")))
-                       if globals().get('SEED_FAMILY') in ('yolo26_p2', 'dfine') else None)
+                       if globals().get('SEED_FAMILY') == 'yolo26_p2' else None)
             response = requests.post(server_url, headers=headers, json=payload, timeout=timeout)
         
         if response.status_code == 200:
@@ -622,9 +626,13 @@ def submit_deepseek_local(prompt, max_new_tokens=LLM_MAX_NEW_TOKENS, temperature
     try:
         if globals().get('SEED_FAMILY') == 'yolo11':
             response = post_with_retry(server_url, headers=headers, payload=payload)
+        elif globals().get('SEED_FAMILY') == 'dfine':
+            response = post_with_retry(
+                server_url, headers=headers, payload=payload,
+                read_timeout=float(os.getenv("LLMGE_LLM_HTTP_TIMEOUT_SECONDS", "600")))
         else:
             timeout = ((10, float(os.getenv("LLMGE_LLM_HTTP_TIMEOUT_SECONDS", "600")))
-                       if globals().get('SEED_FAMILY') in ('yolo26_p2', 'dfine') else None)
+                       if globals().get('SEED_FAMILY') == 'yolo26_p2' else None)
             response = requests.post(server_url, headers=headers, json=payload, timeout=timeout)
         
         if response.status_code == 200:

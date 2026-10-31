@@ -44,6 +44,11 @@ def compute_fingerprint(root, family, run_tag, seed_path):
             "proposal": root / f"src/{proposal}.py",
             "slurm_config": root / "slurm-config/slurm_config.yaml",
         })
+        if family == "dfine":
+            files.update({
+                "dfine_genome": root / "src/fred_dfine_genome.py",
+                "dfine_selection": root / "src/fred_dfine_selection.py",
+            })
         prompt_group = "FRED_YOLO26_P2" if family == "yolo26_p2" else "FRED_DFINE"
         for path in sorted((root / "templates" / prompt_group).rglob("*.txt")):
             files[f"prompt:{path.relative_to(root)}"] = path

@@ -1,0 +1,2 @@
+Return exactly one JSON object with one key, "value", containing one allowed value.
+Change only the targeted gene. Do not return Python, Markdown, explanations, or extra keys.

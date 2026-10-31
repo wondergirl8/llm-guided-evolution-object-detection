@@ -29,6 +29,42 @@ def slurm_status(command, attempts=SLURM_STATUS_ATTEMPTS):
         time.sleep(2)
 
 
+def _slurm_runtime_seconds(value):
+    """Parse Slurm's RunTime, including the optional day prefix."""
+    if not value or value in ("Unknown", "N/A"):
+        return None
+    days, separator, clock = value.partition("-")
+    if separator:
+        if not days.isdecimal():
+            raise ValueError(f"Invalid Slurm RunTime: {value}")
+        day_count = int(days)
+    else:
+        day_count, clock = 0, days
+    fields = clock.split(":")
+    if len(fields) != 3 or any(not field.isdecimal() for field in fields):
+        raise ValueError(f"Invalid Slurm RunTime: {value}")
+    hours, minutes, seconds = map(int, fields)
+    if minutes >= 60 or seconds >= 60 or (separator and hours >= 24):
+        raise ValueError(f"Invalid Slurm RunTime: {value}")
+    return ((day_count * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def slurm_job_timing(job_id):
+    """Read an evaluation job's state and scheduler runtime."""
+    job_id = str(job_id)
+    if not job_id.isdecimal():
+        raise ValueError(f"Invalid Slurm job ID: {job_id!r}")
+    result = slurm_status(['scontrol', 'show', 'job', job_id, '-o'])
+    if result.returncode:
+        raise RuntimeError(f"Cannot inspect Slurm job {job_id}: {result.stderr.strip()}")
+    state = re.search(r'(?:^|\s)JobState=([^\s]+)', result.stdout)
+    if not state:
+        raise RuntimeError(f"Slurm job {job_id} has no JobState")
+    runtime = re.search(r'(?:^|\s)RunTime=([^\s]+)', result.stdout)
+    return {"state": state[1].rstrip('+'),
+            "runtime_seconds": _slurm_runtime_seconds(runtime[1]) if runtime else None}
+
+
 def gpu_memory_budget(torch):
     """Actually initialize every visible device before handing GPUs to HF.
 

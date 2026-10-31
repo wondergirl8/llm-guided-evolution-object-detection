@@ -120,6 +120,22 @@ def mark_cancelled_evaluations(folder, cancelled_jobs):
             atomic_write(path, json.dumps(attempts).encode())
 
 
+def submitted_eval_job_ids(folder):
+    """Keep confirmed D-FINE evaluation jobs alive across controller sessions."""
+    jobs = set()
+    for path in Path(folder).glob('eval_submission_*.json'):
+        attempts = json.loads(path.read_text())
+        if not isinstance(attempts, list) or not attempts:
+            raise RuntimeError(f'Invalid evaluation submission journal: {path}')
+        last = attempts[-1]
+        if last.get('state') == 'submitted':
+            job_id = str(last.get('job_id', ''))
+            if not job_id.isdecimal():
+                raise RuntimeError(f'Invalid submitted evaluation job ID in {path}')
+            jobs.add(job_id)
+    return tuple(sorted(jobs))
+
+
 def cancel_owned_jobs(root, exclude_jobs=()):
     """Cancel only the current user's jobs whose WorkDir is this exact checkout."""
     root = Path(root).resolve()
@@ -133,7 +149,7 @@ def cancel_owned_jobs(root, exclude_jobs=()):
     jobs = listed_jobs()
     cancel = []
     for job in jobs:
-        if job == own or job in exclude_jobs:
+        if job == own:
             continue
         result = slurm_status(['scontrol', 'show', 'job', job, '-o'])
         if result.returncode:
@@ -143,7 +159,8 @@ def cancel_owned_jobs(root, exclude_jobs=()):
             continue
         directory = re.search(r'(?:^|\s)WorkDir=(\S+)', result.stdout)
         owner = re.search(r'(?:^|\s)UserId=([^\s(]+)', result.stdout)
-        if directory and owner and Path(directory[1]).resolve() == root and owner[1] == user:
+        if (directory and owner and Path(directory[1]).resolve() == root
+                and owner[1] == user and job not in exclude_jobs):
             cancel.append(job)
     if cancel:
         subprocess.run(['scancel', *cancel], check=True, timeout=30)

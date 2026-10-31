@@ -80,6 +80,9 @@ def test_custom_detector_resume_detects_prompt_or_operator_change(
              tmp_path / f'src/{proposal}.py', tmp_path / 'slurm-config/slurm_config.yaml',
              tmp_path / f'templates/{prompt_group}/Normal/1.txt',
              tmp_path / 'templates/CrossOver/crossover.txt']
+    if family == 'dfine':
+        paths.extend([tmp_path / 'src/fred_dfine_genome.py',
+                      tmp_path / 'src/fred_dfine_selection.py'])
     for path in paths:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('first\n')
@@ -93,3 +96,9 @@ def test_custom_detector_resume_detects_prompt_or_operator_change(
     prompt.write_text('second\n')
     assert first['sha256'] != protocol_fingerprint.compute_fingerprint(
         tmp_path, family, 'tag', seed)['sha256']
+    if family == 'dfine':
+        prompt.write_text('first\n')
+        selection = tmp_path / 'src/fred_dfine_selection.py'
+        selection.write_text('second\n')
+        assert first['sha256'] != protocol_fingerprint.compute_fingerprint(
+            tmp_path, family, 'tag', seed)['sha256']

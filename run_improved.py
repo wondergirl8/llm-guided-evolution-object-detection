@@ -23,6 +23,7 @@ from functools import partial
 from src.utils.print_utils import print_population, print_scores, box_print, print_job_info
 from src.llm_utils import split_file, retrieve_base_code
 from src.candidate_policy import load_candidate_policy
+from src.fred_dfine_selection import VERSION as DFINE_SELECTION_VERSION, resource_limits
 from sota.FRED_LLM_GE.phase1_detection.protocol_fingerprint import verify_fingerprint
 from src.cfg.constants import *
 from src.cfg import constants
@@ -58,6 +59,17 @@ def require_yolo26_selection_version(data, path):
             'Start a fresh YOLO26 search '
             'with separate checkpoint paths.'
         )
+
+
+def dfine_accuracy_policy():
+    return SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1'
+
+
+def require_dfine_selection_version(data, path):
+    if dfine_accuracy_policy() and data.get('selection_version') != DFINE_SELECTION_VERSION:
+        raise ValueError(f'{path} has D-FINE selection version '
+                         f'{data.get("selection_version")!r}; expected '
+                         f'{DFINE_SELECTION_VERSION!r}. Start a fresh D-FINE search.')
 
 
 
@@ -259,6 +271,13 @@ def write_bash_script(llm_model,
     if python_file=='src/llm_mutation.py':
         template_txt, mute_type = generate_template(PROB_EOT, GEN_COUNT, TOP_N_GENES, 
                                                     SOTA_ROOT, SEED_NETWORK, ROOT_DIR, llm_model)
+        if dfine_accuracy_policy():
+            from src.fred_dfine_selection import parent_mechanism, prompt_feedback
+            parent_record = (GLOBAL_DATA.get(gene_id_parent)
+                             or GLOBAL_DATA_HIST.get(gene_id_parent))
+            template_txt += '\n' + prompt_feedback(
+                gene_id_parent, parent_record, resource_limits(),
+                parent_mechanism(input_filename_x, SEED_NETWORK)) + '\n'
         if GEN_COUNT >= 0: # this does not need to happen at creation of population
             GLOBAL_DATA_ANCESTRY = update_ancestry(gene_id_child, gene_id_parent, GLOBAL_DATA_ANCESTRY, 
                                                     mutation_type=mute_type, gene_id_parent2=None)
@@ -270,10 +289,17 @@ def write_bash_script(llm_model,
         temp_text = f'{python_file} {input_filename_x} {output_filename} {file_path} --top_p {top_p} --temperature {temperature}'
         python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
         if coverage_target is not None:
-            from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS
-            if SEED_FAMILY != 'yolo26_p2' or coverage_target not in INITIAL_COVERAGE_TARGETS:
+            if SEED_FAMILY == 'yolo26_p2':
+                from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS
+            elif SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+                from src.fred_dfine_genome import INITIAL_COVERAGE_TARGETS
+            else:
+                raise ValueError(f'Unsupported initial coverage target: {coverage_target}')
+            if coverage_target not in INITIAL_COVERAGE_TARGETS:
                 raise ValueError(f'Unsupported initial coverage target: {coverage_target}')
             python_runline += f' --coverage_target {coverage_target}'
+        if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+            python_runline += ' --dfine_search_space motifs_v1'
     elif python_file=='src/llm_crossover.py':
         gene_id_parent2 = fetch_gene(input_filename_y)
         GLOBAL_DATA_ANCESTRY = update_ancestry(gene_id_child, gene_id_parent, GLOBAL_DATA_ANCESTRY, 
@@ -281,6 +307,8 @@ def write_bash_script(llm_model,
         
         temp_text = f"{python_file} {input_filename_x} {input_filename_y} {output_filename} --top_p {top_p} --temperature {temperature}"
         python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
+        if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+            python_runline += ' --dfine_search_space motifs_v1'
     else:
         raise ValueError("Invalid python_file argument")
     config = load_yaml()
@@ -508,6 +536,8 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4,
                             'status':'subbed file', 'fitness':None, 'start_time':time.time(),
                             'operator_type': 'creation', 'local_output': local_output,
                             'coverage_target': coverage_target}
+    if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+        GLOBAL_DATA[gene_id]['search_space_version'] = 'dfine_motifs_v1'
     if SEED_FAMILY == 'dfine':
         GLOBAL_DATA[gene_id]['parent_sources'] = [SEED_NETWORK]
         if not successful_sub_flag:
@@ -543,6 +573,14 @@ def submit_run(gene_id, exclude_nodes=()):
     def write_bash_script_py(gene_id, train_file=f'{TRAIN_FILE}'):
         model_file_override = RUNLINE_TMP.format(MODEL, gene_id) 
         python_runline = EVAL_RUNLINE.format(train_file, model_file_override, VARIANT_DIR=VARIANT_DIR)
+        if dfine_accuracy_policy() and not LOCAL:
+            limits = resource_limits()
+            python_runline = (
+                f'export FRED_DFINE_MAX_INFERENCE_MS_PER_FRAME='
+                f'{limits["max_inference_ms_per_frame"]}\n'
+                f'export FRED_DFINE_MAX_PEAK_MEMORY_BYTES='
+                f'{limits["max_peak_memory_bytes"]}\n'
+                + python_runline)
         config = load_yaml()
         template = config['python_bash_script']
         if not LOCAL and globals().get('PRESERVE_SLURM_CUDA_VISIBLE_DEVICES', False):
@@ -601,7 +639,8 @@ def submit_run(gene_id, exclude_nodes=()):
                and CHECKPOINT_FOLDER is not None)
     if journal:
         eval_submission(CHECKPOINT_FOLDER, gene_id, state='intent',
-                        retry=GLOBAL_DATA[gene_id].get('infrastructure_retries', 0) > 0)
+                        retry=(GLOBAL_DATA[gene_id].get('infrastructure_retries', 0) > 0
+                               or GLOBAL_DATA[gene_id].get('gpu_retry_count', 0) > 0))
     successful_sub_flag, job_id, local_output = submit_bash_py(file_path, gene_id)
     if journal:
         if successful_sub_flag and not str(job_id).isdecimal():
@@ -618,10 +657,15 @@ def submit_run(gene_id, exclude_nodes=()):
         record_failure(gene_id, reason)
     if not successful_sub_flag:
         return
-    GLOBAL_DATA[gene_id]['status'] = 'running eval'
-    GLOBAL_DATA[gene_id]['results_job'] = job_id
-    GLOBAL_DATA[gene_id]['eval_start_time'] = time.time()
-    GLOBAL_DATA[gene_id]['local_output'] = local_output
+    submitted_at = time.time()
+    GLOBAL_DATA[gene_id].update(
+        status='running eval', results_job=job_id,
+        eval_start_time=submitted_at, eval_submitted_at=submitted_at,
+        eval_phase='RUNNING' if LOCAL else 'PENDING',
+        eval_queue_started_at=submitted_at if not LOCAL else None,
+        eval_running_at=submitted_at if LOCAL else None,
+        eval_terminal_at=None, eval_scheduler_error=None,
+        local_output=local_output)
     persist_initial_population_checkpoint([creator.Individual([gene_id])])
     print(f'\t‣ Running py File for {gene_id}, {job_id}')
 
@@ -767,6 +811,9 @@ def check4model2run(gene_id):
                 digest = adapter.preflight(check_exist, parent_path,
                                            stock_seed=gene_id == 'seed')
             else:
+                if DFINE_SEARCH_SPACE == 'motifs_v1':
+                    from src.fred_dfine_genome import load_genome
+                    load_genome(check_exist, SEED_NETWORK)
                 adapter.preflight(check_exist, protocol['proxy'])
         except ImportError:
             raise  # Missing runtime dependencies are not invalid architectures.
@@ -900,21 +947,27 @@ def record_dfine_proposal_failure(gene_id, reason=None):
     """Keep proposal failures distinct from training and evaluation failures."""
     job_id = GLOBAL_DATA[gene_id].get('job_id')
     log_path = f'{SLURM_OUTPUT_PATH}evolution/slurm-{job_id}.out' if job_id else None
+    status = 'FAILED: PROPOSAL'
     if reason is None:
         reason = 'LLM generation job failed'
         if log_path and os.path.isfile(log_path):
             with open(log_path) as log:
-                markers = [line.strip() for line in log
-                           if 'ERROR proposal:' in line or
-                           ('D-FINE proposal attempt ' in line and ' rejected: ' in line)]
-            if markers:
+                lines = [line.strip() for line in log]
+            transport = next((line for line in reversed(lines)
+                              if 'Local LLM request failed after ' in line), None)
+            markers = [line for line in lines if 'ERROR proposal:' in line or
+                       ('D-FINE proposal attempt ' in line and ' rejected: ' in line)]
+            if transport:
+                reason = transport.split('RuntimeError: ', 1)[-1]
+                status = 'FAILED: INFRASTRUCTURE'
+            elif markers:
                 last = markers[-1]
                 reason = (last.split('ERROR proposal:', 1)[1].strip()
                           if 'ERROR proposal:' in last else
                           'retry_exhausted: ' + last.split(' rejected: ', 1)[1].strip())
     if log_path:
         reason = f'{reason}; generation log: {log_path}'
-    reject_detection_fitness(gene_id, None, reason, status='FAILED: PROPOSAL')
+    reject_detection_fitness(gene_id, None, reason, status=status)
 
 
 def valid_detection_population(population):
@@ -923,12 +976,27 @@ def valid_detection_population(population):
     for ind in population:
         record = GLOBAL_DATA.get(ind[0], {})
         fitness = normalize_detection_fitness(ind.fitness.values)
-        if fitness == INVALID_FITNESS_MAX or record.get('status', '').startswith('FAILED:'):
+        if (fitness == INVALID_FITNESS_MAX or record.get('status', '').startswith('FAILED:')
+                or (dfine_accuracy_policy() and
+                    dfine_resource_issue(record or GLOBAL_DATA_HIST.get(ind[0], {})))):
             print(f'\t☠ Excluding {SEED_FAMILY} candidate {ind[0]} from selection', flush=True)
             continue
         ind.fitness.values = fitness
         valid.append(ind)
     return valid
+
+
+def dfine_resource_issue(record):
+    if not dfine_accuracy_policy():
+        return None
+    from src.fred_dfine_selection import resource_violation
+    resources = record.get('dfine_resources')
+    if not isinstance(resources, dict):
+        return 'Missing D-FINE search resource evidence'
+    try:
+        return resource_violation(resources, resource_limits())
+    except (KeyError, TypeError, ValueError) as exc:
+        return f'Invalid D-FINE search resource evidence: {exc}'
 
 
 def refill_detection_population(population, llm_model):
@@ -1048,6 +1116,18 @@ def check4results(gene_id):
                 if failure_reason:
                     raise ValueError('successful result has a failure reason')
                 fitness = normalized
+                if dfine_accuracy_policy():
+                    from src.fred_dfine_selection import (resource_limits,
+                        resource_violation, validated_metrics)
+                    report_path = f'{SOTA_ROOT}/results/{gene_id}_evaluation.json'
+                    limits = resource_limits()
+                    resources = validated_metrics(report_path, gene_id, fitness, limits)
+                    GLOBAL_DATA[gene_id]['dfine_resources'] = resources
+                    violation = resource_violation(resources, limits)
+                    if violation:
+                        reject_detection_fitness(gene_id, fitness, violation,
+                                                 status='FAILED: RESOURCE LIMIT')
+                        return
             elif fitness == INVALID_FITNESS_MAX:
                 reason = failure_reason or 'candidate_failed: no reason supplied'
                 if is_unsupported_gpu_error(reason):
@@ -1106,6 +1186,83 @@ def cancel_eval_job(gene_id, reason):
     else:
         stderr = result.stderr.strip()
         print(f"\t☠ Failed to cancel eval job {job_id} for {gene_id}: {stderr}", flush=True)
+
+
+_DFINE_QUEUE_STATES = {'PENDING', 'CONFIGURING', 'REQUEUED', 'REQUEUE_FED'}
+_DFINE_RUNNING_STATES = {'RUNNING', 'COMPLETING', 'SUSPENDED'}
+_DFINE_TERMINAL_STATES = {
+    'COMPLETED', 'FAILED', 'CANCELLED', 'TIMEOUT', 'NODE_FAIL',
+    'OUT_OF_MEMORY', 'PREEMPTED', 'BOOT_FAIL', 'DEADLINE', 'SPECIAL_EXIT',
+}
+
+
+def dfine_eval_phase(gene_id, now):
+    """Keep queue wait separate from scheduler-reported evaluation runtime."""
+    from src.fred_runtime import slurm_job_timing
+
+    record = GLOBAL_DATA[gene_id]
+    try:
+        timing = slurm_job_timing(record['results_job'])
+    except (RuntimeError, ValueError) as exc:
+        reason = str(exc)
+        if record.get('eval_scheduler_error') != reason:
+            print(f"Cannot verify D-FINE eval job {record.get('results_job')}: {reason}", flush=True)
+        record['eval_scheduler_error'] = reason
+        return 'UNKNOWN', None
+    record['eval_scheduler_error'] = None
+    state = timing['state']
+    previous_phase = record.get('eval_phase')
+    record['eval_phase'] = state
+    if state in _DFINE_QUEUE_STATES:
+        if record.get('eval_running_at') is not None:
+            record['eval_requeues'] = record.get('eval_requeues', 0) + 1
+            record['eval_running_at'] = None
+            record['eval_queue_started_at'] = now
+            record['eval_terminal_at'] = None
+        elif previous_phase not in _DFINE_QUEUE_STATES and not record.get('eval_queue_started_at'):
+            record['eval_queue_started_at'] = record.get('eval_submitted_at',
+                                                        record.get('eval_start_time', now))
+        queued = max(0.0, now - record['eval_queue_started_at'])
+        record['eval_queue_seconds'] = queued
+        return 'PENDING', queued
+    if state in _DFINE_RUNNING_STATES:
+        runtime = timing['runtime_seconds']
+        if runtime is not None:
+            record['eval_running_at'] = now - runtime
+            elapsed = float(runtime)
+        else:
+            record['eval_running_at'] = record.get('eval_running_at') or now
+            elapsed = max(0.0, now - record['eval_running_at'])
+        record['eval_runtime_seconds'] = elapsed
+        return 'RUNNING', elapsed
+    if state in _DFINE_TERMINAL_STATES:
+        record['eval_terminal_at'] = record.get('eval_terminal_at') or now
+        return 'TERMINAL', max(0.0, now - record['eval_terminal_at'])
+    record['eval_scheduler_error'] = f'Unrecognized Slurm job state: {state}'
+    return 'UNKNOWN', None
+
+
+def evaluation_wait_decision(gene_id, timeout, now):
+    """Return (status, reason, cancel) only when a verified clock expires."""
+    record = GLOBAL_DATA[gene_id]
+    if SEED_FAMILY == 'dfine' and not LOCAL and not record.get('results_job'):
+        return None
+    if SEED_FAMILY == 'dfine' and not LOCAL and record.get('results_job'):
+        phase, elapsed = dfine_eval_phase(gene_id, now)
+        if phase == 'PENDING' and EVAL_QUEUE_TIMEOUT_SECONDS and elapsed > EVAL_QUEUE_TIMEOUT_SECONDS:
+            return ('FAILED: QUEUE TIMEOUT',
+                    f'Evaluation queued for {elapsed:.0f}s (limit {EVAL_QUEUE_TIMEOUT_SECONDS}s)', True)
+        if phase == 'RUNNING' and elapsed > timeout:
+            return ('FAILED: TIMEOUT',
+                    f'Evaluation ran for {elapsed:.0f}s (limit {timeout}s)', True)
+        if phase == 'TERMINAL' and elapsed > EVAL_TERMINAL_GRACE_SECONDS:
+            return ('FAILED: EVALUATION JOB',
+                    f'Slurm job {record["results_job"]} is {record["eval_phase"]} '
+                    f'without a readable result after {elapsed:.0f}s', False)
+        return None
+    if now - record.get('eval_start_time', record.get('start_time', now)) > timeout:
+        return ('FAILED: TIMEOUT', f'No evaluation result after {timeout}s', True)
+    return None
 
 def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECONDS, loop_delay=60):
     """ This function submits jobs and then if submitted it checks for four possibilities.
@@ -1167,6 +1324,11 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                         if normalized == INVALID_FITNESS_MAX:
                             reject_detection_fitness(gene_id, fitness_tuple,
                                                      'Invalid cached fitness')
+                        elif dfine_accuracy_policy() and (
+                                issue := dfine_resource_issue(GLOBAL_DATA[gene_id])):
+                            reject_detection_fitness(gene_id, fitness_tuple, issue,
+                                                     status='FAILED: RESOURCE EVIDENCE')
+                            normalized = INVALID_FITNESS_MAX
                         else:
                             GLOBAL_DATA[gene_id]['fitness'] = normalized
                         fitness_tuple = normalized
@@ -1174,18 +1336,19 @@ def check_and_update_fitness(population, timeout=EVAL_NO_PROGRESS_TIMEOUT_SECOND
                 elif (SEED_FAMILY in VALIDATED_FITNESS_FAMILIES
                       and GLOBAL_DATA[gene_id]['status'].startswith('FAILED:')):
                     ind.fitness.values = INVALID_FITNESS_MAX
-                elif time.time() - GLOBAL_DATA[gene_id].get('eval_start_time', GLOBAL_DATA[gene_id]['start_time']) > timeout:
-                    print(f"Timeout for gene ID {gene_id} after {timeout} seconds without evaluation result")
-                    cancel_eval_job(gene_id, f"no evaluation result for {timeout} seconds")
-                    ind.fitness.values = INVALID_FITNESS_MAX
-                    if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
-                        reject_detection_fitness(gene_id, None,
-                                                 f'No evaluation result after {timeout}s',
-                                                 status='FAILED: TIMEOUT')
-                    else:
-                        record_failure(gene_id, f'evaluation_timeout: no result after {timeout}s')
                 else:
-                    if 'results_job' not in GLOBAL_DATA[gene_id].keys():
+                    decision = evaluation_wait_decision(gene_id, timeout, time.time())
+                    if decision is not None:
+                        status, reason, should_cancel = decision
+                        print(f"Evaluation wait ended for {gene_id}: {reason}", flush=True)
+                        if should_cancel:
+                            cancel_eval_job(gene_id, reason)
+                        ind.fitness.values = INVALID_FITNESS_MAX
+                        if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                            reject_detection_fitness(gene_id, None, reason, status=status)
+                        else:
+                            record_failure(gene_id, f'evaluation_timeout: {reason}')
+                    elif not GLOBAL_DATA[gene_id].get('results_job') and not LOCAL:
                         record_failure(gene_id, 'submission_failed: no evaluation job id')
                         ind.fitness.values = INVALID_FITNESS_MAX
                         print(f'\t☠ No Placeholder Fitness for: {gene_id}')
@@ -1426,6 +1589,8 @@ def customCrossover(ind1, ind2, llm_model):
         GLOBAL_DATA[new_gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
                                     'status':'subbed file', 'fitness':None, 'start_time':time.time(),
                                     'operator_type': 'crossover', 'local_output': local_output}
+        if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+            GLOBAL_DATA[new_gene_id]['search_space_version'] = 'dfine_motifs_v1'
         if SEED_FAMILY == 'dfine':
             GLOBAL_DATA[new_gene_id]['parent_sources'] = [
                 f'{VARIANT_DIR}/{MODEL}_{gene_id_1}.py',
@@ -1519,6 +1684,8 @@ def customMutation(individual, llm_model, indpb, temp_min=0.02, temp_max=0.35):
     GLOBAL_DATA[new_gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id, 
                                 'status':'subbed file', 'fitness':None, 'start_time':time.time(),
                                 'operator_type': 'mutation', 'local_output': local_output}
+    if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+        GLOBAL_DATA[new_gene_id]['search_space_version'] = 'dfine_motifs_v1'
     if SEED_FAMILY == 'dfine':
         GLOBAL_DATA[new_gene_id]['parent_sources'] = [
             f'{VARIANT_DIR}/{MODEL}_{old_gene_id}.py']
@@ -1596,6 +1763,18 @@ def run_fingerprint():
             'crossover_template_dir': globals().get('CROSSOVER_TEMPLATE_DIR'),
             'max_gen_attempts': max_gen_attempts,
         })
+    if SEED_FAMILY == 'dfine':
+        identity['evolution_settings'].update({
+            'selection_version': (DFINE_SELECTION_VERSION if dfine_accuracy_policy()
+                                  else 'legacy_spea2'),
+            'selection_resource_limits': (resource_limits() if dfine_accuracy_policy()
+                                          else None),
+            'eval_runtime_timeout_seconds': EVAL_NO_PROGRESS_TIMEOUT_SECONDS,
+            'eval_queue_timeout_seconds': EVAL_QUEUE_TIMEOUT_SECONDS,
+            'eval_terminal_grace_seconds': EVAL_TERMINAL_GRACE_SECONDS,
+            'llm_http_timeout_seconds': os.getenv('LLMGE_LLM_HTTP_TIMEOUT_SECONDS', '600'),
+            'llm_request_attempts': os.getenv('LLMGE_LLM_REQUEST_ATTEMPTS', '2'),
+        })
     if _ACTIVE_FINGERPRINT is not None and identity != _ACTIVE_FINGERPRINT:
         raise RuntimeError('FRED protocol changed during this run; refusing checkpoint update')
     _ACTIVE_FINGERPRINT = identity
@@ -1617,6 +1796,11 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                     'coverage_version': YOLO26_COVERAGE_VERSION}
             state['selection_version'] = YOLO26_SELECTION_VERSION
             state['coverage_version'] = YOLO26_COVERAGE_VERSION
+        if dfine_accuracy_policy():
+            if 'selection_version' in data:
+                require_dfine_selection_version(data, folder_name)
+            data = {**data, 'selection_version': DFINE_SELECTION_VERSION}
+            state['selection_version'] = DFINE_SELECTION_VERSION
         if fingerprint is not None:
             data = dict(data, protocol_fingerprint=fingerprint)
             state['protocol_fingerprint'] = fingerprint
@@ -1631,6 +1815,7 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
         with open(filename, 'rb') as file:
             stored_checkpoint = pickle.load(file)
         require_yolo26_selection_version(stored_checkpoint, filename)
+        require_dfine_selection_version(stored_checkpoint, filename)
         verify_fingerprint(stored_checkpoint, filename, fingerprint)
 
     if global_path is not None:
@@ -1648,6 +1833,7 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
 
         if stored_global_data:
             require_yolo26_selection_version(stored_global_data, global_file)
+            require_dfine_selection_version(stored_global_data, global_file)
 
 
         print("ASSIGNING STORED GLOBAL DATA")
@@ -1671,6 +1857,8 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
         if SEED_FAMILY == 'yolo26_p2':
             stored_global_data['selection_version'] = YOLO26_SELECTION_VERSION
             stored_global_data['coverage_version'] = YOLO26_COVERAGE_VERSION
+        if dfine_accuracy_policy():
+            stored_global_data['selection_version'] = DFINE_SELECTION_VERSION
         if fingerprint is not None:
             stored_global_data['protocol_fingerprint'] = fingerprint
 
@@ -1693,6 +1881,10 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
             require_yolo26_selection_version(checkpoint_data, filename)
         checkpoint_data = {**checkpoint_data, 'selection_version': YOLO26_SELECTION_VERSION,
                            'coverage_version': YOLO26_COVERAGE_VERSION}
+    if dfine_accuracy_policy():
+        if 'selection_version' in checkpoint_data:
+            require_dfine_selection_version(checkpoint_data, filename)
+        checkpoint_data = {**checkpoint_data, 'selection_version': DFINE_SELECTION_VERSION}
     if fingerprint is not None:
         checkpoint_data = dict(checkpoint_data, protocol_fingerprint=fingerprint)
     if atomic_initial_pair:
@@ -1753,6 +1945,8 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         if data is not None:
             require_yolo26_selection_version(data, folder_name)
             require_yolo26_selection_version(state, global_path)
+            require_dfine_selection_version(data, folder_name)
+            require_dfine_selection_version(state, global_path)
             verify_fingerprint(data, folder_name, fingerprint)
             verify_fingerprint(state, global_path, fingerprint)
             if SEED_FAMILY == 'dfine':
@@ -1764,9 +1958,12 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
                     submission = eval_submission(folder_name, gene_id)
                     if submission and submission['state'] == 'submitted':
                         record.update(status='running eval', results_job=submission['job_id'],
-                                      eval_start_time=submission['at'], local_output=None)
+                                      eval_start_time=submission['at'],
+                                      eval_submitted_at=submission['at'], local_output=None)
                     elif submission and submission['state'] == 'cancelled':
-                        record.update(status='subbed file', results_job=None, local_output=None)
+                        record.update(status='subbed file', results_job=None, local_output=None,
+                                      eval_phase=None, eval_queue_started_at=None,
+                                      eval_running_at=None, eval_terminal_at=None)
                     elif submission:
                         record.update(status='FAILED: INFRASTRUCTURE', fitness=INVALID_FITNESS_MAX,
                                       failure_reason='Evaluation submission was interrupted or failed; '
@@ -1791,6 +1988,7 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
         with open(filepath, 'rb') as file:
             population_data = pickle.load(file)
         require_yolo26_selection_version(population_data, filepath)
+        require_dfine_selection_version(population_data, filepath)
         verify_fingerprint(population_data, filepath, fingerprint)
         print(f"Loaded population data from {filepath}")
         start_gen = extract_generation(checkpoint_file, "checkpoint") + 1
@@ -1804,6 +2002,7 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
     if embedded_state is not None:
         global_data = embedded_state
         require_yolo26_selection_version(global_data, checkpoint_file)
+        require_dfine_selection_version(global_data, checkpoint_file)
         verify_fingerprint(global_data, checkpoint_file, fingerprint)
         print(f'Loaded matching generation-0 global state from {checkpoint_file}')
     else:
@@ -1816,6 +2015,7 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
             with open(filepath, 'rb') as file:
                 global_data = pickle.load(file)
             require_yolo26_selection_version(global_data, filepath)
+            require_dfine_selection_version(global_data, filepath)
             verify_fingerprint(global_data, filepath, fingerprint)
             print(f"Loaded global data from {filepath}")
 
@@ -1828,13 +2028,15 @@ def load_checkpoint(folder_name="checkpoints", checkpoint_file=None, global_path
     return population_data, start_gen, global_data
 
 def select_elites(pop, k):
-    """Select YOLO26 by mAP50:95; keep the legacy SPEA2 policy elsewhere.
+    """Reserve accuracy-first elites in versioned detector searches.
 
     For legacy families, KEEP_BEST_ELITE reserves the best by the first
     objective because SPEA2's density step can otherwise favor model size.
     """
     if SEED_FAMILY == 'yolo26_p2':
         return select_yolo26_by_accuracy(pop, k)
+    if dfine_accuracy_policy():
+        return select_dfine_by_accuracy(pop, k)
     if not globals().get("KEEP_BEST_ELITE", False) or k < 1 or not pop:
         return tools.selSPEA2(pop, k)
     best = tools.selBest(pop, 1)[0]
@@ -1846,6 +2048,13 @@ def select_yolo26_by_accuracy(pop, k):
     """Rank by mAP50:95; use fewer parameters only when accuracy ties."""
     return sorted(pop, key=lambda ind: (ind.fitness.values[1], -ind.fitness.values[2]),
                   reverse=True)[:k]
+
+
+def select_dfine_by_accuracy(pop, k):
+    """Primary AP50:95, then AP50 and size only for exact score ties."""
+    return sorted(pop, key=lambda ind: (ind.fitness.values[1],
+                                        ind.fitness.values[0],
+                                        -ind.fitness.values[2]), reverse=True)[:k]
 
 
 def true_nsga2(pop, k):
@@ -1861,11 +2070,18 @@ def true_nsga2(pop, k):
 def select_parents(pop, k):
     if SEED_FAMILY == 'yolo26_p2':
         return select_yolo26_by_accuracy(pop, k)
+    if dfine_accuracy_policy():
+        return select_dfine_by_accuracy(pop, k)
     return true_nsga2(pop, k)
 
 def create_population(n, llm_model, coverage_panel=False):
     if SEED_FAMILY == 'yolo26_p2' and coverage_panel:
         from src.fred_yolo26_proposals import initial_target_for_slot
+        return [toolbox.individual(llm_model=llm_model,
+                                   coverage_target=initial_target_for_slot(slot))
+                for slot in range(n)]
+    if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1' and coverage_panel:
+        from src.fred_dfine_genome import initial_target_for_slot
         return [toolbox.individual(llm_model=llm_model,
                                    coverage_target=initial_target_for_slot(slot))
                 for slot in range(n)]
@@ -1991,6 +2207,16 @@ def refill_detection_initial_population(individuals, target, llm_model):
                                   'failure_reason': record.get('failure_reason')})
                 raise RuntimeError(f"YOLO26 required {record.get('coverage_target')} candidate "
                                    f"{individual[0]} failed evaluation; generation 0 is incomplete")
+    elif SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+        from src.fred_dfine_genome import INITIAL_COVERAGE_TARGETS
+        for individual in individuals[1:1 + len(INITIAL_COVERAGE_TARGETS)]:
+            record = GLOBAL_DATA[individual[0]]
+            if record.get('fitness') in (None, INVALID_FITNESS_MAX) or record.get('failure_reason'):
+                write_run_status({'status': 'coverage_failed', 'generation': 0,
+                                  'target': record.get('coverage_target'),
+                                  'failure_reason': record.get('failure_reason')})
+                raise RuntimeError(f"D-FINE required {record.get('coverage_target')} candidate "
+                                   f"{individual[0]} failed evaluation; generation 0 is incomplete")
     elif SEED_FAMILY != 'dfine':
         raise ValueError(f'No custom initial refill for {SEED_FAMILY}')
 
@@ -2080,6 +2306,8 @@ def add_stock_seed_to_initial_population(population, allow_existing=False):
     GLOBAL_DATA[gene_id] = {"sub_flag": True, "job_id": None,
                             "status": "subbed file", "fitness": None,
                             "start_time": time.time(), "origin": "stock_seed"}
+    if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+        GLOBAL_DATA[gene_id]['search_space_version'] = 'dfine_motifs_v1'
     GLOBAL_DATA_ANCESTRY[gene_id] = {"GENES": [gene_id], "MUTATE_TYPE": ["STOCK_SEED"]}
     return [creator.Individual([gene_id]), *population]
 
@@ -2110,6 +2338,31 @@ def verify_yolo26_initial_population(population):
     print(f'Initial YOLO26 coverage verified: {report_path}', flush=True)
 
 
+def verify_dfine_initial_population(population):
+    if SEED_FAMILY != 'dfine' or DFINE_SEARCH_SPACE != 'motifs_v1':
+        return
+    from src.fred_dfine_genome import INITIAL_COVERAGE_TARGETS, verify_initial_coverage
+    targets = [GLOBAL_DATA[ind[0]]['coverage_target'] for ind in population]
+    expected = list(INITIAL_COVERAGE_TARGETS) + [None] * (len(population) - len(INITIAL_COVERAGE_TARGETS))
+    if targets != expected:
+        raise ValueError(f'Initial D-FINE target order must be {expected}, got {targets}')
+    entries = [(GLOBAL_DATA[ind[0]]['coverage_target'],
+                os.path.join(VARIANT_DIR, f'{MODEL}_{ind[0]}.py'))
+               for ind in population if GLOBAL_DATA[ind[0]]['coverage_target'] is not None]
+    report = verify_initial_coverage(entries, SEED_NETWORK)
+    report['open_candidates'] = [ind[0] for ind in population[len(INITIAL_COVERAGE_TARGETS):]]
+    report_path = os.path.join(OUTPUT_DIR, 'initial_dfine_motifs_v1_coverage.json')
+    if os.path.exists(report_path):
+        with open(report_path) as handle:
+            if json.load(handle) != report:
+                raise RuntimeError(f'Initial D-FINE coverage changed during resume: {report_path}')
+    else:
+        with open(report_path, 'x') as handle:
+            json.dump(report, handle, indent=2)
+            handle.write('\n')
+    print(f'Initial D-FINE coverage verified: {report_path}', flush=True)
+
+
 def finish_initial_creation(individuals, llm_model, resume=False):
     """Complete submitted generation-0 LLM jobs before starting seed evaluation."""
     global INITIAL_CREATION_PENDING
@@ -2123,12 +2376,17 @@ def finish_initial_creation(individuals, llm_model, resume=False):
                 from src.fred_yolo26_proposals import initial_target_for_slot
                 candidate = toolbox.individual(llm_model=llm_model,
                                                coverage_target=initial_target_for_slot(slot))
+            elif SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
+                from src.fred_dfine_genome import initial_target_for_slot
+                candidate = toolbox.individual(llm_model=llm_model,
+                                               coverage_target=initial_target_for_slot(slot))
             else:
                 candidate = toolbox.individual(llm_model=llm_model)
             individuals.append(candidate)
     INITIAL_CREATION_PENDING = False
     delayed_creation_check(individuals)
     verify_yolo26_initial_population(individuals)
+    verify_dfine_initial_population(individuals)
     return add_stock_seed_to_initial_population(individuals, allow_existing=resume)
 
 # Define the problem
@@ -2160,6 +2418,9 @@ CHECKPOINT_FOLDER = None
 
 # Main Evolution Loop
 if __name__ == "__main__":
+    if dfine_accuracy_policy():
+        print(f'D-FINE selection {DFINE_SELECTION_VERSION}; resource limits '
+              f'{resource_limits()}', flush=True)
     # make output directory
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -2210,6 +2471,15 @@ if __name__ == "__main__":
         GLOBAL_DATA = global_data["GLOBAL_DATA"]
         GLOBAL_DATA_HIST = global_data["GLOBAL_DATA_HIST"]
         GLOBAL_DATA_ANCESTRY = global_data["GLOBAL_DATA_ANCESTRY"]
+        if SEED_FAMILY == 'dfine':
+            expected_space = ('dfine_motifs_v1' if DFINE_SEARCH_SPACE == 'motifs_v1'
+                              else None)
+            for records in (GLOBAL_DATA, GLOBAL_DATA_HIST):
+                for gene_id, record in records.items():
+                    if record.get('search_space_version') != expected_space:
+                        raise RuntimeError(
+                            f'D-FINE checkpoint gene {gene_id} belongs to a different search '
+                            f'space; use a fresh FRED_RUN_TAG for {DFINE_SEARCH_SPACE}')
         if load_candidate_policy(globals()) is not None:
             from sota.FRED_LLM_GE.phase1_detection.ancestry_recovery import recover_population_ancestry
             GLOBAL_DATA_ANCESTRY, repaired = recover_population_ancestry(
@@ -2236,6 +2506,8 @@ if __name__ == "__main__":
             raise ValueError("start_population_size must include a slot for the stock seed")
         if SEED_FAMILY == 'yolo26_p2' and initial_mutations < 4:
             raise ValueError("YOLO26 initial population needs four coverage candidates and a stock seed")
+        if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1' and initial_mutations < 3:
+            raise ValueError("D-FINE motifs v1 needs three coverage candidates and a stock seed")
         hof = tools.ParetoFront()
         from src.fred_session import enabled
         INITIAL_CREATION_PENDING = (SEED_FAMILY in VALIDATED_FITNESS_FAMILIES and
@@ -2243,7 +2515,8 @@ if __name__ == "__main__":
         INITIAL_CREATION_IDS = []
         if INITIAL_CREATION_PENDING:
             persist_initial_creation_checkpoint()
-        if SEED_FAMILY == 'yolo26_p2':
+        if SEED_FAMILY == 'yolo26_p2' or (SEED_FAMILY == 'dfine' and
+                                         DFINE_SEARCH_SPACE == 'motifs_v1'):
             population = toolbox.population(n=initial_mutations, llm_model=llm_model,
                                             coverage_panel=True)
         else:
@@ -2316,6 +2589,8 @@ if __name__ == "__main__":
             population = refill_detection_population(population, llm_model)
             TOP_N_GENES = (select_yolo26_by_accuracy(population, NUM_EOT_ELITES)
                            if SEED_FAMILY == 'yolo26_p2'
+                           else select_dfine_by_accuracy(population, NUM_EOT_ELITES)
+                           if dfine_accuracy_policy()
                            else tools.selSPEA2(population, NUM_EOT_ELITES))
         else:
             population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
@@ -2446,7 +2721,9 @@ if __name__ == "__main__":
 
         if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES or population:
             best_ind = (select_yolo26_by_accuracy(population, 1)[0]
-                        if SEED_FAMILY == 'yolo26_p2' else tools.selBest(population, 1)[0])
+                        if SEED_FAMILY == 'yolo26_p2' else
+                        select_dfine_by_accuracy(population, 1)[0]
+                        if dfine_accuracy_policy() else tools.selBest(population, 1)[0])
             print(f"Finished Generation {gen}")
             print(f"Best Individual: {best_ind}")
             print(f"Best Fitness: {best_ind.fitness.values}")

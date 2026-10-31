@@ -139,6 +139,24 @@ def test_failed_dfine_generation_records_proposal_reason(dfine_state, monkeypatc
     assert str(log) in record["failure_reason"]
 
 
+def test_exhausted_dfine_llm_timeout_is_recorded_as_infrastructure(
+    dfine_state, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(controller, 'SLURM_OUTPUT_PATH', str(tmp_path) + '/')
+    log = tmp_path / 'evolution' / 'slurm-124.out'
+    log.parent.mkdir()
+    log.write_text('RuntimeError: Local LLM request failed after 2 attempt(s) '
+                   '(connect timeout 10s, read timeout 600s)\n')
+    controller.GLOBAL_DATA['gene'] = {'job_id': '124', 'fitness': None}
+
+    controller.record_dfine_proposal_failure('gene')
+
+    record = controller.GLOBAL_DATA['gene']
+    assert record['status'] == 'FAILED: INFRASTRUCTURE'
+    assert 'failed after 2 attempt' in record['failure_reason']
+    assert str(log) in record['failure_reason']
+
+
 def test_dfine_gpu_job_keeps_slurm_assignment(monkeypatch):
     root = Path(controller.__file__).resolve().parent
     slurm = yaml.safe_load((root / "slurm-config/slurm_config.yaml").read_text())
@@ -234,3 +252,111 @@ def test_dfine_submission_failure_is_not_left_running(dfine_state, monkeypatch, 
     record = controller.GLOBAL_DATA["gene"]
     assert record["status"] == "FAILED: INFRASTRUCTURE"
     assert "scheduler unavailable" in record["failure_reason"]
+
+
+def test_dfine_queue_wait_does_not_consume_runtime(dfine_state, monkeypatch):
+    from src import fred_runtime
+
+    monkeypatch.setattr(controller, 'LOCAL', False)
+    monkeypatch.setattr(controller, 'EVAL_QUEUE_TIMEOUT_SECONDS', 0)
+    record = controller.GLOBAL_DATA['queued'] = {
+        'sub_flag': True, 'status': 'running eval', 'fitness': None,
+        'results_job': '42', 'local_output': None,
+        'start_time': 1.0, 'eval_start_time': 1.0, 'eval_submitted_at': 1.0,
+    }
+    monkeypatch.setattr(fred_runtime, 'slurm_job_timing', lambda job_id: {
+        'state': 'PENDING', 'runtime_seconds': 0})
+    assert controller.evaluation_wait_decision('queued', 10, 2000.0) is None
+    assert record['eval_phase'] == 'PENDING'
+    assert record['eval_queue_seconds'] == 1999.0
+    assert record.get('eval_running_at') is None
+
+    monkeypatch.setattr(fred_runtime, 'slurm_job_timing', lambda job_id: {
+        'state': 'RUNNING', 'runtime_seconds': 9})
+    assert controller.evaluation_wait_decision('queued', 10, 2009.0) is None
+    assert record['eval_running_at'] == 2000.0
+    monkeypatch.setattr(fred_runtime, 'slurm_job_timing', lambda job_id: {
+        'state': 'RUNNING', 'runtime_seconds': 11})
+    assert controller.evaluation_wait_decision('queued', 10, 2011.0) == (
+        'FAILED: TIMEOUT', 'Evaluation ran for 11s (limit 10s)', True)
+
+
+def test_dfine_queue_and_terminal_have_separate_limits(dfine_state, monkeypatch):
+    from src import fred_runtime
+
+    monkeypatch.setattr(controller, 'LOCAL', False)
+    monkeypatch.setattr(controller, 'EVAL_QUEUE_TIMEOUT_SECONDS', 100)
+    monkeypatch.setattr(controller, 'EVAL_TERMINAL_GRACE_SECONDS', 30)
+    controller.GLOBAL_DATA['gene'] = {
+        'results_job': '42', 'start_time': 0.0,
+        'eval_start_time': 0.0, 'eval_submitted_at': 0.0,
+    }
+    monkeypatch.setattr(fred_runtime, 'slurm_job_timing', lambda job_id: {
+        'state': 'PENDING', 'runtime_seconds': 0})
+    assert controller.evaluation_wait_decision('gene', 10, 101.0)[0] == 'FAILED: QUEUE TIMEOUT'
+
+    monkeypatch.setattr(fred_runtime, 'slurm_job_timing', lambda job_id: {
+        'state': 'COMPLETED', 'runtime_seconds': 8})
+    assert controller.evaluation_wait_decision('gene', 10, 110.0) is None
+    decision = controller.evaluation_wait_decision('gene', 10, 141.0)
+    assert decision[0] == 'FAILED: EVALUATION JOB' and decision[2] is False
+
+
+def test_dfine_requeue_starts_a_new_queue_clock(dfine_state, monkeypatch):
+    from src import fred_runtime
+
+    monkeypatch.setattr(controller, 'LOCAL', False)
+    monkeypatch.setattr(controller, 'EVAL_QUEUE_TIMEOUT_SECONDS', 20)
+    record = controller.GLOBAL_DATA['gene'] = {
+        'results_job': '42', 'start_time': 0.0,
+        'eval_start_time': 0.0, 'eval_submitted_at': 0.0,
+    }
+    state = {'state': 'RUNNING', 'runtime_seconds': 50}
+    monkeypatch.setattr(fred_runtime, 'slurm_job_timing', lambda job_id: state)
+    assert controller.evaluation_wait_decision('gene', 100, 100.0) is None
+    state.update(state='PENDING', runtime_seconds=0)
+    assert controller.evaluation_wait_decision('gene', 100, 110.0) is None
+    assert record['eval_queue_seconds'] == 0
+    assert record['eval_requeues'] == 1
+    assert controller.evaluation_wait_decision('gene', 100, 120.0) is None
+    assert record['eval_queue_seconds'] == 10
+
+
+def test_dfine_scheduler_error_never_cancels_unverified_job(dfine_state, monkeypatch):
+    from src import fred_runtime
+
+    monkeypatch.setattr(controller, 'LOCAL', False)
+    controller.GLOBAL_DATA['gene'] = {
+        'results_job': '42', 'start_time': 0.0, 'eval_start_time': 0.0}
+    monkeypatch.setattr(fred_runtime, 'slurm_job_timing',
+                        lambda job_id: (_ for _ in ()).throw(RuntimeError('scheduler offline')))
+    assert controller.evaluation_wait_decision('gene', 10, 5000.0) is None
+    assert controller.GLOBAL_DATA['gene']['eval_scheduler_error'] == 'scheduler offline'
+
+
+def test_controller_waits_through_queue_then_cancels_running_timeout(dfine_state, monkeypatch):
+    from src import fred_runtime
+
+    monkeypatch.setattr(controller, 'LOCAL', False)
+    monkeypatch.setattr(controller, 'EVAL_QUEUE_TIMEOUT_SECONDS', 0)
+    controller.GLOBAL_DATA['gene'] = {
+        'sub_flag': True, 'status': 'running eval', 'fitness': None,
+        'results_job': '42', 'local_output': None,
+        'start_time': time.time() - 1000,
+        'eval_start_time': time.time() - 1000,
+    }
+    states = iter(({'state': 'PENDING', 'runtime_seconds': 0},
+                   {'state': 'RUNNING', 'runtime_seconds': 11}))
+    monkeypatch.setattr(fred_runtime, 'slurm_job_timing', lambda job_id: next(states))
+    monkeypatch.setattr(controller, 'check4results', lambda gene_id: None)
+    monkeypatch.setattr(controller, 'persist_initial_population_checkpoint', lambda *a: None)
+    monkeypatch.setattr(controller, 'print_job_info', lambda record: None)
+    cancelled = []
+    monkeypatch.setattr(controller, 'cancel_eval_job', lambda gene_id, reason: cancelled.append(gene_id))
+    individual = _candidate('gene')
+
+    controller.check_and_update_fitness([individual], timeout=10, loop_delay=0)
+
+    assert cancelled == ['gene']
+    assert controller.GLOBAL_DATA['gene']['status'] == 'FAILED: TIMEOUT'
+    assert individual.fitness.values == controller.INVALID_FITNESS_MAX

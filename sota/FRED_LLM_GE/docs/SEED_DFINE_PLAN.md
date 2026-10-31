@@ -118,3 +118,13 @@ This marker layout matches the current text-splitting mechanism; it is not by it
 6. Run the unchanged seed as a non-evolutionary baseline under the approved training/evaluation protocol before allowing LLM-GE mutation. Track project-validation `mAP50`, `mAP50:95`, higher-IoU localization, size-stratified recall, false positives, parameter count, memory, detector-only latency, and training time. Only then validate a mutated candidate and same-version crossover through the actual runner.
 
 **Prototype implementation status:** the one-file seed and provisional `fred-run-setup` family adapter exist, and synthetic training/evaluation integration checks can run. **Ready for formal LLM-GE runs when:** the approved Phase 0 loader supplies annotated samples and stable IDs under a resolved box policy, the non-evolutionary D-FINE baseline is trained and evaluated, generated sections pass the protected-contract checks, resource/postprocessing choices are frozen, and `DG-P1-10` authorizes the expansion. The collector alone still cannot supply supervised fitness inputs.
+
+An opt-in bounded architecture-search prototype is documented in
+[DFINE_MOTIFS_V1.md](DFINE_MOTIFS_V1.md). Its versioned motif catalogue and
+generation-zero coverage do not resolve the formal resource or baseline gates.
+
+The proposed motifs v1 search uses a separate
+[accuracy-first, resource-gated selection policy](DFINE_SELECTION_V1.md).
+Its latency and memory ceilings require measured seed values before a run.
+The local-LLM retry and PACE-ICE evaluation timing behavior is documented in
+[DFINE_PACE_ICE_RELIABILITY.md](DFINE_PACE_ICE_RELIABILITY.md).

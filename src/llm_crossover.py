@@ -18,7 +18,8 @@ from src.llm_mutation import validate_dfine_proposal, validate_generated_chunk
 
 
 def augment_network(input_filename_x, input_filename_y, output_filename,
-                    top_p=0.15, llm_model=LLM_QWEN, temperature=0.1, apply_quality_control=False):
+                    top_p=0.15, llm_model=LLM_QWEN, temperature=0.1, apply_quality_control=False,
+                    dfine_search_space=None):
     """Augment Python Network Script.
     
     Parameters
@@ -38,6 +39,12 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     apply_quality_control : bool, optional
         _description_, by default False
     """
+    dfine_search_space = dfine_search_space or globals().get('DFINE_SEARCH_SPACE', 'legacy')
+    if globals().get('SEED_FAMILY') == 'dfine' and dfine_search_space == 'motifs_v1':
+        from src.fred_dfine_genome import generate_crossover
+        generate_crossover(input_filename_x, input_filename_y, output_filename, SEED_NETWORK)
+        print('Job Done', flush=True)
+        return
     # Split the input files
     parts_x = split_file(input_filename_x)
     parts_y = split_file(input_filename_y)
@@ -182,6 +189,8 @@ if __name__ == "__main__":
     parser.add_argument('--top_p', type=float, default=0.15, help='Top P value for text generation')
     parser.add_argument('--temperature', type=float, default=0.1, help='Temperature value for text generation')
     parser.add_argument('--apply_quality_control', type=str2bool, default=False, help='Use LLM QC')
+    parser.add_argument('--dfine_search_space', choices=('legacy', 'motifs_v1'),
+                        default=globals().get('DFINE_SEARCH_SPACE', 'legacy'))
 
     # Parse the arguments
     args = parser.parse_args()
@@ -194,4 +203,5 @@ if __name__ == "__main__":
                     llm_model=args.llm_model,
                     temperature=args.temperature,
                     apply_quality_control=args.apply_quality_control,
+                    dfine_search_space=args.dfine_search_space,
                    )

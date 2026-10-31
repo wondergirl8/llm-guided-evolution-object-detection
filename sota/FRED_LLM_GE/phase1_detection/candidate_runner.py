@@ -195,11 +195,12 @@ def predict_frames(adapter, model, data, proxy, device):
 
 
 def inference_ms_per_frame(adapter, model, data, proxy, device):
-    """Time one preloaded frame through the D-FINE inference adapter."""
-    image = data["images"][:1]
-    adapter.predict(model, image, proxy, device)  # warm up kernels and allocations
-    elapsed = []
+    """Median detector-only latency for one preloaded frame."""
+    image = data["images"][:1].to(device)
     for _ in range(3):
+        adapter.predict(model, image, proxy, device)  # warm up kernels and allocations
+    elapsed = []
+    for _ in range(9):
         if torch.device(device).type == "cuda":
             torch.cuda.synchronize(device)
         start = time.perf_counter()
@@ -268,7 +269,8 @@ def challenging_search(protocol, family=None):
 
 
 def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
-        diagnostics=False, training_arm=None, refinement_bins=None):
+        diagnostics=False, training_arm=None, refinement_bins=None,
+        dfine_search_space="legacy"):
     start_time = time.time()
     if family == "dfine" and torch.device(device).type == "cuda":
         try:
@@ -290,11 +292,31 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
         variant_path = adapter.variant_path(model_name, variant_dir)
         model = adapter.build(variant_path, num_classes=1, device=device)
         param_count = adapter.param_count(model)
+        structured_genome = None
+        selection_limits = None
+        if family == "dfine":
+            from src.fred_dfine_genome import genome_path, load_genome
+            if dfine_search_space == "motifs_v1":
+                structured_genome = load_genome(variant_path, FRED_DIR / "seeds/seed_dfine.py")
+                if torch.device(device).type == "cuda" and any(
+                    name in os.environ for name in (
+                        'FRED_DFINE_MAX_INFERENCE_MS_PER_FRAME',
+                        'FRED_DFINE_MAX_PEAK_MEMORY_BYTES')):
+                    from src.fred_dfine_selection import resource_limits
+                    selection_limits = resource_limits()
+            elif genome_path(variant_path).is_file():
+                raise ValueError("structured D-FINE candidate requires --dfine-search-space motifs_v1")
         if load_val is None:
             train_data, val_data = proxy_data(proxy)
         else:
             val_data = load_val()
         train_frames = train_data.get("frames") or len(train_data["images"])
+        resource_probe = None
+        if structured_genome is not None and torch.device(device).type == "cuda":
+            resource_probe = adapter.screen_resources(
+                model, train_data["images"].shape[-2:],
+                adapter.settings.get("microbatch_size", 1), device,
+                selection_limits=selection_limits)
         initial_hash = initial_weights_sha256(model) if family == "dfine" else None
         environment = runtime_environment(device) if family == "dfine" else None
         runtime_code_hash = dfine_runtime_code_sha256() if family == "dfine" else None
@@ -308,6 +330,10 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
     try:
         training_history = []
         final_frames = None
+        training_peak_bytes = None
+        if structured_genome is not None and torch.device(device).type == "cuda":
+            torch.cuda.synchronize(device)
+            torch.cuda.reset_peak_memory_stats(device)
         if family == "dfine" or training_arm is not None:
             def record_epoch(epoch, train_loss, learning_rate):
                 nonlocal final_frames
@@ -332,6 +358,9 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
             print(f"Saved Ultralytics training arguments: {args_path}", flush=True)
         else:
             adapter.train(model, train_data, proxy, device)
+        if structured_genome is not None and torch.device(device).type == "cuda":
+            torch.cuda.synchronize(device)
+            training_peak_bytes = int(torch.cuda.max_memory_allocated(device))
 
         model_dir = Path(sota_root) / "trained_models"
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -342,6 +371,22 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
             adapter, model, val_data, proxy, device)
         metadata = report_metadata(adapter, proxy, config, variant_path, model_path)
         if family == "dfine":
+            if structured_genome is not None:
+                from src.fred_dfine_selection import VERSION as selection_version
+                metadata["genome_version"] = structured_genome["version"]
+                metadata["genome_genes"] = structured_genome["genes"]
+                metadata["genome_renderer_sha256"] = hashlib.sha256(
+                    (FRED_DIR.parent.parent / "src/fred_dfine_genome.py").read_bytes()
+                ).hexdigest()
+                metadata["search_resource_probe"] = resource_probe
+                if torch.device(device).type == "cuda":
+                    metadata["resource_measurement_version"] = selection_version
+                    if selection_limits is not None:
+                        metadata["selection_resource_limits"] = selection_limits
+                    metadata["training_peak_memory_bytes"] = training_peak_bytes
+                    metadata["preloaded_inference_ms_per_frame"] = inference_ms_per_frame(
+                        adapter, model, val_data, proxy, device)
+                    metadata["inference_device"] = str(device)
             metadata["training_seed"] = proxy["seed"]
             metadata["initial_weights_sha256"] = initial_hash
             metadata["training_order_sha256"] = adapter.training_order_sha256
@@ -371,7 +416,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
                     proxy={key: value for key, value in proxy.items() if key != "seed"})
                 metadata["model_ablation_protocol_identity"] = hashlib.sha256(
                     json.dumps(shared_config, sort_keys=True).encode()).hexdigest()
-            if diagnostics:
+            if diagnostics and structured_genome is None:
                 metadata["preloaded_inference_ms_per_frame"] = inference_ms_per_frame(
                     adapter, model, val_data, proxy, device)
                 metadata["inference_device"] = str(device)
@@ -383,7 +428,8 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device,
         }
         if family == "dfine" or training_arm is not None:
             payload["training_history"] = training_history
-        report_options = {"diagnostics": True} if diagnostics else {}
+        report_options = ({"diagnostics": True}
+                          if diagnostics or structured_genome is not None else {})
         result, report_path = map_reporter.report(payload, sota_root=sota_root,
                                                   gene_id=gene_id, mode="validation",
                                                   **report_options)
@@ -425,6 +471,8 @@ def main():
                         help="D-FINE-only training comparison; requires --training-seed")
     parser.add_argument("--dfine-reg-max", type=int,
                         help="D-FINE-only refinement-bin ablation; requires --training-seed")
+    parser.add_argument("--dfine-search-space", choices=("legacy", "motifs_v1"),
+                        default="legacy", help="D-FINE candidate genome version")
     args = parser.parse_args()
 
     sota_root = args.sota_root or str(FAMILY_SOTA_ROOTS[args.family])
@@ -454,6 +502,8 @@ def main():
         protocol["proxy"]["seed"] = args.seed
     if args.events:
         protocol["challenging"]["events"] = events_from_tag(args.events)
+    if args.family != "dfine" and args.dfine_search_space != "legacy":
+        parser.error("--dfine-search-space requires --family dfine")
     if args.dfine_reg_max is not None:
         if (args.family != "dfine" or args.training_seed is None
                 or args.dfine_training_arm is not None):
@@ -502,7 +552,8 @@ def main():
     if args.family == "dfine":
         run_options = {"diagnostics": args.diagnostics or args.training_seed is not None,
                        "training_arm": args.dfine_training_arm,
-                       "refinement_bins": args.dfine_reg_max}
+                       "refinement_bins": args.dfine_reg_max,
+                       "dfine_search_space": args.dfine_search_space}
     elif args.diagnostics:
         run_options["diagnostics"] = True
     run(gene_id, args.model, variant_dir, args.family, protocol,
