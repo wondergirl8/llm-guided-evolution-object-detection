@@ -228,6 +228,41 @@ def test_server_window_accepts_hour_and_day_formats(monkeypatch, remaining):
     evolution.check_server_window()
 
 
+def test_server_window_retries_slurm_backup_standby(monkeypatch):
+    from src import fred_runtime
+    monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
+    monkeypatch.setattr(fred_runtime.time, 'sleep', lambda _seconds: None)
+    calls = []
+
+    def run(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return SimpleNamespace(returncode=1, stdout='',
+                                   stderr='slurm_load_jobs error: Slurm backup controller in standby mode')
+        return SimpleNamespace(returncode=0, stdout='7:30:00\n', stderr='')
+
+    monkeypatch.setattr(evolution.subprocess, 'run', run)
+    evolution.check_server_window()
+    assert len(calls) == 2
+
+
+def test_server_window_reports_persistent_slurm_backup_standby(monkeypatch):
+    from src import fred_runtime
+    monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
+    monkeypatch.setattr(fred_runtime.time, 'sleep', lambda _seconds: None)
+    calls = []
+
+    def run(*_args, **_kwargs):
+        calls.append(1)
+        return SimpleNamespace(returncode=1, stdout='',
+                               stderr='slurm_load_jobs error: Slurm backup controller in standby mode')
+
+    monkeypatch.setattr(evolution.subprocess, 'run', run)
+    with pytest.raises(RuntimeError, match='Slurm backup controller in standby mode'):
+        evolution.check_server_window()
+    assert len(calls) == 30
+
+
 @pytest.mark.parametrize(('log', 'category'), [
     ('RuntimeError: retry_exhausted: last=invalid_architecture', 'invalid_architecture'),
     ('RuntimeError: retry_exhausted: last=unchanged_parent', 'unchanged_parent'),

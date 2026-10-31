@@ -72,8 +72,8 @@ def check_server_window():
         return
     if not job_id.isdecimal():
         raise ValueError('LLMGE_SERVER_JOB_ID must be a numeric SLURM job ID')
-    result = subprocess.run(['squeue', '-h', '-j', job_id, '-o', '%L'],
-                            capture_output=True, text=True)
+    from src.fred_runtime import slurm_status
+    result = slurm_status(['squeue', '-h', '-j', job_id, '-o', '%L'], attempts=30)
     if result.returncode != 0:
         raise RuntimeError(f'Cannot check LLM server job {job_id}: {result.stderr.strip()}')
     remaining = result.stdout.strip()

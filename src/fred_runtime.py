@@ -8,18 +8,23 @@ import time
 SLURM_STATUS_ATTEMPTS = 3
 
 
-def slurm_status(command):
+def slurm_status(command, attempts=SLURM_STATUS_ATTEMPTS):
     """Retry temporary scheduler transport errors, never a reported job state."""
-    for attempt in range(SLURM_STATUS_ATTEMPTS):
+    for attempt in range(attempts):
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=10)
         except subprocess.TimeoutExpired:
-            if attempt == SLURM_STATUS_ATTEMPTS - 1:
-                raise RuntimeError(f'Slurm status request timed out after {SLURM_STATUS_ATTEMPTS} attempts')
+            if attempt == attempts - 1:
+                raise RuntimeError(f'Slurm status request timed out after {attempts} attempts')
         else:
-            if result.returncode == 0 or 'timed out' not in (result.stderr + result.stdout).lower():
+            if result.returncode == 0:
                 return result
-            if attempt == SLURM_STATUS_ATTEMPTS - 1:
+            message = (result.stderr + result.stdout).lower()
+            transient = ('timed out' in message or
+                         'backup controller in standby mode' in message)
+            if not transient:
+                return result
+            if attempt == attempts - 1:
                 return result
         time.sleep(2)
 
