@@ -17,11 +17,13 @@ whose selection is already frozen: test results must not feed back into search.
 
 import argparse
 import contextlib
+import gzip
 import hashlib
 import io
 import json
 import multiprocessing
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -39,13 +41,18 @@ try:
     from .proxy_data import REVISION, STEP_US, load_annotations
     from .result_contract import validate_gene_id
 except ImportError:
-    import map_reporter
-    from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
-    from candidate_runner import code_revision, load_protocol, sha256_file
-    from export_split import events_from_tag, events_suffix
-    from fred_splits import challenging_split, sequence_frames
-    from proxy_data import REVISION, STEP_US, load_annotations
-    from result_contract import validate_gene_id
+    # SLURM invokes this file directly. Import through the repository package,
+    # as candidate_runner.py does, so the adapters' relative imports resolve.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from sota.FRED_LLM_GE.phase1_detection import map_reporter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo11 import (
+        UltralyticsYolo11Adapter, _ultralytics_device)
+    from sota.FRED_LLM_GE.phase1_detection.candidate_runner import (
+        code_revision, load_protocol, sha256_file)
+    from sota.FRED_LLM_GE.phase1_detection.export_split import events_from_tag, events_suffix
+    from sota.FRED_LLM_GE.phase1_detection.fred_splits import challenging_split, sequence_frames
+    from sota.FRED_LLM_GE.phase1_detection.proxy_data import REVISION, STEP_US, load_annotations
+    from sota.FRED_LLM_GE.phase1_detection.result_contract import validate_gene_id
 
 FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
@@ -136,6 +143,9 @@ def main():
     parser.add_argument("--test_workers", type=int, default=1,
                         help="Processes downloading and rendering test sequences (each holds one "
                              "sequence's events in memory); use 4 for raw-event windows like 10 ms")
+    parser.add_argument("--save_predictions", action="store_true",
+                        help="Also write every test frame's boxes to final_runs/<name>/"
+                             "test_predictions.json.gz, for per-sequence analysis")
     # Training and testing can run as two jobs when together they exceed the
     # Slurm time limit (10 ms test frames are rendered from raw events, ~10 h).
     stage = parser.add_mutually_exclusive_group()
@@ -207,6 +217,9 @@ def main():
                 "test_frame_step": final["test_frame_step"]}
     frames, expected = predict_test_split(adapter, model, test, settings, args.device, out,
                                           args.test_workers)
+    if args.save_predictions:
+        with gzip.open(out / "test_predictions.json.gz", "wt") as file:
+            json.dump(frames, file)
 
     config = {"family": "yolo11", "final": final, "proxy_eval": settings, "epochs": epochs,
               "seed": seed,
