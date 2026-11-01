@@ -56,19 +56,31 @@ def tag(events):
     return events_suffix(events).lstrip("_") or "released"
 
 
-def settings(protocol):
-    return [CONTROL] + protocol["challenging"]["event_sweep"]
+def settings(protocol, only=None):
+    """The released control plus challenging.event_sweep, or just the tags in only."""
+    found = [CONTROL] + protocol["challenging"]["event_sweep"]
+    if only:
+        unknown = set(only) - {tag(events) for events in found}
+        if unknown:
+            raise ValueError(f"unknown settings {sorted(unknown)}; choose from {[tag(e) for e in found]}")
+        found = [events for events in found if tag(events) in only]
+    return found
 
 
-def setup(protocol, sweep_dir, seeds, family):
+def setup(protocol, sweep_dir, seeds, family, only=None, no_hsv=False):
     commands = []
-    for events in settings(protocol):
+    for events in settings(protocol, only):
         for seed in seeds:
             run_dir = sweep_dir / tag(events) / f"seed{seed}"
             run_dir.mkdir(parents=True, exist_ok=True)
             run_protocol = copy.deepcopy(protocol)
             run_protocol["challenging"]["events"] = events
             run_protocol["proxy"]["seed"] = seed
+            if no_hsv:
+                # Hue/saturation/value jitter recolours pixels, and colour is
+                # what tells event polarities (and the background) apart.
+                run_protocol["families"][family]["training"]["augmentation"].update(
+                    hsv_h=0.0, hsv_s=0.0, hsv_v=0.0)
             (run_dir / "protocol.yaml").write_text(yaml.safe_dump(run_protocol, sort_keys=False))
             commands.append(
                 f"uv run python {FRED_DIR / 'phase1_detection' / 'candidate_runner.py'} "
@@ -80,7 +92,7 @@ def setup(protocol, sweep_dir, seeds, family):
     out = REPO_ROOT / "run_job_outputs" / "event_sweep"
     out.mkdir(parents=True, exist_ok=True)
     script.write_text(SBATCH.format(repo=REPO_ROOT, out=out, last=len(commands) - 1, script=script, jobs=jobs))
-    print(f"{len(commands)} runs ({len(settings(protocol))} settings x {len(seeds)} seeds)")
+    print(f"{len(commands)} runs ({len(settings(protocol, only))} settings x {len(seeds)} seeds)")
     print(f"from {REPO_ROOT}:\n  sbatch --array=0-{len(commands) - 1}%4 {script}")
 
 
@@ -105,10 +117,10 @@ def mean_sd(values):
     return statistics.mean(values), statistics.stdev(values) if len(values) > 1 else 0.0
 
 
-def summary(protocol, sweep_dir):
+def summary(protocol, sweep_dir, only=None):
     lines = ["setting,window_ms,encoding,runs,mAP50_mean,mAP50_sd,mAP50_95_mean,mAP50_95_sd"]
     print(f"{'setting':<24}{'window ms':>10}{'runs':>6}{'mAP50':>18}{'mAP50:95':>18}")
-    for events in settings(protocol):
+    for events in settings(protocol, only):
         scores = []
         for csv in sorted((sweep_dir / tag(events)).glob("seed*/results/seed_results.csv")):
             if score := read_result(csv):
@@ -129,13 +141,19 @@ def main():
     parser.add_argument("--protocol", default=str(DEFAULT_PROTOCOL))
     parser.add_argument("--seeds", type=int, nargs="+", default=[0])
     parser.add_argument("--family", default="yolo11")
+    parser.add_argument("--only", nargs="+", default=None,
+                        help="Setting tags to run, e.g. released raw_w10000_polarity (default: all)")
+    parser.add_argument("--no_hsv", action="store_true",
+                        help="Train without hue/saturation/value augmentation (setup only)")
+    parser.add_argument("--sweep_dir", default="event_sweep",
+                        help="Folder under the data root for this sweep's runs and summary")
     args = parser.parse_args()
     protocol = yaml.safe_load(Path(args.protocol).read_text())
-    sweep_dir = FRED_DIR / protocol["challenging"]["data_root"] / "event_sweep"
+    sweep_dir = FRED_DIR / protocol["challenging"]["data_root"] / args.sweep_dir
     if args.command == "setup":
-        setup(protocol, sweep_dir, args.seeds, args.family)
+        setup(protocol, sweep_dir, args.seeds, args.family, args.only, args.no_hsv)
     else:
-        summary(protocol, sweep_dir)
+        summary(protocol, sweep_dir, args.only)
 
 
 if __name__ == "__main__":
