@@ -53,6 +53,13 @@ def parse_config_sections(content):
 
 if __name__ == "__main__":
     configuration_path = os.path.join(constants.SLURM_CONFIG_DIR, f"{constants.CLUSTER}.txt")
+    python_launch = getattr(constants, 'PYTHON_LAUNCH', 'uv run python')
+    if constants.SEED_FAMILY == 'dfine':
+        environment_python = os.path.join(constants.ROOT_DIR, '.venv', 'bin', 'python')
+        if not os.access(environment_python, os.X_OK):
+            raise FileNotFoundError(
+                f'{environment_python} is missing or not executable; run uv sync '
+                'on the login node before generating D-FINE Slurm scripts')
 
     with open(configuration_path, 'r') as file:
         content = [item.strip() for item in file.readlines()]
@@ -70,7 +77,7 @@ mkdir -p "$UV_CACHE_DIR"
 echo "Using UV cache: $UV_CACHE_DIR"
 
 export SERVER_HOSTNAME=$(hostname)
-uv run python run_improved.py --checkpoints {shlex.quote(constants.OUTPUT_DIR)} --global_path {shlex.quote(constants.OUTPUT_DIR)}
+{python_launch} run_improved.py --checkpoints {shlex.quote(constants.OUTPUT_DIR)} --global_path {shlex.quote(constants.OUTPUT_DIR)}
 """
     replace_script_configuration("run.sh", run_sh)
 
@@ -85,7 +92,7 @@ export TOKENIZERS_PARALLELISM=false
 export UV_CACHE_DIR="${{TMPDIR:-${{SLURM_TMPDIR:-/tmp}}}}/uv-cache-${{SLURM_JOB_ID:-$$}}"
 mkdir -p "$UV_CACHE_DIR"
 echo "Using UV cache: $UV_CACHE_DIR"
-uv run python llm_crossover.py '{constants.SLURM_MIXT_INPUT_X}' '{constants.SLURM_MIXT_INPUT_Y}' '{constants.SLURM_MIXT_OUTPUT}'  --top_p {constants.SLURM_MIXT_TOP_P}   --temperature {constants.SLURM_MIXT_TEMPERATURE} --apply_quality_control '{constants.SLURM_MIXT_APPLY_QUALITY_CONTROL}' --bit {constants.SLURM_MIXT_BIT}
+{python_launch} llm_crossover.py '{constants.SLURM_MIXT_INPUT_X}' '{constants.SLURM_MIXT_INPUT_Y}' '{constants.SLURM_MIXT_OUTPUT}'  --top_p {constants.SLURM_MIXT_TOP_P}   --temperature {constants.SLURM_MIXT_TEMPERATURE} --apply_quality_control '{constants.SLURM_MIXT_APPLY_QUALITY_CONTROL}' --bit {constants.SLURM_MIXT_BIT}
 """
     replace_script_configuration("src/mixt.sh", mixt_sh)
 
@@ -112,6 +119,7 @@ unset VIRTUAL_ENV
 export UV_CACHE_DIR="${{TMPDIR:-${{SLURM_TMPDIR:-/tmp}}}}/uv-cache-${{SLURM_JOB_ID:-$$}}"
 mkdir -p "$UV_CACHE_DIR"
 echo "Using UV cache: $UV_CACHE_DIR"
+{"export PYTHONFAULTHANDLER=1" if constants.SEED_FAMILY == 'dfine' else ""}
 
 # Run Python script
 {{}}
@@ -146,6 +154,8 @@ export HF_HOME=/storage/ice-shared/vip-vvk/llm_storage/
 # Run Python script
 uv run python run_improved.py --checkpoints {} --global_path {} --llm_model {} --prompt_group {}
 """
+    if constants.SEED_FAMILY == 'dfine':
+        islands_script = islands_script.replace('uv run python', python_launch)
 
     # Generate server.sh
     local_llm_server = f"""
@@ -188,9 +198,9 @@ else
     echo "Skipping island controller submission (SUBMIT_ISLAND_CONTROLLER=${{SUBMIT_ISLAND_CONTROLLER}})"
 fi
 
-PORT=$(uv run python -c "from src.cfg.constants import PORT; print(PORT)")
+PORT=$({python_launch} -c "from src.cfg.constants import PORT; print(PORT)")
 echo "Serving on port $PORT"
-uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port $PORT --workers 1
+{python_launch} -m uvicorn server:app --host $SERVER_HOSTNAME --port $PORT --workers 1
 """
     server_config = sections.get("server-sh", "")
     replace_script_configuration("server.sh", server_config + local_llm_server)
@@ -217,7 +227,7 @@ export HF_HOME=/storage/ice-shared/vip-vvk/llm_storage/
 # Change to the repository root
 cd {constants.ROOT_DIR}
 
-uv run python islands_wrapper.py {constants.ISLAND_CONTROLLER_RUN_NAME} \\
+{python_launch} islands_wrapper.py {constants.ISLAND_CONTROLLER_RUN_NAME} \\
     --num_islands {constants.ISLAND_CONTROLLER_NUM_ISLANDS} \\
     --llms {constants.ISLAND_CONTROLLER_LLMS} \\
     --prompt_groups "{constants.ISLAND_CONTROLLER_PROMPT_GROUPS}"

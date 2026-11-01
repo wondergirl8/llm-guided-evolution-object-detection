@@ -287,7 +287,7 @@ def write_bash_script(llm_model,
         with open(file_path, 'w') as file:
             file.write(template_txt)
         temp_text = f'{python_file} {input_filename_x} {output_filename} {file_path} --top_p {top_p} --temperature {temperature}'
-        python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
+        python_runline = f"{constants.PYTHON_LAUNCH} {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
         if coverage_target is not None:
             if SEED_FAMILY == 'yolo26_p2':
                 from src.fred_yolo26_proposals import INITIAL_COVERAGE_TARGETS
@@ -306,7 +306,7 @@ def write_bash_script(llm_model,
                                                 mutation_type=None, gene_id_parent2=gene_id_parent2)
         
         temp_text = f"{python_file} {input_filename_x} {input_filename_y} {output_filename} --top_p {top_p} --temperature {temperature}"
-        python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
+        python_runline = f"{constants.PYTHON_LAUNCH} {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
         if SEED_FAMILY == 'dfine' and DFINE_SEARCH_SPACE == 'motifs_v1':
             python_runline += ' --dfine_search_space motifs_v1'
     else:
@@ -439,6 +439,10 @@ def check_contents_for_error(contents):
     """
     contents_lower = contents.lower()
     if 'error infrastructure: ' in contents_lower:
+        return False
+    if ('input/output error (os error 5)' in contents_lower or
+            'input/output error: [errno 5]' in contents_lower or
+            'fatal python error: bus error' in contents_lower):
         return False
     # Check for explicit error indicators
     if "traceback" in contents_lower or "slurmstepd: error" in contents_lower:
@@ -593,6 +597,16 @@ def submit_run(gene_id, exclude_nodes=()):
                 'echo "Evaluation GPU binding: SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-unset} '
                 'CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"\n'
                 + python_runline
+            )
+        if SEED_FAMILY == 'dfine' and not LOCAL:
+            # Exit 135 is the shell's SIGBUS status. Retain the job identity
+            # and retry the same gene once before recording a failure.
+            python_runline += (
+                '\n_eval_status=$?\n'
+                'if [ "$_eval_status" -eq 135 ]; then\n'
+                '  echo "ERROR INFRASTRUCTURE: evaluation exited 135 (SIGBUS; possible node or storage fault)"\n'
+                'fi\n'
+                'exit "$_eval_status"'
             )
         bash_script_content = fill_template_slots(template, python_runline)
         return bash_script_content
@@ -1035,6 +1049,10 @@ def dfine_infrastructure_reason(contents):
         if line.startswith(INFRASTRUCTURE_ERROR):
             return line.removeprefix(INFRASTRUCTURE_ERROR)
         lower = line.lower()
+        if ('input/output error (os error 5)' in lower or
+                'input/output error: [errno 5]' in lower or
+                'fatal python error: bus error' in lower):
+            return line
         if ('slurmstepd:' in lower or 'cancelled' in lower) and (
                 'due to time limit' in lower or 'node failure' in lower):
             return line
@@ -1044,14 +1062,20 @@ def dfine_infrastructure_reason(contents):
 def retry_dfine_infrastructure(gene_id, reason):
     """Retry the same gene once and retain each failed job's identity."""
     record = GLOBAL_DATA[gene_id]
+    old_job = record.get('results_job')
+    bad_node = evaluation_job_node(old_job)
+    excluded = set(record.get('excluded_eval_nodes', ()))
+    if bad_node:
+        excluded.add(bad_node)
+    record['excluded_eval_nodes'] = sorted(excluded)
     record.setdefault('infrastructure_failures', []).append(
-        {'job_id': record.get('results_job'), 'reason': reason})
+        {'job_id': old_job, 'node': bad_node, 'reason': reason})
     retries = record.get('infrastructure_retries', 0)
     if retries >= DFINE_MAX_INFRA_RETRIES:
         reject_detection_fitness(gene_id, None, reason, status='FAILED: INFRASTRUCTURE')
         return False
     record['infrastructure_retries'] = retries + 1
-    submit_run(gene_id)
+    submit_run(gene_id, exclude_nodes=sorted(excluded))
     return record['status'] == 'running eval'
 
 

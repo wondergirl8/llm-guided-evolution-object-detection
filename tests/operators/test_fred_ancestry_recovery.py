@@ -1,6 +1,7 @@
 """Generation-zero refill lineage survives crossover and checkpoint resume."""
 
 import pytest
+import shlex
 
 import run_improved as evolution
 from sota.FRED_LLM_GE.phase1_detection.ancestry_recovery import recover_population_ancestry
@@ -54,12 +55,12 @@ def test_refill_records_mutation_ancestry_before_first_crossover(tmp_path, monke
     assert evolution.GLOBAL_DATA_ANCESTRY["grandchild"]["MUTATE_TYPE"][-1] == "CrossOver"
 
 
-def _saved_mutation(root, parent, child, template_name):
+def _saved_mutation(root, parent, child, template_name, launcher="uv run python"):
     operators = root / "operators" / "0"
     models = root / "models"
     operators.mkdir(parents=True, exist_ok=True)
     models.mkdir(exist_ok=True)
-    command = (f"uv run python src/llm_mutation.py {models / f'network_{parent}.py'} "
+    command = (f"{launcher} src/llm_mutation.py {models / f'network_{parent}.py'} "
                f"{models / f'network_{child}.py'} {operators / f'{child}_model.txt'} "
                "--top_p 0.1 --temperature 0.2")
     (operators / f"{child}.sh").write_text(f"#!/bin/bash\n{command}\n")
@@ -68,14 +69,19 @@ def _saved_mutation(root, parent, child, template_name):
     (operators / f"{child}_model.txt").write_text(template.read_text() + "\n" + rules.read_text())
 
 
-def test_resume_recovers_exact_lineage_for_nested_refill_mutations(tmp_path, monkeypatch):
+@pytest.mark.parametrize('direct_python', [False, True])
+def test_resume_recovers_exact_lineage_for_nested_refill_mutations(
+    tmp_path, monkeypatch, direct_python,
+):
     normal = tmp_path / "templates" / "Normal"
     normal.mkdir(parents=True)
     (normal / "1.txt").write_text("change channels")
     (normal / "2.txt").write_text("change repeats")
     (tmp_path / "templates" / "rules.txt").write_text("keep Detect last")
-    _saved_mutation(tmp_path, "seed", "refill_a", "1")
-    _saved_mutation(tmp_path, "refill_a", "refill_b", "2")
+    launcher = (shlex.quote(str(tmp_path / '.venv/bin/python'))
+                if direct_python else 'uv run python')
+    _saved_mutation(tmp_path, "seed", "refill_a", "1", launcher)
+    _saved_mutation(tmp_path, "refill_a", "refill_b", "2", launcher)
     original = {"seed": {"GENES": ["seed"], "MUTATE_TYPE": ["STOCK_SEED"]}}
 
     recovered, repaired = recover_population_ancestry(

@@ -14,11 +14,16 @@ import math
 import os
 import platform
 import re
+import shlex
 
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FRED_DIR = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE")
 SEED_FAMILY = os.getenv("FRED_SEED_FAMILY", "yolo11")
+# D-FINE batch jobs use the environment prepared by `uv sync` on the login
+# node. Re-running uv on each compute node reads uv.lock from shared storage.
+PYTHON_LAUNCH = (shlex.quote(os.path.join(ROOT_DIR, ".venv", "bin", "python"))
+                 if SEED_FAMILY == "dfine" else "uv run python")
 RUN_TAG = os.getenv("FRED_RUN_TAG", "")
 if RUN_TAG and not re.fullmatch(
     rf"{re.escape(SEED_FAMILY)}_[0-9]{{8}}_eot[01]_[a-z0-9][a-z0-9_-]*", RUN_TAG
@@ -161,7 +166,7 @@ if EVAL_QUEUE_TIMEOUT_SECONDS < 0 or EVAL_TERMINAL_GRACE_SECONDS <= 0:
 # The generated candidate is named network_<gene_id>.py. The runner trains
 # and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
-EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
+EVAL_RUNLINE = (f"{PYTHON_LAUNCH} {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
                 "--model {} --variant_dir {VARIANT_DIR}"
                 + (" --device cuda" if SEED_FAMILY == "dfine" else "")
                 + (" --dfine-search-space motifs_v1" if SEED_FAMILY == "dfine" and

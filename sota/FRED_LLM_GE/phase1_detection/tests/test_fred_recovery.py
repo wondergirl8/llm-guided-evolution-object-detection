@@ -29,6 +29,11 @@ def test_generated_slurm_templates_keep_allocated_devices(tmp_path, family):
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, target)
+    if family == 'dfine':
+        environment_python = tmp_path / '.venv/bin/python'
+        environment_python.parent.mkdir(parents=True)
+        environment_python.write_text('#!/bin/sh\n')
+        environment_python.chmod(0o755)
     env = dict(os.environ, FRED_SEED_FAMILY=family, LLMGE_CLUSTER='pace-ice',
                CUDA_VISIBLE_DEVICES='MIG-SYNTHETIC-ALLOCATION')
     env.pop('PYTHONPATH', None)
@@ -42,6 +47,12 @@ def test_generated_slurm_templates_keep_allocated_devices(tmp_path, family):
     assert '#SBATCH -t 7:45:00' in run_script
     assert 'export CUDA_VISIBLE_DEVICES=0,1' not in server_script
     assert 'from src.cfg.constants import PORT' in server_script
+    if family == 'dfine':
+        expected_python = str(tmp_path / '.venv/bin/python')
+        assert expected_python in run_script
+        assert expected_python in server_script
+        assert 'uv run python' not in run_script + server_script
+        assert 'export PYTHONFAULTHANDLER=1' in config['python_bash_script']
     for template in ('python_bash_script', 'llm_bash_script'):
         script = config[template].replace('{}', 'printf "%s" "$CUDA_VISIBLE_DEVICES"')
         # Execute only the visibility-related lines; module/scheduler calls need ICE.

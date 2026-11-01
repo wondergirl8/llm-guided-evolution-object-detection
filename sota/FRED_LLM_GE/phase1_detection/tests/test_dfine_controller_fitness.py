@@ -194,6 +194,9 @@ def test_dfine_runtime_cuda_busy_is_not_scored_as_bad_model(tmp_path, capsys):
 @pytest.mark.parametrize("output", [
     "ERROR infrastructure: CUDA devices are busy or unavailable",
     "slurmstepd: error: JOB 101 CANCELLED AT 01:00 DUE TO TIME LIMIT",
+    "error: failed to read from file `uv.lock`: Input/output error (os error 5)",
+    "Fatal Python error: Bus error",
+    "ERROR infrastructure: evaluation exited 135 (SIGBUS; possible node or storage fault)",
 ])
 def test_dfine_infrastructure_retries_same_gene_then_accepts_result(
     dfine_state, monkeypatch, output,
@@ -204,16 +207,19 @@ def test_dfine_infrastructure_retries_same_gene_then_accepts_result(
     }
     submitted = []
 
-    def submit(gene_id):
-        submitted.append(gene_id)
+    monkeypatch.setattr(controller, 'evaluation_job_node', lambda _job_id: 'bad-node')
+
+    def submit(gene_id, **kwargs):
+        submitted.append((gene_id, kwargs))
         record.update(status="running eval", results_job="102", local_output="job done",
                       eval_start_time=time.time())
 
     monkeypatch.setattr(controller, "submit_run", submit)
     controller.check4results("gene")
-    assert submitted == ["gene"]
+    assert submitted == [("gene", {"exclude_nodes": ["bad-node"]})]
     assert record["infrastructure_retries"] == 1
     assert record["infrastructure_failures"][0]["job_id"] == "101"
+    assert record["infrastructure_failures"][0]["node"] == "bad-node"
 
     (dfine_state / "gene_results.csv").write_text("0.544,0.167,850040\n")
     controller.check4results("gene")
@@ -222,7 +228,8 @@ def test_dfine_infrastructure_retries_same_gene_then_accepts_result(
 
 
 def test_dfine_infrastructure_retry_is_bounded(dfine_state, monkeypatch):
-    monkeypatch.setattr(controller, "submit_run", lambda _: pytest.fail("extra retry"))
+    monkeypatch.setattr(controller, "submit_run", lambda *_a, **_kw: pytest.fail("extra retry"))
+    monkeypatch.setattr(controller, 'evaluation_job_node', lambda _job_id: None)
     controller.GLOBAL_DATA["gene"] = {
         "status": "running eval", "fitness": None, "results_job": "102",
         "local_output": "ERROR infrastructure: GPU still unavailable",

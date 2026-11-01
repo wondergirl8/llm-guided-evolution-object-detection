@@ -51,3 +51,16 @@ These changes have offline tests for transient and exhausted LLM requests,
 Slurm state/runtime parsing, pending and running clocks, terminal grace,
 checkpoint recovery, and session cleanup. They have not been exercised against
 live PACE-ICE queue and GPU jobs in this workspace.
+
+## Compute-node storage faults
+
+After `uv sync` on the PACE login node, generated D-FINE server, controller,
+operator, and evaluation jobs launch the checkout's `.venv/bin/python`
+directly. This avoids reading `uv.lock` on each compute node. The environment,
+source code, and exported frames still reside on shared storage, so a storage
+or node outage can still interrupt a job. D-FINE evaluation scripts enable
+Python's fatal-signal traceback and mark exit 135 (SIGBUS) as an abnormal
+process failure. The controller records the failed job and node, retries the
+same gene once on a different node when Slurm reports one, and records a
+visible infrastructure failure if that retry also fails. A retry never turns
+an incomplete evaluation into a valid fitness score.

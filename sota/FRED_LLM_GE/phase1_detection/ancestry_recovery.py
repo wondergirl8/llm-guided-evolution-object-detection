@@ -41,13 +41,20 @@ def recover_population_ancestry(population, ancestry, root, operator_dir,
             raise RuntimeError(f"Missing ancestry and saved mutation script for {gene}: {script}")
 
         commands = []
+        direct_python = str(root / '.venv/bin/python')
         for line in script.read_text().splitlines():
-            if line.startswith("uv run python src/llm_mutation.py "):
-                commands.append(shlex.split(line))
-        if len(commands) != 1 or len(commands[0]) < 7:
+            if not (line.startswith('uv run python src/llm_mutation.py ') or
+                    line.startswith(f'{shlex.quote(direct_python)} src/llm_mutation.py ')):
+                continue
+            parts = shlex.split(line)
+            if parts[:4] == ['uv', 'run', 'python', 'src/llm_mutation.py']:
+                commands.append(parts[4:])
+            elif parts[:2] == [direct_python, 'src/llm_mutation.py']:
+                commands.append(parts[2:])
+        if len(commands) != 1 or len(commands[0]) < 3:
             raise RuntimeError(f"Cannot verify one mutation command for {gene}: {script}")
         command = commands[0]
-        parent_path, child_path, prompt_path = map(Path, command[4:7])
+        parent_path, child_path, prompt_path = map(Path, command[:3])
         expected_child = variant_dir / f"{model}_{gene}.py"
         expected_prompt = operator_dir / f"{gene}_model.txt"
         if (child_path.resolve() != expected_child.resolve() or

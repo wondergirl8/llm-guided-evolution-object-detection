@@ -68,3 +68,7 @@ print(json.dumps({
         assert (ROOT / entry["rules"]).is_file()
         assert family in entry["eval"]
         assert entry["global_data"] == "global_data"
+        if family == "dfine":
+            assert entry["eval"].startswith(str(ROOT / ".venv/bin/python"))
+        else:
+            assert entry["eval"].startswith("uv run python ")
