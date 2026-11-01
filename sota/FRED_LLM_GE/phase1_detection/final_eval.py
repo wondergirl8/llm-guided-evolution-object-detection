@@ -143,6 +143,9 @@ def main():
     parser.add_argument("--test_workers", type=int, default=1,
                         help="Processes downloading and rendering test sequences (each holds one "
                              "sequence's events in memory); use 4 for raw-event windows like 10 ms")
+    parser.add_argument("--skip_size_check", action="store_true",
+                        help="Allow a model outside the search's parameter bounds "
+                             "(yolo11_search_space.py), e.g. one evolved before they existed")
     parser.add_argument("--save_predictions", action="store_true",
                         help="Also write every test frame's boxes to final_runs/<name>/"
                              "test_predictions.json.gz, for per-sequence analysis")
@@ -190,7 +193,8 @@ def main():
         from ultralytics import YOLO
         model = YOLO(str(checkpoint), task="detect")
     else:
-        model = adapter.build(variant_path, num_classes=1, device=args.device)
+        model = adapter.build(variant_path, num_classes=1, device=args.device,
+                              check_size=not args.skip_size_check)
     params = adapter.param_count(model)
     print(f"{args.name}: {variant_path.name}, {params} params, weights={args.weights or 'scratch'}, "
           f"{epochs} epochs, seed {seed}" + (" (trained earlier)" if args.test_only else ""), flush=True)
@@ -208,6 +212,7 @@ def main():
         train_info.write_text(json.dumps({
             "variant_identity": sha256_file(variant_path), "events": events, "epochs": epochs,
             "seed": seed, "weights": args.weights, "checkpoint_identity": sha256_file(checkpoint),
+            "size_check": not args.skip_size_check,
         }, indent=2) + "\n")
         print(f"Saved model: {checkpoint}; score it with --test_only (same --name, --model, --events)")
         return

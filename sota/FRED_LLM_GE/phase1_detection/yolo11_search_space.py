@@ -182,14 +182,18 @@ def write_cached_fitness(sota_root, gene_id, fitness):
                   DetectionResult(fitness[0], fitness[1], int(fitness[2])))
 
 
-def validate_built_model(model):
-    """Check the instantiated detector and hash its effective module graph."""
+def validate_built_model(model, check_size=True):
+    """Check the instantiated detector and hash its effective module graph.
+
+    check_size=False skips the search's parameter bounds, for scoring a model
+    selected before they existed (final_eval.py --skip_size_check).
+    """
     network = model.model
     strides = [int(value) for value in network.stride.tolist()]
     if strides != [8, 16, 32]:
         raise ValueError(f"YOLO11 detection strides must be 8/16/32, got {strides}")
     params = sum(parameter.numel() for parameter in network.parameters())
-    if not MIN_PARAMS <= params <= MAX_PARAMS:
+    if check_size and not MIN_PARAMS <= params <= MAX_PARAMS:
         raise ValueError(f"YOLO11 parameter count {params} outside [{MIN_PARAMS}, {MAX_PARAMS}]")
     graph = {"modules": repr(network.model),
              "routing": [getattr(layer, "f", None) for layer in network.model],

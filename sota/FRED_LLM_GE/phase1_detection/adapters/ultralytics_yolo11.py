@@ -101,7 +101,7 @@ class UltralyticsYolo11Adapter(FamilyAdapter):
         return {**{key: value for key, value in training.items() if key != "augmentation"},
                 **training["augmentation"]}
 
-    def build(self, variant_path, num_classes, device):
+    def build(self, variant_path, num_classes, device, check_size=True):
         from ultralytics import YOLO
 
         config = load_and_validate(variant_path)
@@ -113,7 +113,7 @@ class UltralyticsYolo11Adapter(FamilyAdapter):
         model_yaml.write_text(yaml.safe_dump(config, sort_keys=False))
         # Built from YAML: random initialization, no pretrained weights.
         model = YOLO(str(model_yaml), task="detect")
-        self.architecture_hash, self.architecture_params = validate_built_model(model)
+        self.architecture_hash, self.architecture_params = validate_built_model(model, check_size)
         return model
 
     def train(self, model, data, proxy, device, args_path=None):
