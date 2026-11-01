@@ -109,6 +109,12 @@ class EMSYoloAdapter(FamilyAdapter):
                                          warmup * (recipe["momentum"] - recipe["warmup_momentum"]))
             order = torch.randperm(len(data["images"]), generator=generator)
             epoch_loss = 0.0
+            epoch_box = epoch_objectness = 0.0
+            epoch_positive_objectness = 0.0
+            epoch_positive_ciou = epoch_positive_target_iou = 0.0
+            epoch_positive_assignments = 0
+            epoch_max_confidence = 0.0
+            epoch_microbatches = 0
             for group in order.split(proxy["batch_size"]):
                 group_loss = 0.0
                 for indices in group.split(microbatch):
@@ -126,6 +132,16 @@ class EMSYoloAdapter(FamilyAdapter):
                         loss = loss_function(model(self._temporal(images)), targets)
                     if not torch.isfinite(loss):
                         raise ValueError("nonfinite EMS-YOLO training loss")
+                    components = loss_function.last_components
+                    epoch_box += components["box"]
+                    epoch_objectness += components["objectness"]
+                    epoch_positive_objectness += components["positive_objectness_sum"]
+                    epoch_positive_ciou += components["positive_ciou_sum"]
+                    epoch_positive_target_iou += components["positive_target_iou_sum"]
+                    epoch_positive_assignments += components["positive_assignments"]
+                    epoch_max_confidence = max(epoch_max_confidence,
+                                               components["max_confidence"])
+                    epoch_microbatches += 1
                     scaled = loss * len(indices) / (len(group) * accumulate_groups)
                     scaler.scale(scaled).backward()
                     group_loss += float(loss.detach()) * len(indices)
@@ -153,8 +169,22 @@ class EMSYoloAdapter(FamilyAdapter):
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 groups_since_step = 0
+            positive_objectness = (epoch_positive_objectness / epoch_positive_assignments
+                                   if epoch_positive_assignments else 0.0)
+            positive_ciou = (epoch_positive_ciou / epoch_positive_assignments
+                             if epoch_positive_assignments else 0.0)
+            positive_target_iou = (epoch_positive_target_iou / epoch_positive_assignments
+                                   if epoch_positive_assignments else 0.0)
             print(f'EMS-YOLO epoch {epoch + 1}/{proxy["epochs"]}: '
-                  f'loss={epoch_loss / len(order):.6f} lr={learning_rate:.6g}', flush=True)
+                  f'loss={epoch_loss / len(order):.6f} '
+                  f'box={epoch_box / epoch_microbatches:.6f} '
+                  f'obj={epoch_objectness / epoch_microbatches:.6f} '
+                  f'positive_assignments={epoch_positive_assignments} '
+                  f'positive_obj={positive_objectness:.6f} '
+                  f'positive_ciou={positive_ciou:.6f} '
+                  f'target_iou={positive_target_iou:.6f} '
+                  f'max_conf={epoch_max_confidence:.6f} '
+                  f'lr={learning_rate:.6g}', flush=True)
 
     @torch.no_grad()
     def predict(self, model, images, proxy, device):

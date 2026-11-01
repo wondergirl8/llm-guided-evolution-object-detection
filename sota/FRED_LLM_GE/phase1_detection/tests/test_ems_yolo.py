@@ -1,14 +1,17 @@
 """CPU contracts for the experimental EMS-YOLO family; no data downloads."""
 import copy
+import csv
 
 import pytest
 import torch
+from PIL import Image
 
 from sota.FRED_LLM_GE.phase1_detection import candidate_runner as runner
 from sota.FRED_LLM_GE.phase1_detection import ems_yolo_search_space as policy
 from sota.FRED_LLM_GE.phase1_detection.adapters.ems_yolo import EMSYoloAdapter
 from sota.FRED_LLM_GE.phase1_detection.seeds.ems_yolo.detection import EMSYoloLoss, decode_predictions
 from sota.FRED_LLM_GE.phase1_detection.seeds.ems_yolo.network import EMSYolo
+from sota.FRED_LLM_GE.phase1_detection.ems_yolo_overfit import load_labeled_subset
 
 
 def variant(tmp_path, old, new):
@@ -71,6 +74,26 @@ def test_forward_loss_backward_and_decode():
     assert boxes.shape == (1, 60, 4) and scores.shape == (1, 60)
 
 
+def test_loss_accepts_float32_targets_with_half_predictions():
+    """Match CUDA autocast: half predictions with float32 target assignment."""
+    model = EMSYolo(base_channels=32, stage_depths=(1, 2, 2, 1), neck_channels=128)
+    predictions = [torch.randn(1, 3, 4, 4, 6, dtype=torch.float16, requires_grad=True),
+                   torch.randn(1, 3, 2, 2, 6, dtype=torch.float16, requires_grad=True)]
+    target = torch.tensor([[0., 0., 0.5, 0.5, 0.2, 0.2]], dtype=torch.float32)
+    loss_function = EMSYoloLoss(model, {"box": 0.05, "obj": 1.0,
+                                        "obj_pw": 1.0, "anchor_t": 4.0})
+    loss = loss_function(predictions, target)
+    assert torch.isfinite(loss)
+    assert loss_function.last_components["positive_assignments"] > 0
+    assert 0 <= loss_function.last_components["positive_objectness_sum"]
+    assert loss_function.last_components["positive_ciou_sum"] <= \
+        loss_function.last_components["positive_target_iou_sum"]
+    assert 0 <= loss_function.last_components["positive_target_iou_sum"]
+    assert 0 <= loss_function.last_components["max_confidence"] <= 1
+    loss.backward()
+    assert all(prediction.grad is not None for prediction in predictions)
+
+
 def test_letterbox_targets_and_one_step_training():
     adapter = EMSYoloAdapter(settings(), runner.FRED_DIR)
     images = torch.randint(0, 256, (2, 3, 32, 48), dtype=torch.uint8)
@@ -103,3 +126,36 @@ def test_family_registration_and_scratch_provenance():
     assert "weights" not in family and "checkpoint" not in family
     assert family["upstream"]["commit"] == "fbfc2caeac5ff4d60cbc2ad23864911df63d0f85"
     assert family["data"] == "challenging_search"
+
+
+def test_baseline_validation_surfaces_candidate_failure(tmp_path):
+    from sota.FRED_LLM_GE.phase1_detection import ems_yolo_baseline as baseline
+
+    results = tmp_path / "results"
+    results.mkdir()
+    with (results / "seed_results.csv").open("w", newline="") as stream:
+        csv.writer(stream).writerow(
+            ["-inf", "-inf", "inf", "train_or_eval_failed: AMP dtype mismatch"])
+
+    with pytest.raises(ValueError, match="AMP dtype mismatch"):
+        baseline.validate(tmp_path, 0)
+
+
+def test_overfit_subset_uses_only_labeled_export_frames(tmp_path):
+    root = tmp_path / "search_train_step50"
+    (root / "images").mkdir(parents=True)
+    (root / "labels").mkdir()
+    paths = []
+    for index, label in enumerate(("", "0 0.5 0.5 0.25 0.5\n",
+                                   "0 0.25 0.25 0.1 0.2\n")):
+        path = root / "images" / f"frame_{index}.png"
+        Image.new("RGB", (40, 20)).save(path)
+        (root / "labels" / f"frame_{index}.txt").write_text(label)
+        paths.append(str(path))
+    (root / "train.txt").write_text("\n".join(paths) + "\n")
+
+    data = load_labeled_subset(root, 2, seed=0)
+    assert len(data["images"]) == 2
+    assert all(len(boxes) == 1 for boxes in data["boxes"])
+    assert data["orig_size"] == (40, 20)
+    assert data["images"][torch.tensor([0])].shape == (1, 3, 20, 40)

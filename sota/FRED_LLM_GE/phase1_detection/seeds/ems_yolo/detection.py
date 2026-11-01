@@ -50,20 +50,46 @@ class EMSYoloLoss:
     def __call__(self, predictions, targets):
         box_loss = torch.zeros((), device=targets.device)
         object_loss = torch.zeros((), device=targets.device)
+        positive_objectness_sum = torch.zeros((), device=targets.device)
+        positive_ciou_sum = torch.zeros((), device=targets.device)
+        positive_target_iou_sum = torch.zeros((), device=targets.device)
+        positive_assignments = 0
+        max_confidence = torch.zeros((), device=targets.device)
         assignments = self._targets(predictions, targets)
         for level, prediction in enumerate(predictions):
+            confidence = prediction[..., 4].sigmoid() * prediction[..., 5].sigmoid()
+            max_confidence = torch.maximum(max_confidence, confidence.detach().max().float())
             batch, anchor, row, column, target_box, matched_anchor = assignments[level]
             target_object = torch.zeros_like(prediction[..., 4])
             if len(batch):
                 selected = prediction[batch, anchor, row, column]
+                positive_assignments += len(batch)
+                positive_objectness_sum += selected[:, 4].sigmoid().detach().float().sum()
                 center = selected[:, :2].sigmoid() * 2 - 0.5
                 size = (selected[:, 2:4].sigmoid() * 2) ** 2 * matched_anchor
                 iou = bbox_ciou(torch.cat((center, size), 1), target_box)
+                positive_ciou_sum += iou.detach().float().sum()
+                positive_target_iou_sum += iou.detach().clamp(0).float().sum()
                 box_loss = box_loss + (1 - iou).mean()
-                target_object[batch, anchor, row, column] = iou.detach().clamp(0)
+                # Autocast makes the prediction (and therefore target_object)
+                # float16 while target assignment remains float32.  PyTorch
+                # advanced-index assignment requires an exact dtype match.
+                object_target = iou.detach().clamp(0).to(target_object.dtype)
+                target_object[batch, anchor, row, column] = object_target
             object_loss = (object_loss
                            + self.object_loss(prediction[..., 4], target_object) * self.balance[level])
-        return (box_loss * self.box_weight + object_loss * self.object_weight) * predictions[0].shape[0]
+        weighted_box = box_loss * self.box_weight
+        weighted_object = object_loss * self.object_weight
+        self.last_components = {
+            "box": float(weighted_box.detach()),
+            "objectness": float(weighted_object.detach()),
+            "positive_assignments": positive_assignments,
+            "positive_objectness_sum": float(positive_objectness_sum),
+            "positive_ciou_sum": float(positive_ciou_sum),
+            "positive_target_iou_sum": float(positive_target_iou_sum),
+            "max_confidence": float(max_confidence),
+        }
+        return (weighted_box + weighted_object) * predictions[0].shape[0]
 
     def _targets(self, predictions, targets):
         assignments = []

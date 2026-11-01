@@ -28,6 +28,16 @@ def identity():
 
 
 def validate(root, seed):
+    results_path = root / "results/seed_results.csv"
+    if results_path.is_file():
+        with results_path.open() as stream:
+            rows = list(csv.reader(stream))
+        if len(rows) != 1:
+            raise ValueError(f"invalid result rows: {root}")
+        if rows[0][:3] == ["-inf", "-inf", "inf"]:
+            reason = rows[0][3] if len(rows[0]) > 3 else "missing failure reason"
+            raise ValueError(f"failed EMS-YOLO baseline: {reason}")
+
     report_path = root / "results/seed_evaluation.json"
     report = json.loads(report_path.read_text())
     metadata = report["metadata"]
@@ -44,7 +54,7 @@ def validate(root, seed):
             or args["family_settings"] != family
             or args["proxy"]["epochs"] != family["training"]["epochs"]):
         raise ValueError(f"EMS-YOLO baseline provenance mismatch: {root}")
-    with (root / "results/seed_results.csv").open() as stream:
+    with results_path.open() as stream:
         rows = list(csv.reader(stream))
     if len(rows) != 1:
         raise ValueError(f"invalid result rows: {root}")

@@ -68,7 +68,34 @@ These tests build the seed, run a small forward/backward pass, verify box
 conversion and loss, exercise a one-step tiny model, reject unsafe genomes, and
 check registration/provenance. They do not submit SLURM jobs.
 
-## 4. Run seed 0 before the three-seed array
+## 4. Require the stock seed to pass the tiny-overfit gate
+
+Before a full baseline, train the stock seed on 32 labeled training frames and
+evaluate those same frames. This is a diagnostic, not a reported result. It
+keeps `eval_conf=0.05` and uses the shared COCO mAP50/mAP50:95 evaluator.
+
+```bash
+OVERFIT_TAG=seed0_32frames_100epochs_$(date +%Y%m%d_%H%M%S)
+OVERFIT_JOB=$(sbatch --parsable --export=ALL -G 1 -C H200 -c 12 --mem=48G -t 1:00:00 \
+  --output=run_job_outputs/baseline/ems-overfit-%j.out \
+  --wrap="module load uv; uv run python -m sota.FRED_LLM_GE.phase1_detection.ems_yolo_overfit --subset-size 32 --epochs 100 --seed 0 --output analysis/diagnostics/ems_yolo_overfit/$OVERFIT_TAG")
+OVERFIT_JOB=${OVERFIT_JOB%%;*}
+tail -f "run_job_outputs/baseline/ems-overfit-$OVERFIT_JOB.out"
+```
+
+After it finishes:
+
+```bash
+sacct -j "$OVERFIT_JOB" --format=JobID,State,ExitCode,Elapsed,MaxRSS -P
+cat "analysis/diagnostics/ems_yolo_overfit/$OVERFIT_TAG/summary.json"
+```
+
+`mAP50 >= 0.5` is a pass. Nonzero mAP below 0.5 is weak and should be reviewed.
+Zero mAP means the seed could not memorize its training subset; do not spend GPU
+time on full baselines or evolution. Correct the detector/loss first and repeat
+this gate under a new output tag. The diagnostic refuses to overwrite evidence.
+
+## 5. Run seed 0 before the three-seed array
 
 Create the log directory and submit one H200 job:
 
@@ -88,7 +115,7 @@ count, a saved model path, and `job done`. The first job is also the runtime and
 memory measurement. Eight epochs at 320x320 are expected to take roughly one to
 three hours on one H200, but use the measured seed-0 wall time for later planning.
 
-## 5. Run seeds 1 and 2
+## 6. Run seeds 1 and 2
 
 After seed 0 succeeds:
 
@@ -112,7 +139,7 @@ Do not begin evolution if the seed produces nonfinite results, empty predictions
 throughout validation, a flat/nondecreasing training loss, or cannot finish its
 eight epochs within the candidate allocation.
 
-## 6. Start the LLM server and evolution controller
+## 7. Start the LLM server and evolution controller
 
 Use a new tag for a new run. Keep the selected family, tag, generation count,
 and code commit unchanged when resuming that run.
