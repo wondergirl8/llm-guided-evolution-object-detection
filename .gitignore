@@ -80,3 +80,7 @@ run_job_outputs/
 
 # BN-SNN derived raw-event cache (rebuild with bn_snn_data).
 sota/FRED_LLM_GE/phase1_detection/seeds/bn_snn/raw_cache/
+
+# Pinned official SpikeYOLO source includes model YAMLs under models/.
+!sota/FRED_LLM_GE/third_party/spikeyolo/**
+sota/FRED_LLM_GE/third_party/spikeyolo/**/__pycache__/
