@@ -26,6 +26,11 @@ not accepted in this mode. Crossover recombines a whole differing gene and
 rejects a combination that is not novel. The prompt, response, rejection
 reason, selected gene, genome, and architecture hash remain in the proposal
 audit. The candidate report records the genome and its resource probe.
+The local text-generation server may continue speaking after a complete JSON
+answer. Mutation reads the first complete object (optionally in a JSON fence),
+validates its exact one-key schema and allowed value, and keeps the full raw
+response in the audit. It never scans past an invalid first answer to choose a
+later value.
 
 ## Prototype genes
 

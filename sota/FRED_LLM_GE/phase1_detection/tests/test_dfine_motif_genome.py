@@ -68,6 +68,33 @@ def test_motif_response_and_source_identity_are_strict(tmp_path):
         motifs.load_genome(good, SEED)
 
 
+def test_motif_uses_first_complete_json_answer_from_continuing_llm(tmp_path):
+    # PACE's local Llama server continued after a valid fenced answer with
+    # tool-call-like text and further choices, exhausting all five attempts.
+    raw = ('```json\n{"value": "p4_dw_k3_s025"}\n```\n\n'
+           '{"type": "function", "name": "choose_next_value", "parameters": {}}'
+           '```json\n{"value": "p4_dw_k5_s100"}\n```')
+    output = tmp_path / 'network_first.py'
+    motifs.generate_mutation(SEED, output, SEED, TEMPLATE,
+                             lambda _: raw, coverage_target='backbone')
+    assert motifs.load_genome(output, SEED)['genes']['backbone'] == 'p4_dw_k3_s025'
+    audit = json.loads(Path(str(output) + '.proposal_attempts.json').read_text())
+    assert audit['attempts'][0]['proposal'] == raw
+    assert audit['attempts'][0]['accepted'] is True
+
+
+def test_motif_does_not_skip_invalid_first_answer():
+    assert motifs._proposal_value(
+        '{"value":"p4_dw_k3_s025"}\nextra generated text', 'backbone'
+    ) == 'p4_dw_k3_s025'
+    raw = ('```json\n{"value": "not_allowed"}\n```\n'
+           '```json\n{"value": "p4_dw_k3_s025"}\n```')
+    with pytest.raises(ValueError, match='invalid backbone value'):
+        motifs._proposal_value(raw, 'backbone')
+    with pytest.raises(ValueError, match='invalid JSON fence'):
+        motifs._proposal_value('```python\n{"value":"p4_dw_k3_s025"}\n```', 'backbone')
+
+
 def test_opt_in_mutation_routes_json_through_the_structured_builder(tmp_path, monkeypatch):
     from src import llm_mutation
 

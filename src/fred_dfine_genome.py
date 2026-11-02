@@ -131,12 +131,26 @@ def load_genome(source_path, seed_path):
 
 
 def _proposal_value(reply, target):
+    """Read the first complete answer; keep the full LLM reply in the audit.
+
+    The local text-generation server can continue after a complete JSON answer
+    with another fence or tool-call-like text. That continuation is not a
+    second instruction to the genome builder. Only the first complete object
+    may choose a value, and it must still have exactly the required schema.
+    """
     if not isinstance(reply, str):
         raise ValueError("LLM returned no JSON proposal")
-    raw = reply.strip()
-    if raw.startswith("```json\n") and raw.endswith("```"):
-        raw = raw[8:-3].strip()
-    proposal = json.loads(raw)
+    raw = reply.lstrip()
+    if raw.startswith("```"):
+        opening_end = raw.find("\n")
+        if opening_end < 0 or raw[3:opening_end].strip().lower() not in ("", "json"):
+            raise ValueError("LLM returned an invalid JSON fence")
+        closing_start = raw.find("\n```", opening_end + 1)
+        if closing_start < 0:
+            raise ValueError("LLM returned an incomplete JSON fence")
+        proposal = json.loads(raw[opening_end + 1:closing_start].strip())
+    else:
+        proposal, _ = json.JSONDecoder().raw_decode(raw)
     if not isinstance(proposal, dict) or set(proposal) != {"value"}:
         raise ValueError('return only JSON shaped as {"value":"..."}')
     value = proposal["value"]
