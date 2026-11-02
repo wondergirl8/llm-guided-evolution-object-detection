@@ -2,9 +2,9 @@
 
 Paths are derived from this checkout so the same configuration can be used on
 a laptop or on PACE ICE. SEED_FAMILY picks the seed: "yolo11" evolves the
-Ultralytics YOLO11n model YAML (sota/FRED_LLM_GE/phase1_detection/seeds/ultralytics_yolo11/network.yaml);
+Ultralytics YOLO11n model YAML (sota/FRED_LLM_GE/seeds/seed_yolo11n.yaml);
 "tiny_yolo11" evolves Ruhi's tutorial-sized DroneDetector
-(sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/network.py); "dfine" selects the Event-only
+(sota/FRED_LLM_GE/seeds/seed_yolo11.py); "dfine" selects the Event-only
 D-FINE-inspired seed. Every family is trained and
 scored by phase1_detection/candidate_runner.py under
 configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.csv.
@@ -33,21 +33,21 @@ _FAMILIES = {
     # SOTA_ROOT holds models/, results/ and trained_models/ for the family.
     "yolo11": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ultralytics_yolo11"),
-        "seed": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ultralytics_yolo11", "network.yaml"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11n.yaml"),
         "prompt_group": "FRED_YOLO11/Normal",
         "rules": "templates/FRED_YOLO11/ConstantRules.txt",
         "eval_timeout": 8 * 60 * 60,
     },
     "tiny_yolo11": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo11"),
-        "seed": os.path.join(FRED_DIR, "phase1_detection", "seeds", "yolo11", "network.py"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11.py"),
         "prompt_group": "FRED/Normal",
         "rules": "templates/FRED/ConstantRules.txt",
         "eval_timeout": 40 * 60,
     },
     "dfine": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "dfine"),
-        "seed": os.path.join(FRED_DIR, "phase1_detection", "seeds", "dfine", "network.py"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_dfine.py"),
         "prompt_group": "FRED_DFINE/Normal",
         "rules": "templates/FRED_DFINE/ConstantRules.txt",
         "eval_timeout": 3 * 60 * 60 + 30 * 60,

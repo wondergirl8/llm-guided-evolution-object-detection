@@ -26,7 +26,7 @@ except ImportError:
 FRED_DIR = Path(__file__).resolve().parents[1]
 ROOT = FRED_DIR.parents[1]
 PROTOCOL = FRED_DIR / "configs/phase1/protocol.yaml"
-SEED_YAML = FRED_DIR / "phase1_detection/seeds/ultralytics_yolo11/network.yaml"
+SEED_YAML = FRED_DIR / "seeds/seed_yolo11n.yaml"
 OUTPUT = FRED_DIR / "baseline_validation/phase1_detection/yolo11_stock"
 SEEDS = (0, 1, 2)
 

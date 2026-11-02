@@ -1,4 +1,4 @@
-"""Family adapter for the tutorial-sized YOLO11-inspired seed (phase1_detection/seeds/yolo11/network.py).
+"""Family adapter for the tutorial-sized YOLO11-inspired seed (seeds/seed_yolo11.py).
 
 The seed and its LLM-generated variants define DroneDetector(num_classes),
 whose forward(event) returns raw [B, 5 + num_classes, H/s, W/s] logits and

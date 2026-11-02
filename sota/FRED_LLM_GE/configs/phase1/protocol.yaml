@@ -98,7 +98,7 @@ families:
   dfine:
     # Self-contained Event-frame seed, using the same challenging search split
     # and shared evaluator as the Ultralytics family.
-    seed_file: phase1_detection/seeds/dfine/network.py
+    seed_file: seeds/seed_dfine.py
     data: challenging_search
     lr: 0.0001
     weight_decay: 0.0001
@@ -116,11 +116,11 @@ families:
       reg_max: 16
   tiny_yolo11:
     # Relative to sota/FRED_LLM_GE; used when --model is "network".
-    seed_file: phase1_detection/seeds/yolo11/network.py
+    seed_file: seeds/seed_yolo11.py
     lr: 0.001
   yolo11:
     # Ultralytics YOLO11n, trained from scratch with the Ultralytics trainer.
-    seed_file: phase1_detection/seeds/ultralytics_yolo11/network.yaml
+    seed_file: seeds/seed_yolo11n.yaml
     # Train and score candidates on the challenging search split above.
     data: challenging_search
     workers: 8

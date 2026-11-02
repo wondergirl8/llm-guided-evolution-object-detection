@@ -1,4 +1,4 @@
-# Plan for the D-FINE-inspired seed
+# Plan for `seed_dfine.py`
 
 **Status:** Prototype seed and `fred-run-setup` adapter implemented. The scientific baseline and post-core expansion gates remain open.
 
@@ -7,10 +7,10 @@
 Write one Python implementation file:
 
 ```text
-sota/FRED_LLM_GE/phase1_detection/seeds/dfine/network.py
+sota/FRED_LLM_GE/seeds/seed_dfine.py
 ```
 
-Use the tutorial detector in `phase1_detection/seeds/yolo11/network.py` as a **file-layout and LLM-GE marker example**, not as a source of model operations or input assumptions. The chosen design is a compact, self-contained **D-FINE-inspired Event-frame detector**. It will not import the official D-FINE repository or claim to reproduce its published architecture or scores.
+Use the attached `seed_yolo11.py` as a **file-layout and LLM-GE marker example**, not as a source of model operations or input assumptions. The chosen design is a compact, self-contained **D-FINE-inspired Event-frame detector**. It will not import the official D-FINE repository or claim to reproduce its published architecture or scores.
 
 The model implementation remains one file. Model-specific matching and losses belong in its **protected portion**. The newer `fred-run-setup` branch uses a separate family adapter, shared protocol, and runner; those integration files are necessary to execute this seed without embedding data access or training orchestration in the model file.
 
@@ -49,7 +49,7 @@ The project output standard requires original-image pixel `xyxy` boxes, score in
 The top of the file is protected. It contains the module description, imports, the PIL-to-tensor conversion helper, shared tensor/box helpers, the fixed `DFINECriterion` and matcher, and the stable `DFINEEventDetector` wrapper. Python resolves the component class names when the wrapper is instantiated, after the entire module has loaded.
 
 ```text
-network.py
+seed_dfine.py
 ├── Protected preamble
 │   ├── imports and shape/finite-value checks
 │   ├── event_pil_to_tensor: released Event PNG → model input
@@ -111,7 +111,7 @@ This marker layout matches the current text-splitting mechanism; it is not by it
 ## 7. Implementation sequence and acceptance checks
 
 1. Verify the released Event PNG mode, bands, range, and dimensions on the selected project-training sequences; freeze the PIL-to-tensor scaling and check the collector's per-sequence timestamp report. Verify Event annotation coordinates and the exact data/target handoff from Phase 0, including its out-of-bounds-box policy. Quantify training/development box sizes and inactive-frame frequency before choosing strides or query count; do not inspect held-out test labels for these choices.
-2. Resolve the declared PyTorch and matching dependencies, then implement the protected wrapper, matcher/criterion, and three architecture components in `network.py` only. Fix one-to-one assignment costs, loss weights, output schema, and initialization policy before candidate runs.
+2. Resolve the declared PyTorch and matching dependencies, then implement the protected wrapper, matcher/criterion, and three architecture components in `seed_dfine.py` only. Fix one-to-one assignment costs, loss weights, output schema, and initialization policy before candidate runs.
 3. Check Python parsing/import, marker count, class construction, and `forward` on synthetic Event batches at representative sizes, including an odd image size if supported. Check all final and intermediate tensor shapes, finite values, valid boxes, and a bounded query count. Separately, pass a bounded live training-sequence `(PIL image, timestamp_s)` from `stream_event_frames` through `event_pil_to_tensor` and `predict` without requiring a local dataset mirror; this is an **inference interface check**, not a training validation.
 4. On trusted small labeled batches, including images with zero drones, check finite classification, box, FGL, and GO-LSD losses; run backward and confirm gradients reach the Event stem and decoder distribution heads. Verify that the GO-LSD teacher is detached and that each intended matched/unmatched path is exercised.
 5. Check that `predict` gives valid input-pixel boxes, scores in `[0,1]`, one label `0` per detection, and a valid empty-result record. Check that the evaluation boundary correctly reverses a nontrivial resize/pad transform before producing the original-image records required by `phase1_detection/MODEL_OUTPUT_STANDARD.md`; verify the frozen NMS/no-NMS and confidence policy there.

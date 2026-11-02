@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 
-SEED_YAML = Path(__file__).resolve().parent / "seeds" / "ultralytics_yolo11" / "network.yaml"
+SEED_YAML = Path(__file__).resolve().parents[1] / "seeds" / "seed_yolo11n.yaml"
 SEED_PARAMS = 2_590_035
 MIN_PARAMS = math.ceil(SEED_PARAMS * 0.5)
 MAX_PARAMS = SEED_PARAMS * 2
