@@ -13,7 +13,7 @@ from event_data import FRAME_STEP,TRAIN_SEQUENCES,VAL_SEQUENCES,load_archives,lo
 from fred_stream import REVISION
 import map_reporter
 def candidate_source(gene_id):
-    return (FRED_DIR/"seeds/seed_faster_rcnn_scratch.py","network") if gene_id=="seed" else (SCRIPT_DIR/"models"/f"network_{gene_id}.py",f"network_{gene_id}")
+    return (SCRIPT_DIR/"seed.py","network") if gene_id=="seed" else (SCRIPT_DIR/"models"/f"network_{gene_id}.py",f"network_{gene_id}")
 def run(args):
     checkpoint,archive,records=load_generation(args.checkpoints,20); gene_id,fitness=select_winner(records); source,model_name=candidate_source(gene_id)
     if not source.is_file(): raise FileNotFoundError(f"Selected candidate source is missing: {source}")

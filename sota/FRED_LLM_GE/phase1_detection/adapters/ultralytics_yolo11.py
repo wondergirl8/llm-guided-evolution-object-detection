@@ -1,4 +1,4 @@
-"""Family adapter for Ultralytics YOLO11 candidates (seeds/seed_yolo11n.yaml).
+"""Family adapter for Ultralytics YOLO11 candidates (phase1_detection/seeds/ultralytics_yolo11/network.yaml).
 
 A candidate is an Ultralytics model YAML (LLM-GE names variants
 network_<id>.py, so the file is read as YAML whatever its extension). It is

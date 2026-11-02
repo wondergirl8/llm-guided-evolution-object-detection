@@ -2,7 +2,7 @@
 from .constants_fred_yolo11 import *
 
 SOTA_ROOT = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "phase1_detection", "seeds", "faster_rcnn")
-SEED_NETWORK = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "seeds", "seed_faster_rcnn.py")
+SEED_NETWORK = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE", "phase1_detection", "seeds", "faster_rcnn", "seed.py")
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
 TRAIN_FILE = os.path.join(SOTA_ROOT, "train_eval.py")
 DEFAULT_PROMPT_GROUP = "FRED_FasterRCNN/Normal"

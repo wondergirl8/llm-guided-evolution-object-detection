@@ -93,7 +93,7 @@ def test_tiny_yolo11_adapter_reproduces_legacy_training_and_predictions():
     legacy.train(old_model, data, proxy["epochs"], proxy["batch_size"], 1e-3, "cpu", stride)
     old_frames = legacy.predict_frames(old_model, data, proxy["batch_size"], "cpu")
 
-    adapter = TinyYolo11Adapter({"seed_file": "seeds/seed_yolo11.py", "lr": 1e-3}, FRED_DIR)
+    adapter = TinyYolo11Adapter({"seed_file": "phase1_detection/seeds/yolo11/network.py", "lr": 1e-3}, FRED_DIR)
     torch.manual_seed(0)
     new_model = adapter.build(adapter.variant_path("network", None), num_classes=1, device="cpu")
     adapter.train(new_model, data, proxy, "cpu")

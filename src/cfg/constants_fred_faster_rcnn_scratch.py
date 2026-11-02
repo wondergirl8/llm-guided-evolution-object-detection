@@ -1,7 +1,7 @@
 """Isolated twenty-generation Faster R-CNN scratch experiment."""
 from .constants_fred_yolo11 import *
 SOTA_ROOT=os.path.join(ROOT_DIR,"sota","FRED_LLM_GE","phase1_detection","seeds","faster_rcnn_scratch")
-SEED_NETWORK=os.path.join(ROOT_DIR,"sota","FRED_LLM_GE","seeds","seed_faster_rcnn_scratch.py")
+SEED_NETWORK=os.path.join(ROOT_DIR,"sota","FRED_LLM_GE","phase1_detection","seeds","faster_rcnn_scratch","seed.py")
 VARIANT_DIR=os.path.join(SOTA_ROOT,"models"); TRAIN_FILE=os.path.join(SOTA_ROOT,"train_eval.py")
 DEFAULT_PROMPT_GROUP="FRED_FasterRCNNScratch/Normal"; PROMPTS=f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"; CONSTANT_RULES_PATH="templates/FRED_FasterRCNNScratch/ConstantRules.txt"
 OUTPUT_DIR=os.path.join(ROOT_DIR,"fred_faster_rcnn_scratch_output"); GLOBAL_DATA_PATH=os.path.join(ROOT_DIR,"fred_faster_rcnn_scratch_global_data"); HOSTNAME_DIR=os.path.join(ROOT_DIR,"fred_faster_rcnn_scratch_hostname.log"); SLURM_CONFIG_DIR=os.path.join(ROOT_DIR,"slurm-config","faster_rcnn_scratch")

@@ -3,7 +3,7 @@ import ast
 import json
 from pathlib import Path
 
-SEED = Path(__file__).resolve().parents[3] / "seeds/seed_faster_rcnn_scratch.py"
+SEED = Path(__file__).with_name("seed.py")
 SCHEMA = json.loads(Path(__file__).with_name("genome_spec.yaml").read_text())
 
 def validate_genes(genes):

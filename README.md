@@ -30,6 +30,13 @@ This code has been tested on Python 3.12
 
 If you wish to use features with Google's Gemini, please follow the instructions for [Setting Up an API Key](https://ai.google.dev/gemini-api/docs/api-key)
 
+### FRED object detection
+
+Start with the [FRED project guide](./sota/FRED_LLM_GE/README.md) or the
+[detector model folders and commands](./sota/FRED_LLM_GE/phase1_detection/README.md).
+Each implemented detector has its own seed folder; data loading, evaluation,
+and candidate orchestration are shared.
+
 ### GitHub Actions Workflows
 
 GitHub Actions workflow files in `.github/workflows/` are intentionally thin wrappers. The shell logic they run lives in `scripts/workflows/` so CI behavior can be tested and updated outside YAML:

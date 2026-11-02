@@ -4,7 +4,7 @@ Train and evaluate one LLM-generated variant of the FRED YOLO11 seed.
 Called by run_improved.py through EVAL_RUNLINE:
     uv run python train_eval.py --model network_<gene_id> --variant_dir <models dir>
 
-The variant file is a copy of sota/FRED_LLM_GE/seeds/seed_yolo11.py with
+The variant file is a copy of sota/FRED_LLM_GE/phase1_detection/seeds/yolo11/network.py with
 mutated classes; it must define DroneDetector(num_classes) whose
 forward(event) returns raw [B, 5 + num_classes, H/s, W/s] logits and whose
 predict(event) returns pixel-space boxes. "--model network" trains the seed.
@@ -39,7 +39,7 @@ import torch.nn.functional as F
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 FRED_DIR = SCRIPT_DIR.parents[2]
-SEED_FILE = FRED_DIR / "seeds" / "seed_yolo11.py"
+SEED_FILE = SCRIPT_DIR / "network.py"
 for path in (FRED_DIR.parents[1], SCRIPT_DIR.parents[1], FRED_DIR / "data", FRED_DIR / "phase0_data"):
     sys.path.append(str(path))
 import map_reporter
