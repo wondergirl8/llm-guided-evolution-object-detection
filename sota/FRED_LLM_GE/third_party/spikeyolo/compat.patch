@@ -1,0 +1,43 @@
+--- a/ultralytics/nn/tasks.py
++++ b/ultralytics/nn/tasks.py
+@@ -238,7 +238,7 @@
+             LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
+             self.yaml['nc'] = nc  # override YAML value
+         self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # model, savelist
+-        self.model = self.model.cuda()
++        # FRED compatibility: caller selects the device after construction.
+         self.names = {i: f'{i}' for i in range(self.yaml['nc'])}  # default names dict
+         self.inplace = self.yaml.get('inplace', True)
+ 
+@@ -248,7 +248,7 @@
+             s = 256  # 2x min stride
+             m.inplace = self.inplace
+             forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Pose)) else self.forward(x)
+-            m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s).cuda())])  # forward
++            m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
+             self.stride = m.stride
+             m.bias_init()  # only run once
+         else:
+--- a/ultralytics/engine/trainer.py
++++ b/ultralytics/engine/trainer.py
+@@ -475,7 +475,8 @@
+         self.scaler.step(self.optimizer)
+         self.scaler.update()
+         self.optimizer.zero_grad()
+-        torch.cuda.synchronize()
++        if self.device.type == "cuda":
++            torch.cuda.synchronize()
+         functional.reset_net(self.model)  # this*
+         if self.ema:
+             self.ema.update(self.model)
+--- a/ultralytics/data/augment.py
++++ b/ultralytics/data/augment.py
+@@ -672,7 +672,7 @@
+         else:
+             shape = img.shape[:2]  # current shape [height, width]
+         new_shape = labels.pop('rect_shape', self.new_shape)
+-        new_shape = [320,320]  #111111重新定义new_shape
++        # FRED compatibility: honor the configured train/inference resolution.
+         if isinstance(new_shape, int):
+             new_shape = (new_shape, new_shape)
+ 
