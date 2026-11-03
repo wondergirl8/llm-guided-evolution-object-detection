@@ -83,6 +83,32 @@ def test_motif_uses_first_complete_json_answer_from_continuing_llm(tmp_path):
     assert audit['attempts'][0]['accepted'] is True
 
 
+def test_repeated_valid_duplicate_uses_audited_bounded_fallback(tmp_path):
+    first = tmp_path / 'network_first.py'
+    second = tmp_path / 'network_second.py'
+    reply = '{"value":"bidir_td050_bu025"}'
+    motifs.generate_mutation(SEED, first, SEED, TEMPLATE, lambda _: reply,
+                             coverage_target='encoder')
+    prompts = []
+
+    def repeat(prompt):
+        prompts.append(prompt)
+        return reply
+
+    motifs.generate_mutation(SEED, second, SEED, TEMPLATE, repeat,
+                             coverage_target='encoder')
+    assert len(prompts) == 5
+    assert 'bidir_td050_bu025' not in json.loads(
+        prompts[1].split('genome: ', 1)[1].split('\n', 1)[0])['allowed_values']
+    assert motifs.load_genome(second, SEED)['genes']['encoder'] == 'bidir_td050_bu050'
+    audit = json.loads(Path(str(second) + '.proposal_attempts.json').read_text())
+    assert len(audit['attempts']) == 6
+    assert all('Architecture duplicates' in item['error'] for item in audit['attempts'][:5])
+    assert audit['attempts'][5]['accepted'] is True
+    assert audit['attempts'][5]['selection_source'] == 'bounded_duplicate_fallback'
+    assert audit['attempts'][5]['selected_value'] == 'bidir_td050_bu050'
+
+
 def test_motif_does_not_skip_invalid_first_answer():
     assert motifs._proposal_value(
         '{"value":"p4_dw_k3_s025"}\nextra generated text', 'backbone'

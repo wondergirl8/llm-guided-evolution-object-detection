@@ -179,9 +179,11 @@ def _proposal_value(reply, target, current_genes=None):
     return value
 
 
-def _prompt(template, genome, target, feedback=""):
+def _prompt(template, genome, target, feedback="", allowed_values=None):
     context = json.dumps({"version": VERSION, "current_genes": genome["genes"],
-                          "target_gene": target, "allowed_values": CHOICES[target]},
+                          "target_gene": target,
+                          "allowed_values": (CHOICES[target] if allowed_values is None
+                                             else allowed_values)},
                          sort_keys=True)
     if "{}" not in template:
         raise ValueError("structured D-FINE prompt needs one {} context placeholder")
@@ -254,8 +256,14 @@ def generate_mutation(parent, output, seed_path, template, generate, coverage_ta
              "parent_architecture_sha256": architecture_hash(parent),
              "coverage_target": coverage_target, "target_gene": target, "attempts": []}
     feedback = ""
+    rejected_values = {genome["genes"][target]}
+    if coverage_target:
+        rejected_values.add("none")
+    duplicate_only = True
+    last_duplicate_value = None
     for attempt in range(1, attempts + 1):
-        prompt = _prompt(template, genome, target, feedback)
+        remaining = [value for value in CHOICES[target] if value not in rejected_values]
+        prompt = _prompt(template, genome, target, feedback, remaining)
         reply = generate(prompt)
         entry = {"attempt": attempt, "prompt": prompt, "proposal": reply, "accepted": False}
         try:
@@ -272,12 +280,46 @@ def generate_mutation(parent, output, seed_path, template, generate, coverage_ta
             raise RuntimeError(f"D-FINE preflight unavailable: {exc}") from exc
         except Exception as exc:
             entry["error"] = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, ValueError) and str(exc).startswith("Architecture duplicates"):
+                rejected_values.add(value)
+                last_duplicate_value = value
+            else:
+                duplicate_only = False
             feedback = (f"\nPrevious value was rejected: {entry['error']}. "
-                        "Choose another allowed value for the same gene. Return JSON only.\n")
+                        "Choose one of the remaining allowed values for the same gene. "
+                        "Return JSON only.\n")
         audit["attempts"].append(entry)
         audit_path.write_text(json.dumps(audit, indent=2) + "\n")
         if entry["accepted"]:
             return
+    # The served LLM can repeat one valid value even after it is excluded from
+    # the next prompt. Preserve that preference in the audit, then select the
+    # next available bounded value so duplicate contention does not abort an
+    # otherwise valid initial population. This does not mask malformed output
+    # or failed model preflight.
+    if duplicate_only and last_duplicate_value is not None:
+        alternatives = [value for value in CHOICES[target]
+                        if value != genome["genes"][target]
+                        and (not coverage_target or value != "none")]
+        offset = alternatives.index(last_duplicate_value) + 1
+        for index, value in enumerate(alternatives[offset:] + alternatives[:offset], 1):
+            child = {"version": VERSION, "genes": dict(genome["genes"], **{target: value})}
+            entry = {"attempt": attempts + index, "prompt": None, "proposal": None,
+                     "accepted": False, "selection_source": "bounded_duplicate_fallback",
+                     "selected_value": value}
+            try:
+                digest = _publish(seed_path, (parent,), output, child)
+                entry.update(accepted=True, architecture_sha256=digest, genome=child)
+            except ValueError as exc:
+                if not str(exc).startswith("Architecture duplicates"):
+                    raise
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+            audit["attempts"].append(entry)
+            audit_path.write_text(json.dumps(audit, indent=2) + "\n")
+            if entry["accepted"]:
+                print(f"D-FINE duplicate fallback selected {target}={value}; audit: {audit_path}",
+                      flush=True)
+                return
     raise RuntimeError(f"No valid D-FINE {VERSION} proposal after {attempts} attempts; see {audit_path}")
 
 
