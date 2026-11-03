@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import random
+import re
 import tempfile
 
 
@@ -130,17 +131,18 @@ def load_genome(source_path, seed_path):
     return genome
 
 
-def _proposal_value(reply, target):
-    """Read the first complete answer; keep the full LLM reply in the audit.
+def _proposal_value(reply, target, current_genes=None):
+    """Read one explicit choice; keep the full LLM reply in the audit.
 
     The local text-generation server can continue after a complete JSON answer
     with another fence or tool-call-like text. That continuation is not a
-    second instruction to the genome builder. Only the first complete object
-    may choose a value, and it must still have exactly the required schema.
+    second instruction to the genome builder. Accept only a single explicit
+    targeted choice, including equivalent observed Llama response forms.
     """
     if not isinstance(reply, str):
         raise ValueError("LLM returned no JSON proposal")
     raw = reply.lstrip()
+    proposal = None
     if raw.startswith("```"):
         opening_end = raw.find("\n")
         if opening_end < 0 or raw[3:opening_end].strip().lower() not in ("", "json"):
@@ -149,11 +151,29 @@ def _proposal_value(reply, target):
         if closing_start < 0:
             raise ValueError("LLM returned an incomplete JSON fence")
         proposal = json.loads(raw[opening_end + 1:closing_start].strip())
-    else:
+    elif raw.startswith("{"):
         proposal, _ = json.JSONDecoder().raw_decode(raw)
-    if not isinstance(proposal, dict) or set(proposal) != {"value"}:
-        raise ValueError('return only JSON shaped as {"value":"..."}')
-    value = proposal["value"]
+    else:
+        # The served instruct model sometimes responds with reasoning followed
+        # by a single explicit boxed final choice. Never mine arbitrary prose
+        # or multiple boxed values for a convenient allowed token.
+        boxed = re.findall(r"\\boxed\{([^{}]+)\}", raw)
+        final = re.search(r"(?m)^\s*The final answer is:\s*\$?\\boxed\{([^{}]+)\}\$?\s*\Z", raw)
+        if len(boxed) != 1 or final is None or boxed[0] != final.group(1):
+            raise ValueError('return one explicit JSON or boxed final value')
+        value = final.group(1)
+    if proposal is not None:
+        if not isinstance(proposal, dict):
+            raise ValueError('return a JSON object containing one targeted value')
+        if set(proposal) == {"value"}:
+            value = proposal["value"]
+        elif set(proposal) == {"gene", "value"} and proposal["gene"] == target:
+            value = proposal["value"]
+        elif (set(proposal) == set(GENES) and current_genes is not None and
+              all(proposal[gene] == current_genes[gene] for gene in GENES if gene != target)):
+            value = proposal[target]
+        else:
+            raise ValueError('JSON must select only the targeted gene')
     if value not in CHOICES[target]:
         raise ValueError(f"invalid {target} value: {value}")
     return value
@@ -239,7 +259,7 @@ def generate_mutation(parent, output, seed_path, template, generate, coverage_ta
         reply = generate(prompt)
         entry = {"attempt": attempt, "prompt": prompt, "proposal": reply, "accepted": False}
         try:
-            value = _proposal_value(reply, target)
+            value = _proposal_value(reply, target, genome["genes"])
             if value == genome["genes"][target] or (coverage_target and value == "none"):
                 raise ValueError("proposal does not change the targeted mechanism")
             child = {"version": VERSION, "genes": dict(genome["genes"], **{target: value})}

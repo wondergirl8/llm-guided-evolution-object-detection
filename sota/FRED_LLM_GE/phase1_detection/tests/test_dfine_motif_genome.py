@@ -95,6 +95,53 @@ def test_motif_does_not_skip_invalid_first_answer():
         motifs._proposal_value('```python\n{"value":"p4_dw_k3_s025"}\n```', 'backbone')
 
 
+def test_motif_accepts_unambiguous_live_llama_answer_forms():
+    current = motifs.seed_genome()["genes"]
+    assert motifs._proposal_value(
+        '```json\n{"gene":"encoder","value":"bidir_td050_bu025"}\n```',
+        'encoder', current) == 'bidir_td050_bu025'
+    assert motifs._proposal_value(
+        '```json\n{"backbone":"p4_dw_k3_s025","encoder":"none","decoder":"none"}\n```',
+        'backbone', current) == 'p4_dw_k3_s025'
+    assert motifs._proposal_value(
+        'I considered the allowed values.\nThe final answer is: '
+        '$\\boxed{p4_quota_50}$', 'decoder', current) == 'p4_quota_50'
+
+
+def test_motif_rejects_ambiguous_or_wrong_gene_answers():
+    current = motifs.seed_genome()["genes"]
+    replies = [
+        ('{"gene":"encoder","value":"p4_dw_k3_s025"}', 'backbone'),
+        ('{"backbone":"p4_dw_k3_s025","encoder":"bidir_td050_bu025",'
+         '"decoder":"none"}', 'backbone'),
+        ('{"type":"function","name":"choose_value","parameters":{}}', 'encoder'),
+        ('The final answer is: $\\boxed{p4_quota_50}$\n'
+         'Another answer: $\\boxed{p4_quota_75}$', 'decoder'),
+        ('Choose p4_quota_50', 'decoder'),
+    ]
+    for reply, target in replies:
+        with pytest.raises(ValueError):
+            motifs._proposal_value(reply, target, current)
+
+
+def test_dfine_motifs_local_prompt_uses_instruct_chat_template(monkeypatch):
+    from src import llm_utils
+
+    class Tokenizer:
+        bos_token = '<bos>'
+
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+            assert messages == [{'role': 'user', 'content': 'choose a motif'}]
+            assert tokenize is False and add_generation_prompt is True
+            return '<bos><user>choose a motif</user><assistant>'
+
+    monkeypatch.setattr(llm_utils, 'SEED_FAMILY', 'dfine')
+    monkeypatch.setattr(llm_utils, 'DFINE_SEARCH_SPACE', 'motifs_v1')
+    monkeypatch.setattr(llm_utils, '_local_chat_tokenizer', lambda _: Tokenizer())
+    assert llm_utils._format_local_prompt('choose a motif') == (
+        '<user>choose a motif</user><assistant>')
+
+
 def test_opt_in_mutation_routes_json_through_the_structured_builder(tmp_path, monkeypatch):
     from src import llm_mutation
 

@@ -552,9 +552,13 @@ def _local_chat_tokenizer(model_path):
 
 
 def _format_local_prompt(prompt):
-    """Format YOLO11 requests for the served instruct model, not the client label."""
-    if globals().get('SEED_FAMILY') != 'yolo11' or globals().get('CANDIDATE_POLICY_MODULE') != (
-            'sota.FRED_LLM_GE.phase1_detection.yolo11_search_space'):
+    """Format structured detector requests for the served instruct model."""
+    yolo11_search = (globals().get('SEED_FAMILY') == 'yolo11' and
+                     globals().get('CANDIDATE_POLICY_MODULE') ==
+                     'sota.FRED_LLM_GE.phase1_detection.yolo11_search_space')
+    dfine_motifs = (globals().get('SEED_FAMILY') == 'dfine' and
+                    globals().get('DFINE_SEARCH_SPACE') == 'motifs_v1')
+    if not (yolo11_search or dfine_motifs):
         return prompt
     tokenizer = _local_chat_tokenizer(MODEL_PATH)
     formatted = tokenizer.apply_chat_template(
@@ -564,7 +568,7 @@ def _format_local_prompt(prompt):
     # token itself. Omit the one in the rendered template to avoid two BOS tokens.
     bos = tokenizer.bos_token
     if not bos or not formatted.startswith(bos):
-        raise ValueError('YOLO11 chat template must start with the tokenizer BOS token')
+        raise ValueError('Local chat template must start with the tokenizer BOS token')
     return formatted[len(bos):]
 
 

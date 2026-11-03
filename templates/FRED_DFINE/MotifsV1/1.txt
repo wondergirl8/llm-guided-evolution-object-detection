@@ -1,3 +1,5 @@
 Choose one bounded D-FINE architecture value for the targeted gene.
 Current genome and allowed values:
 {}
+Return exactly one JSON object: {"value":"<allowed-value>"}.
+Include no reasoning, Markdown, function call, or other keys.

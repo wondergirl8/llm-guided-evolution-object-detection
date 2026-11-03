@@ -26,11 +26,15 @@ not accepted in this mode. Crossover recombines a whole differing gene and
 rejects a combination that is not novel. The prompt, response, rejection
 reason, selected gene, genome, and architecture hash remain in the proposal
 audit. The candidate report records the genome and its resource probe.
-The local text-generation server may continue speaking after a complete JSON
-answer. Mutation reads the first complete object (optionally in a JSON fence),
-validates its exact one-key schema and allowed value, and keeps the full raw
-response in the audit. It never scans past an invalid first answer to choose a
-later value.
+The local Llama Instruct client formats motif requests with the model's chat
+template. Mutation reads the first complete answer (optionally in a JSON
+fence). It accepts a one-key `value` object, an explicit `gene`/`value` object
+for the targeted gene, or a complete genome object that leaves every other
+gene unchanged. A single `The final answer is: \\boxed{...}` value is also
+accepted when the model produces reasoning instead of JSON. Every chosen value
+must be in the targeted gene's catalogue and change that gene; the full raw
+response and rejection reasons remain in the audit. It never scans past an
+invalid first JSON object to choose a later value.
 
 ## Prototype genes
 
