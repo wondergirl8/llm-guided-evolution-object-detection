@@ -1,0 +1,9 @@
+Tiny drones are only a few pixels wide, so detail in the highest-resolution
+(stride-8) features matters most. Change how this class builds or uses those
+features, for example by moving capacity from coarse stride-32 maps to the
+stride-8 path. Keep the protected RT-DETR output contract.
+
+Current class:
+```python
+{}
+```

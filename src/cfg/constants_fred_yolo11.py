@@ -5,7 +5,8 @@ a laptop or on PACE ICE. SEED_FAMILY picks the seed: "yolo11" evolves the
 Ultralytics YOLO11n model YAML (sota/FRED_LLM_GE/seeds/seed_yolo11n.yaml);
 "tiny_yolo11" evolves Ruhi's tutorial-sized DroneDetector
 (sota/FRED_LLM_GE/seeds/seed_yolo11.py); "dfine" selects the Event-only
-D-FINE-inspired seed. Every family is trained and
+D-FINE-inspired seed; "rtdetr" selects the original RT-DETR (v1) port
+(sota/FRED_LLM_GE/seeds/seed_rtdetr.py). Every family is trained and
 scored by phase1_detection/candidate_runner.py under
 configs/phase1/protocol.yaml, which writes SOTA_ROOT/results/<gene_id>_results.csv.
 """
@@ -52,16 +53,32 @@ _FAMILIES = {
         "rules": "templates/FRED_DFINE/ConstantRules.txt",
         "eval_timeout": 3 * 60 * 60 + 30 * 60,
     },
+    "rtdetr": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "rtdetr"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_rtdetr.py"),
+        "prompt_group": "FRED_RTDETR/Normal",
+        "rules": "templates/FRED_RTDETR/ConstantRules.txt",
+        # Counted from submission, so it includes the wait for a GPU; an R18
+        # candidate trains in ~2.2 h with amp.
+        "eval_timeout": 6 * 60 * 60,
+        # At run_improved.py's defaults (temperature 0.02-0.35, top_p 0.1) the
+        # first R50 run mostly returned near-copies of the parent class.
+        "mutation_temperature": (0.3, 0.7),
+        "mutation_top_p": 0.9,
+    },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
-CANDIDATE_POLICY_MODULE = (
-    "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
-    if SEED_FAMILY == "yolo11" else None
-)
-CROSSOVER_TEMPLATE_DIR = (
-    "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
-    else "templates/CrossOver"
-)
+CANDIDATE_POLICY_MODULE = {
+    "yolo11": "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space",
+    "rtdetr": "sota.FRED_LLM_GE.phase1_detection.rtdetr_search_space",
+}.get(SEED_FAMILY)
+CROSSOVER_TEMPLATE_DIR = {
+    "yolo11": "templates/FRED_YOLO11/CrossOver",
+    "rtdetr": "templates/FRED_RTDETR/CrossOver",
+}.get(SEED_FAMILY, "templates/CrossOver")
+# LLM sampling for created and mutated genes; None keeps run_improved.py's defaults.
+MUTATION_TEMPERATURE = _FAMILY.get("mutation_temperature")
+MUTATION_TOP_P = _FAMILY.get("mutation_top_p")
 # Event frames candidates train on: unset for FRED's released frames, or a tag
 # such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
 # keeps its genes, results, outputs and checkpoints apart from the released run.
@@ -83,10 +100,12 @@ PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
 OUTPUT_DIR = (os.path.join(RUN_ROOT, "operator_jobs") if RUN_ROOT else
-              os.path.join(ROOT_DIR, "fred_dfine_output" if SEED_FAMILY == "dfine"
+              os.path.join(ROOT_DIR, f"fred_{SEED_FAMILY}_output" if SEED_FAMILY in ("dfine", "rtdetr")
                            else "fred_yolo11_output"))
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
-SLURM_CONFIG_DIR = os.path.join(ROOT_DIR, "slurm-config")
+# A run can submit its jobs with its own copy of slurm_config.yaml (e.g. to
+# request faster GPUs) without changing the shared file.
+SLURM_CONFIG_DIR = os.getenv("LLMGE_SLURM_CONFIG_DIR", os.path.join(ROOT_DIR, "slurm-config"))
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
 GLOBAL_DATA_PATH = os.path.join(ROOT_DIR, "global_data")
 HOSTNAME_DIR = os.path.join(ROOT_DIR, "hostname.log")
@@ -100,8 +119,10 @@ MODEL_PATH = os.getenv(
     "LLMGE_MODEL_PATH",
     "/storage/ice-shared/vip-vvk/llm_storage/meta-llama/Llama-3.3-70B-Instruct/",
 )
+# A mutation re-emits a whole class; RT-DETR's decoder class is ~2,900 tokens.
 LLM_MAX_NEW_TOKENS = int(os.getenv(
-    "LLM_MAX_NEW_TOKENS", "4096" if SEED_FAMILY == "dfine" else "1648"))
+    "LLM_MAX_NEW_TOKENS",
+    {"dfine": "4096", "rtdetr": "6144"}.get(SEED_FAMILY, "1648")))
 LLM_MODEL = os.getenv("LLMGE_LLM_MODEL", "mixtral")
 LLM_QWEN = "qwen25"
 LLM_MIXTRAL = "mixtral"
@@ -144,7 +165,7 @@ SLURM_MIXT_TOP_P = 0.15
 SLURM_MIXT_TEMPERATURE = 0.1
 SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
-ISLAND_CONTROLLER_RUN_NAME = ("fred_dfine_islands" if SEED_FAMILY == "dfine"
+ISLAND_CONTROLLER_RUN_NAME = (f"fred_{SEED_FAMILY}_islands" if SEED_FAMILY in ("dfine", "rtdetr")
                               else "fred_yolo11_islands") + _RUN_SUFFIX
 ISLAND_CONTROLLER_NUM_ISLANDS = 1
 ISLAND_CONTROLLER_LLMS = LLM_MODEL

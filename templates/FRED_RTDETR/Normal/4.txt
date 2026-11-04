@@ -1,0 +1,9 @@
+Make this class cheaper by replacing expensive operations with efficient ones,
+for example depthwise-separable or 1x1 convolutions instead of wide 3x3
+convolutions, bottlenecks, or smaller feed-forward layers. Keep the protected
+RT-DETR output contract.
+
+Current class:
+```python
+{}
+```

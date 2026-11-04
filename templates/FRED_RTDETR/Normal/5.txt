@@ -1,0 +1,9 @@
+Change how this class mixes information, for example the fusion between scales,
+the number of attention heads or sampling points, the feed-forward size, or how
+queries are selected, to localize tiny drones more precisely. Keep the protected
+RT-DETR output contract.
+
+Current class:
+```python
+{}
+```

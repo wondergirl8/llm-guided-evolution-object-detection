@@ -1,0 +1,8 @@
+Redesign this RT-DETR architecture class to detect tiny drones in FRED Event frames
+better. Make a real structural change (layers, widths, connections, or attention),
+not a rename or reformat. The new class may be smaller or larger than the current one.
+
+Current class:
+```python
+{}
+```

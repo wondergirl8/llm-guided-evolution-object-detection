@@ -62,6 +62,9 @@ def check_server_window():
         day_text, remaining = remaining.split('-', 1)
         days = int(day_text)
     parts = remaining.split(':')
+    # squeue prints MM:SS once less than an hour is left.
+    if len(parts) == 2:
+        parts = ['0', *parts]
     if len(parts) != 3 or not all(part.isdecimal() for part in parts):
         raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
     hours, minutes, seconds = map(int, parts)
@@ -442,7 +445,14 @@ def generate_random_string(length=20):
     random_string = 'xXx'+random_string
     return random_string
     
-def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
+# A constants file may set MUTATION_TEMPERATURE (min, max) and MUTATION_TOP_P for
+# created and mutated genes; otherwise the defaults below apply.
+_MUTATION_TEMPERATURE = globals().get("MUTATION_TEMPERATURE")
+_MUTATION_TOP_P = globals().get("MUTATION_TOP_P") or 0.1
+
+def create_individual(container, llm_model,
+                      temp_min=_MUTATION_TEMPERATURE[0] if _MUTATION_TEMPERATURE else 0.05,
+                      temp_max=_MUTATION_TEMPERATURE[1] if _MUTATION_TEMPERATURE else 0.4):
     box_print("Create Individual", print_bbox_len=60, new_line_end=False)
     out_dir = os.path.join(OUTPUT_DIR, str(GENERATION))
     config = load_yaml()
@@ -458,7 +468,7 @@ def create_individual(container, llm_model, temp_min=0.05, temp_max=0.4):
                                             python_file='src/llm_mutation.py',
                                             llm_model=llm_model,
                                             job_name="create_individual",
-                                            top_p=0.1, temperature=temperature)
+                                            top_p=_MUTATION_TOP_P, temperature=temperature)
     GLOBAL_DATA[gene_id] = {'sub_flag':successful_sub_flag, 'job_id':job_id,
                             'status':'subbed file', 'fitness':None, 'start_time':time.time(),
                             'operator_type': 'creation', 'local_output': local_output}
@@ -1080,7 +1090,9 @@ def customCrossover(ind1, ind2, llm_model):
 
     return offspring1, offspring2
 
-def customMutation(individual, llm_model, indpb, temp_min=0.02, temp_max=0.35):
+def customMutation(individual, llm_model, indpb,
+                   temp_min=_MUTATION_TEMPERATURE[0] if _MUTATION_TEMPERATURE else 0.02,
+                   temp_max=_MUTATION_TEMPERATURE[1] if _MUTATION_TEMPERATURE else 0.35):
     """
     Custom mutation function that randomly changes the temperature parameter of the individual's task and assigns a new ID.
     Parameters
@@ -1113,7 +1125,7 @@ def customMutation(individual, llm_model, indpb, temp_min=0.02, temp_max=0.35):
                                               gpu=config['gpu_selection'],
                                               python_file='src/llm_mutation.py',
                                               job_name="mutation_operation",
-                                              top_p=0.1, llm_model=llm_model, temperature=temperature)
+                                              top_p=_MUTATION_TOP_P, llm_model=llm_model, temperature=temperature)
     
     # Update the individual with the new gene ID
     # individual[0] = new_gene_id

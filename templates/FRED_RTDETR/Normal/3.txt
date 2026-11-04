@@ -1,0 +1,8 @@
+Make this class substantially lighter: aim for clearly fewer parameters (for
+example narrower channels, fewer blocks, or fewer stacked layers) while keeping
+as much tiny-drone accuracy as possible. Keep the protected RT-DETR output contract.
+
+Current class:
+```python
+{}
+```
