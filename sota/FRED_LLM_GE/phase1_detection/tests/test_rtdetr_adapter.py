@@ -185,3 +185,17 @@ def test_rtdetr_seed_runs_through_candidate_runner(monkeypatch, tmp_path):
     assert gene_id == "seed" and mode == "validation"
     assert len(payload["frames"]) == 3
     assert payload["metadata"]["model_identity"]
+
+
+def test_rtdetr_resume_matches_uninterrupted_training(tmp_path):
+    def trained(epochs_per_call):
+        torch.manual_seed(0)
+        adapter = _adapter()
+        model = adapter.build(adapter.variant_path("network", None), num_classes=1, device="cpu")
+        resume = tmp_path / f"resume_{len(epochs_per_call)}.pt"
+        for epochs in epochs_per_call:
+            adapter.train(model, _data(), dict(_proxy(), epochs=epochs), "cpu", resume_path=resume)
+        return model.state_dict()
+
+    straight, resumed = trained([2]), trained([1, 2])
+    assert all(torch.equal(straight[key], resumed[key]) for key in straight)

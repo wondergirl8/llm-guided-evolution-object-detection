@@ -159,7 +159,9 @@ class RTDETRAdapter(FamilyAdapter):
         self.criterion = criterion
         return model
 
-    def train(self, model, data, proxy, device):
+    def train(self, model, data, proxy, device, resume_path=None):
+        """Train in place. With resume_path (final evaluation only), the state is saved
+        after every epoch and a later call continues from the last saved epoch."""
         images, boxes = data.get("images"), data.get("boxes")
         if images is None or not hasattr(images, "shape") or len(images.shape) != 4 or images.shape[1] != 3:
             raise ValueError("RT-DETR training requires [N,3,H,W] Event images")
@@ -193,9 +195,19 @@ class RTDETRAdapter(FamilyAdapter):
         scaler = torch.amp.GradScaler("cuda", enabled=amp)
         if amp:
             torch.backends.cudnn.benchmark = True
+        start_epoch = 0
+        if resume_path is not None and Path(resume_path).is_file():
+            state = torch.load(resume_path, map_location=device)
+            model.load_state_dict(state["model"])
+            optimizer.load_state_dict(state["optimizer"])
+            scaler.load_state_dict(state["scaler"])
+            start_epoch = state["epoch"]
+            print(f"resumed after epoch {start_epoch}/{epochs} from {resume_path}", flush=True)
         for epoch in range(epochs):
-            model.train()
             order = torch.randperm(len(images), generator=generator)
+            if epoch < start_epoch:
+                continue  # Replays the frame order of completed epochs.
+            model.train()
             groups = [order[start:start + batch_size] for start in range(0, len(order), batch_size)]
             # Workers decode upcoming PNG frames while the GPU trains; the
             # frame order and optimizer steps are the same as without them.
@@ -231,6 +243,11 @@ class RTDETRAdapter(FamilyAdapter):
                 scaler.update()
                 total += batch_loss * len(group)
             print(f"epoch {epoch + 1}/{epochs}: RT-DETR loss {float(total) / len(images):.4f}", flush=True)
+            if resume_path is not None:
+                partial = Path(f"{resume_path}.tmp")
+                torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                            "scaler": scaler.state_dict(), "epoch": epoch + 1}, partial)
+                partial.replace(resume_path)
 
     def predict(self, model, images, proxy, device):
         if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[1] != 3:
