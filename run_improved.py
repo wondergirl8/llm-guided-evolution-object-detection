@@ -802,7 +802,7 @@ def check4model2run(gene_id):
 
         protocol = load_protocol(DEFAULT_PROTOCOL)
         adapter = ADAPTERS[SEED_FAMILY](protocol['families'][SEED_FAMILY], FRED_DIR)
-        if SEED_FAMILY == 'dfine':
+        if SEED_FAMILY == 'dfine' and gene_id != 'seed':
             try:
                 with open(check_exist) as source:
                     candidate_ast = ast.dump(ast.parse(source.read()), include_attributes=False)

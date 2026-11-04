@@ -72,6 +72,26 @@ def test_cached_failure_is_rejected_before_selection(dfine_state):
     assert controller.GLOBAL_DATA["old"]["failure_reason"] == "Invalid cached fitness"
 
 
+def test_stock_dfine_seed_is_submitted_without_a_change(dfine_state, monkeypatch, tmp_path):
+    source = candidate_runner.FRED_DIR / "seeds" / "seed_dfine.py"
+    monkeypatch.setattr(controller, "VARIANT_DIR", str(tmp_path))
+    monkeypatch.setattr(controller, "MODEL", "network")
+    monkeypatch.setattr(controller, "DFINE_SEARCH_SPACE", "motifs_v1")
+    (tmp_path / "network_seed.py").write_bytes(source.read_bytes())
+    controller.GLOBAL_DATA["seed"] = {
+        "sub_flag": True, "status": "subbed file", "fitness": None,
+        "origin": "stock_seed", "parent_sources": [str(source)],
+    }
+    submitted = []
+    monkeypatch.setattr(controller, "submit_run", submitted.append)
+
+    controller.check4model2run("seed")
+
+    assert submitted == ["seed"]
+    assert controller.GLOBAL_DATA["seed"].get("failure_reason") is None
+    assert controller.GLOBAL_DATA["seed"].get("architecture_sha256")
+
+
 def test_dfine_preflight_rejects_invalid_candidates_before_submission(
     dfine_state, monkeypatch, tmp_path,
 ):
