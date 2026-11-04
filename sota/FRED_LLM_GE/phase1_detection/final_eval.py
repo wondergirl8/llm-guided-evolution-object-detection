@@ -1,4 +1,4 @@
-"""Train a YOLO11-family model on FRED challenging_train and score it once on challenging_test.
+"""Train a YOLO11 or RT-DETR model on FRED challenging_train and score it once on challenging_test.
 
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_scratch
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name best_evolved \\
@@ -6,6 +6,9 @@
     # optional: start from COCO-pretrained weights where layers match
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_coco \\
         --weights yolo11n.pt
+    # RT-DETR (from scratch only), trained with its search adapter and protocol settings
+    uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --family rtdetr \\
+        --name rtdetr_r18_seed
 
 Training uses the dataset written by export_split.py --set final (official
 challenging_train, every <train_frame_step>th frame). The trained model is then run on every frame
@@ -18,6 +21,7 @@ whose selection is already frozen: test results must not feed back into search.
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -28,19 +32,21 @@ import yaml
 
 try:
     from . import map_reporter
+    from .adapters.rtdetr import RTDETRAdapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from .candidate_runner import code_revision, load_protocol, sha256_file
-    from .export_split import events_from_tag, events_suffix
+    from .export_split import dataset_parts, events_from_tag, events_suffix
     from .fred_splits import challenging_split, sequence_frames
-    from .proxy_data import REVISION, STEP_US, load_annotations
+    from .proxy_data import REVISION, STEP_US, load_annotations, load_exported_split
     from .result_contract import validate_gene_id
 except ImportError:
     import map_reporter
+    from adapters.rtdetr import RTDETRAdapter
     from adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter, _ultralytics_device
     from candidate_runner import code_revision, load_protocol, sha256_file
-    from export_split import events_from_tag, events_suffix
+    from export_split import dataset_parts, events_from_tag, events_suffix
     from fred_splits import challenging_split, sequence_frames
-    from proxy_data import REVISION, STEP_US, load_annotations
+    from proxy_data import REVISION, STEP_US, load_annotations, load_exported_split
     from result_contract import validate_gene_id
 
 FRED_DIR = Path(__file__).resolve().parents[1]
@@ -94,6 +100,7 @@ def predict_test_split(adapter, model, test, settings, device, report_dir):
 def main():
     parser = argparse.ArgumentParser(description="Final train + held-out test on FRED challenging")
     parser.add_argument("--name", required=True, help="Report name, e.g. yolo11n_scratch")
+    parser.add_argument("--family", choices=("yolo11", "rtdetr"), default="yolo11")
     parser.add_argument("--model", default="network",
                         help='"network" for the seed or network_<id> for an evolved candidate')
     parser.add_argument("--variant_dir", default=None,
@@ -110,6 +117,8 @@ def main():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
     validate_gene_id(args.name)
+    if args.family == "rtdetr" and args.weights:
+        parser.error("RT-DETR final evaluation trains from scratch; --weights is YOLO11-only")
 
     start = time.time()
     protocol = load_protocol(args.protocol)
@@ -128,29 +137,46 @@ def main():
     out = data_root / "final_runs" / args.name
     out.mkdir(parents=True, exist_ok=True)
 
-    adapter = UltralyticsYolo11Adapter(protocol["families"]["yolo11"], FRED_DIR)
+    adapter_class = RTDETRAdapter if args.family == "rtdetr" else UltralyticsYolo11Adapter
+    adapter = adapter_class(protocol["families"][args.family], FRED_DIR)
     variant_path = adapter.variant_path(args.model, args.variant_dir)
+    torch.manual_seed(seed)
     model = adapter.build(variant_path, num_classes=1, device=args.device)
     params = adapter.param_count(model)
-    print(f"{args.name}: {variant_path.name}, {params} params, weights={args.weights or 'scratch'}, "
-          f"{epochs} epochs, seed {seed}", flush=True)
+    print(f"{args.name}: {args.family} {variant_path.name}, {params} params, "
+          f"weights={args.weights or 'scratch'}, {epochs} epochs, seed {seed}", flush=True)
 
-    model.train(
-        data=str(data_yaml), epochs=epochs, imgsz=final["img_width"], batch=final["batch_size"],
-        seed=seed, deterministic=True, pretrained=args.weights or False,
-        device=_ultralytics_device(args.device), workers=adapter.settings.get("workers", 8),
-        project=str(out), name="train", exist_ok=True, val=False, plots=False, verbose=False,
-        **adapter.training_options(),
-    )
     checkpoint = out / "model.pt"
-    model.save(checkpoint)
+    if args.family == "rtdetr":
+        # Same adapter and family settings as the search, on the final export.
+        [(train_root, train, _)] = dataset_parts(dict(challenging, events=events), data_root, "final")
+        # A job may copy the export to node-local disk: reading ~113k small PNGs
+        # from shared storage every epoch can leave the GPU idle.
+        train_root = Path(os.environ.get("FRED_FINAL_TRAIN_ROOT", train_root))
+        train_data = load_exported_split(train_root, train)
+        print(f"train frames: {len(train_data['images'])}", flush=True)
+        # Saved after every epoch: a run cut off by the job time limit resumes
+        # when the same command is submitted again.
+        adapter.train(model, train_data, {"epochs": epochs, "batch_size": final["batch_size"],
+                                          "seed": seed, "img_width": final["img_width"]},
+                      args.device, resume_path=out / "resume.pt")
+        torch.save(model.state_dict(), checkpoint)
+    else:
+        model.train(
+            data=str(data_yaml), epochs=epochs, imgsz=final["img_width"], batch=final["batch_size"],
+            seed=seed, deterministic=True, pretrained=args.weights or False,
+            device=_ultralytics_device(args.device), workers=adapter.settings.get("workers", 8),
+            project=str(out), name="train", exist_ok=True, val=False, plots=False, verbose=False,
+            **adapter.training_options(),
+        )
+        model.save(checkpoint)
 
     settings = {"events": events, "img_width": final["img_width"], "eval_conf": proxy["eval_conf"],
                 "nms_iou": proxy["nms_iou"], "batch_size": final["batch_size"],
                 "test_frame_step": final["test_frame_step"]}
     frames, expected = predict_test_split(adapter, model, test, settings, args.device, out)
 
-    config = {"family": "yolo11", "final": final, "proxy_eval": settings, "epochs": epochs,
+    config = {"family": args.family, "final": final, "proxy_eval": settings, "epochs": epochs,
               "seed": seed,
               "weights": args.weights, "variant": variant_path.name}
     split_files = data_root / "splits"
@@ -177,7 +203,8 @@ def main():
                "expected_sample_ids": expected}
     result, report_path = map_reporter.report(payload, sota_root=data_root, gene_id=args.name,
                                               mode="held-out")
-    shutil.rmtree(adapter.workdir, ignore_errors=True)
+    if hasattr(adapter, "workdir"):
+        shutil.rmtree(adapter.workdir, ignore_errors=True)
     print(f"challenging_test mAP50: {result.map50}, mAP50:95: {result.map50_95}, "
           f"Params: {result.params}, test frames: {len(frames)}, Time: {time.time() - start:.1f}s")
     print(f"Saved model: {checkpoint}")
