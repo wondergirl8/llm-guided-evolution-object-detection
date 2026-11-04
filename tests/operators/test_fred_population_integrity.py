@@ -204,11 +204,12 @@ def test_gpu_unavailable_retry_limit_records_failure(tmp_path, monkeypatch):
     assert 'after 2 GPU retries' in evolution.GLOBAL_DATA['seed']['failure_reason']
 
 
-def test_server_window_stops_before_allocation_expires(monkeypatch):
+@pytest.mark.parametrize('remaining', ['00:30:00', '30:00'])
+def test_server_window_stops_before_allocation_expires(monkeypatch, remaining):
     monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
     monkeypatch.setenv('LLMGE_MIN_SERVER_REMAINING_SECONDS', '3600')
     monkeypatch.setattr(evolution.subprocess, 'run', lambda *_args, **_kwargs:
-                        SimpleNamespace(returncode=0, stdout='00:30:00\n', stderr=''))
+                        SimpleNamespace(returncode=0, stdout=f'{remaining}\n', stderr=''))
     with pytest.raises(evolution.ServerWindowClosed, match='1800s left'):
         evolution.check_server_window()
 

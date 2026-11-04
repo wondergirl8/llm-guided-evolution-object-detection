@@ -62,6 +62,9 @@ def check_server_window():
         day_text, remaining = remaining.split('-', 1)
         days = int(day_text)
     parts = remaining.split(':')
+    # squeue prints MM:SS once less than an hour is left.
+    if len(parts) == 2:
+        parts = ['0', *parts]
     if len(parts) != 3 or not all(part.isdecimal() for part in parts):
         raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
     hours, minutes, seconds = map(int, parts)
