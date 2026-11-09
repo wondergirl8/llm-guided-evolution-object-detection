@@ -1,0 +1,13 @@
+Combine architectural choices from these corresponding spikeyolo-graph-v2 sections.
+Preserve every layer position, from link, resampling row and frozen detection/temporal row.
+You may combine several mutable rows from the parents into a coherent child section.
+If inheritance alone reproduces a parent, make one additional bounded legal change.
+Follow ConstantRules; return one complete replacement section in one yaml fence.
+Parent A:
+```yaml
+{}
+```
+Parent B:
+```yaml
+{}
+```

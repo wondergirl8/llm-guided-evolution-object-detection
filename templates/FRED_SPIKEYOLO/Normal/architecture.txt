@@ -1,0 +1,9 @@
+Improve the accuracy/parameter tradeoff for tiny drones in released FRED Event frames.
+Make one architectural change to a mutable layer in this official SpikeYOLO section.
+Consider width, effective depth, official block type, expansion ratio, or receptive-field kernel.
+Keep all other rows unchanged, including fixed routing and resampling.
+Return the complete replacement section in one fenced yaml block, following ConstantRules.
+Current section:
+```yaml
+{}
+```

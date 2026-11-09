@@ -30,6 +30,13 @@ if RUN_TAG and not re.fullmatch(
 RUN_ROOT = os.path.join(ROOT_DIR, "fred_runs", RUN_TAG) if RUN_TAG else None
 RUN_CHECKPOINT_DIR = os.path.join(RUN_ROOT, "checkpoints") if RUN_ROOT else None
 _FAMILIES = {
+    "spikeyolo": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "spikeyolo"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_spikeyolo.yaml"),
+        "prompt_group": "FRED_SPIKEYOLO/Normal",
+        "rules": "templates/FRED_SPIKEYOLO/ConstantRules.txt",
+        "eval_timeout": 8 * 60 * 60,
+    },
     "ems_yolo": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ems_yolo"),
         "seed": os.path.join(FRED_DIR, "seeds", "seed_ems_yolo.py"),
@@ -69,12 +76,15 @@ _FAMILIES = {
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
 CANDIDATE_POLICY_MODULE = (
+    "sota.FRED_LLM_GE.phase1_detection.spikeyolo_search_space"
+    if SEED_FAMILY == "spikeyolo" else
     "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
     if SEED_FAMILY == "yolo11" else
     "sota.FRED_LLM_GE.phase1_detection.bn_snn_search_space" if SEED_FAMILY == "bn_snn" else
     "sota.FRED_LLM_GE.phase1_detection.ems_yolo_search_space" if SEED_FAMILY == "ems_yolo" else None
 )
 CROSSOVER_TEMPLATE_DIR = (
+    "templates/FRED_SPIKEYOLO/CrossOver" if SEED_FAMILY == "spikeyolo" else
     "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
     else "templates/FRED_BNSNN/CrossOver" if SEED_FAMILY == "bn_snn"
     else "templates/FRED_EMS_YOLO/CrossOver" if SEED_FAMILY == "ems_yolo"
@@ -86,9 +96,9 @@ CROSSOVER_TEMPLATE_DIR = (
 FRED_EVENTS = os.getenv("FRED_EVENTS", "")
 if SEED_FAMILY == "bn_snn" and FRED_EVENTS:
     raise ValueError("BN-SNN uses families.bn_snn.events, not FRED_EVENTS frame encodings")
-if SEED_FAMILY == "ems_yolo" and FRED_EVENTS:
-    raise ValueError("EMS-YOLO preliminary protocol is frozen to released FRED Event frames")
-if SEED_FAMILY in ("bn_snn", "ems_yolo") and not RUN_TAG:
+if SEED_FAMILY in ("ems_yolo", "spikeyolo") and FRED_EVENTS:
+    raise ValueError("This family protocol is frozen to released FRED Event frames")
+if SEED_FAMILY in ("bn_snn", "ems_yolo", "spikeyolo") and not RUN_TAG:
     raise ValueError(f"{SEED_FAMILY} requires an explicit FRED_RUN_TAG for isolated run artifacts")
 _RUN_SUFFIX = f"_{FRED_EVENTS}" if FRED_EVENTS else ""
 SOTA_ROOT = (os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else
@@ -157,7 +167,7 @@ EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
 # The generated candidate is named network_<gene_id>.py. The runner trains
 # and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
-EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
+EVAL_RUNLINE = (f"uv run {'--extra spikeyolo ' if SEED_FAMILY == 'spikeyolo' else ''}python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
                 "--model {} --variant_dir {VARIANT_DIR}"
                 + (f" --events {FRED_EVENTS}" if FRED_EVENTS else ""))
 

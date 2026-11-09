@@ -45,6 +45,31 @@ def compute_fingerprint(root, family, run_tag, seed_path):
         for path in sorted(upstream.rglob("*")):
             if path.is_file() and "__pycache__" not in path.parts:
                 files[f"upstream/{path.relative_to(upstream)}"] = path
+    if family == "spikeyolo":
+        from .spikeyolo_source import SOURCE, verify_source
+        verify_source()
+        for name in ("candidate_runner.py", "spikeyolo_source.py", "spikeyolo_search_space.py",
+                     "spikeyolo_smoke.py", "spikeyolo_training_smoke.py", "adapters/spikeyolo.py", "spikeyolo_baseline.py",
+                     "map_reporter.py", "fitness.py", "result_contract.py", "proxy_data.py",
+                     "fred_splits.py", "export_split.py"):
+            files[name] = fred_root / "phase1_detection" / name
+        for path in sorted(SOURCE.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                files[f"upstream/{path.relative_to(SOURCE)}"] = path
+        files["dependencies"] = root / "pyproject.toml"
+        files["family_constants"] = root / "src/cfg/constants_fred_yolo11.py"
+        prompts = root / "templates/FRED_SPIKEYOLO"
+        for path in sorted(prompts.rglob("*.txt")):
+            files[f"prompts/{path.relative_to(prompts)}"] = path
+        files["data/fred_stream.py"] = fred_root / "data/fred_stream.py"
+        search = protocol["challenging"]["search"]
+        data_root = fred_root / protocol["challenging"]["data_root"]
+        for partition, step in (("train", search["train_frame_step"]),
+                                ("val", search["val_frame_step"])):
+            export = data_root / f"search_{partition}_step{step}"
+            files[f"{partition}/data.yaml"] = export / "data.yaml"
+            for path in sorted((export / "done").glob("*.json")):
+                files[f"{partition}/done/{path.name}"] = path
     file_hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest()
                    for name, path in files.items()}
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
@@ -59,6 +84,11 @@ def compute_fingerprint(root, family, run_tag, seed_path):
     if family == "ems_yolo":
         identity["dependencies"] = {name: importlib.metadata.version(name)
                                     for name in ("torchvision", "numpy", "pycocotools")}
+    if family == "spikeyolo":
+        identity["genome_version"] = protocol["families"][family]["genome_version"]
+        identity["dependencies"] = {name: importlib.metadata.version(name) for name in
+                                    ("torchvision", "numpy", "pycocotools", "timm", "torchinfo",
+                                     "einops", "opencv-python", "seaborn", "py-cpuinfo")}
     identity["sha256"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return identity
 

@@ -1,0 +1,13 @@
+Combine the efficient width/depth choices of one spikeyolo-graph-v2 parent with the
+block/receptive-field choices of the other within this corresponding YAML section.
+Preserve layer positions, routing, strides and every frozen row. Follow ConstantRules.
+If the child reproduces a parent, make one additional bounded legal change.
+Return the complete replacement section in exactly one yaml code fence.
+Parent A:
+```yaml
+{}
+```
+Parent B:
+```yaml
+{}
+```

@@ -31,6 +31,7 @@ if __package__:
     from .adapters.bn_snn import BNSNNAdapter
     from .adapters.dfine import DFINEAdapter
     from .adapters.ems_yolo import EMSYoloAdapter
+    from .adapters.spikeyolo import SpikeYoloAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from .export_split import dataset_parts, events_from_tag
@@ -44,6 +45,7 @@ else:
     from sota.FRED_LLM_GE.phase1_detection.adapters.bn_snn import BNSNNAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.dfine import DFINEAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.ems_yolo import EMSYoloAdapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.spikeyolo import SpikeYoloAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Adapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from sota.FRED_LLM_GE.phase1_detection.export_split import dataset_parts, events_from_tag
@@ -55,7 +57,7 @@ DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
 ADAPTERS = {adapter.name: adapter for adapter in
             (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter,
-             BNSNNAdapter, EMSYoloAdapter)}
+             BNSNNAdapter, EMSYoloAdapter, SpikeYoloAdapter)}
 
 # Excluded by the orchestrator's INVALID_FITNESS_MAX filter.
 FAILED_RESULT = DetectionResult(-math.inf, -math.inf, math.inf)
@@ -156,6 +158,13 @@ def report_metadata(adapter, proxy, config, variant_path, model_path):
                             "time_steps": adapter.settings["training"]["time_steps"],
                             "input_size": adapter.settings["training"]["input_size"],
                         }, upstream=adapter.settings["upstream"])
+    elif adapter.name == "spikeyolo":
+        metadata.update(family=adapter.name, initialization="scratch",
+                        input_representation="released_event_frame_MS_GetT_T1",
+                        genome_version=adapter.settings["genome_version"],
+                        architecture_hash=adapter.architecture_hash,
+                        checkpoint_policy=adapter.settings["checkpoint_policy"],
+                        upstream=adapter.settings["upstream"])
     return metadata
 
 
@@ -197,6 +206,8 @@ def challenging_search(protocol, family=None):
 def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
     start_time = time.time()
     try:
+        if family == "spikeyolo" and protocol["challenging"]["events"]["source"] != "released":
+            raise ValueError("SpikeYOLO protocol is frozen to released FRED Event frames")
         adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
         if adapter.settings.get("data") == "challenging_raw_search":
             from sota.FRED_LLM_GE.phase1_detection.bn_snn_data import load_search
@@ -218,7 +229,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
         else:
             val_data = load_val()
         train_frames = train_data.get("frames") or len(train_data["images"])
-        if family in ("bn_snn", "ems_yolo"):
+        if family in ("bn_snn", "ems_yolo", "spikeyolo"):
             if family == "ems_yolo":
                 proxy["epochs"] = adapter.settings["training"]["epochs"]
             if family == "bn_snn":
@@ -236,10 +247,10 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
           flush=True)
 
     try:
-        if family == "yolo11":
+        if family in ("yolo11", "spikeyolo"):
             args_path = Path(sota_root) / "training_args" / gene_id / "args.yaml"
             adapter.train(model, train_data, proxy, device, args_path=args_path)
-            print(f"Saved Ultralytics training arguments: {args_path}", flush=True)
+            print(f"Saved family training arguments: {args_path}", flush=True)
         else:
             adapter.train(model, train_data, proxy, device)
 
@@ -262,7 +273,7 @@ def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
         return
     train_time = time.time() - start_time
 
-    if family in ("bn_snn", "ems_yolo"):
+    if family in ("bn_snn", "ems_yolo", "spikeyolo"):
         run_path = Path(sota_root) / "training_args" / gene_id / "run.json"
         run_path.write_text(json.dumps(dict(config, wall_time_seconds=train_time,
             mAP50=result.map50, mAP50_95=result.map50_95, params=result.params,
@@ -292,8 +303,8 @@ def main():
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
-    if args.family == "bn_snn" and args.events:
-        parser.error("BN-SNN uses families.bn_snn.events; --events is for frame encodings")
+    if args.family in ("bn_snn", "spikeyolo") and args.events:
+        parser.error("This family does not accept --events overrides")
 
     # this will get the gene id value: "network_XXXX" -> "XXXX"
     try:
