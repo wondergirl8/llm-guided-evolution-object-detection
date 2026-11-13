@@ -78,36 +78,46 @@ class ServerWindowClosed(RuntimeError):
 
 
 def check_server_window():
-    """Use SLURM's remaining time when the launch supplies its server job ID."""
+    """Avoid scheduler queries when the server saved its Slurm end time."""
     job_id = os.getenv('LLMGE_SERVER_JOB_ID')
     if not job_id:
         return
     if not job_id.isdecimal():
         raise ValueError('LLMGE_SERVER_JOB_ID must be a numeric SLURM job ID')
-    from src.fred_runtime import slurm_status
-    result = slurm_status(['squeue', '-h', '-j', job_id, '-o', '%L'], attempts=30)
-    if result.returncode != 0:
-        raise RuntimeError(f'Cannot check LLM server job {job_id}: {result.stderr.strip()}')
-    remaining = result.stdout.strip()
-    if not remaining:
-        write_run_status({'status': 'paused_for_server_refresh', 'server_job_id': job_id,
-                          'server_seconds_left': 0})
-        raise ServerWindowClosed(f'LLM server job {job_id} is no longer in squeue')
-    days = 0
-    if '-' in remaining:
-        day_text, remaining = remaining.split('-', 1)
-        days = int(day_text)
-    parts = remaining.split(':')
-    if len(parts) not in (2, 3) or not all(part.isdecimal() for part in parts):
-        raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
-    if len(parts) == 2:
-        hours = 0
-        minutes, seconds = map(int, parts)
+    deadline_file = (os.path.join(RUN_ROOT, 'server_windows', f'{job_id}.deadline')
+                     if RUN_ROOT else None)
+    if deadline_file and os.path.isfile(deadline_file):
+        with open(deadline_file, encoding='ascii') as stream:
+            deadline_text = stream.read().strip()
+        if not deadline_text.isdecimal():
+            raise RuntimeError(f'Invalid Slurm end time in {deadline_file}')
+        seconds_left = max(0, int(deadline_text) - int(time.time()))
     else:
-        hours, minutes, seconds = map(int, parts)
-    if minutes >= 60 or seconds >= 60:
-        raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
-    seconds_left = days * 86400 + hours * 3600 + minutes * 60 + seconds
+        # Older generated server scripts did not save an end time.
+        from src.fred_runtime import slurm_status
+        result = slurm_status(['squeue', '-h', '-j', job_id, '-o', '%L'], attempts=30)
+        if result.returncode != 0:
+            raise RuntimeError(f'Cannot check LLM server job {job_id}: {result.stderr.strip()}')
+        remaining = result.stdout.strip()
+        if not remaining:
+            write_run_status({'status': 'paused_for_server_refresh', 'server_job_id': job_id,
+                              'server_seconds_left': 0})
+            raise ServerWindowClosed(f'LLM server job {job_id} is no longer in squeue')
+        days = 0
+        if '-' in remaining:
+            day_text, remaining = remaining.split('-', 1)
+            days = int(day_text)
+        parts = remaining.split(':')
+        if len(parts) not in (2, 3) or not all(part.isdecimal() for part in parts):
+            raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
+        if len(parts) == 2:
+            hours = 0
+            minutes, seconds = map(int, parts)
+        else:
+            hours, minutes, seconds = map(int, parts)
+        if minutes >= 60 or seconds >= 60:
+            raise RuntimeError(f'Unrecognized server time remaining from squeue: {remaining!r}')
+        seconds_left = days * 86400 + hours * 3600 + minutes * 60 + seconds
     margin = int(os.getenv('LLMGE_MIN_SERVER_REMAINING_SECONDS', '3600'))
     if seconds_left < margin:
         write_run_status({'status': 'paused_for_server_refresh', 'server_job_id': job_id,
@@ -343,7 +353,13 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
     if not LOCAL_LLM:
         return True
     from src.fred_runtime import assert_llm_job_active
-    assert_llm_job_active()
+    server_job = os.getenv('LLMGE_SERVER_JOB_ID')
+    deadline_file = (os.path.join(RUN_ROOT, 'server_windows', f'{server_job}.deadline')
+                     if RUN_ROOT and server_job and server_job.isdecimal() else None)
+    # A server that recorded its allocation end time is checked by HTTP below.
+    # Avoid making every readiness probe depend on a responsive slurmctld.
+    if not deadline_file or not os.path.isfile(deadline_file):
+        assert_llm_job_active()
     if LLM_SERVER_READY:
         timeout = 15  # A previously healthy server may have reached its wall time.
         check_interval = 5
@@ -360,7 +376,8 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
     last_error = None
 
     while time.time() - start_time <= timeout:
-        assert_llm_job_active()
+        if not deadline_file or not os.path.isfile(deadline_file):
+            assert_llm_job_active()
         if os.path.exists(HOSTNAME_DIR):
             try:
                 with open(HOSTNAME_DIR, 'r') as file:

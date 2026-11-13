@@ -164,6 +164,18 @@ echo "launching LLM Server"
 # Optional chained submission count to work around walltime limits
 COUNT=${{1:-1}}
 
+# Record this allocation's end time once, while Slurm supplies it directly.
+# The paired controller can then check its safety margin without querying
+# slurmctld during every operator submission.
+if [[ -n ${{FRED_RUN_TAG:-}} && ${{SLURM_JOB_ID:-}} =~ ^[0-9]+$ &&
+      ${{SLURM_JOB_END_TIME:-}} =~ ^[0-9]+$ ]]; then
+    SERVER_WINDOW_DIR="$SLURM_SUBMIT_DIR/fred_runs/$FRED_RUN_TAG/server_windows"
+    mkdir -p "$SERVER_WINDOW_DIR"
+    printf '%s\\n' "$SLURM_JOB_END_TIME" > "$SERVER_WINDOW_DIR/$SLURM_JOB_ID.deadline.tmp"
+    mv "$SERVER_WINDOW_DIR/$SLURM_JOB_ID.deadline.tmp" "$SERVER_WINDOW_DIR/$SLURM_JOB_ID.deadline"
+    echo "Recorded server end time for job $SLURM_JOB_ID"
+fi
+
 hostname
 
 module load cuda

@@ -284,6 +284,25 @@ def test_dead_server_stops_even_when_controller_cached_ready(monkeypatch, state)
         controller.wait_for_llm_server()
 
 
+def test_recorded_server_window_uses_http_without_scheduler(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
+    monkeypatch.setattr(controller, 'LOCAL_LLM', True)
+    monkeypatch.setattr(controller, 'LLM_SERVER_READY', False)
+    monkeypatch.setattr(controller, 'RUN_ROOT', str(tmp_path))
+    hostname = tmp_path / 'hostname.log'
+    hostname.write_text('server-node\n')
+    monkeypatch.setattr(controller, 'HOSTNAME_DIR', str(hostname))
+    window_dir = tmp_path / 'server_windows'
+    window_dir.mkdir()
+    (window_dir / '123.deadline').write_text('9999999999\n')
+    monkeypatch.setattr('src.fred_runtime.subprocess.run',
+                        lambda *a, **k: pytest.fail('queried Slurm'))
+    monkeypatch.setattr(controller.urllib.request, 'urlopen',
+                        lambda *_a, **_k: nullcontext(SimpleNamespace(status=200)))
+    assert controller.wait_for_llm_server()
+
+
 def test_running_server_is_accepted_and_legacy_without_job_id_is_unchanged(monkeypatch):
     monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
     monkeypatch.setattr('src.fred_runtime.subprocess.run', lambda *a, **k: SimpleNamespace(

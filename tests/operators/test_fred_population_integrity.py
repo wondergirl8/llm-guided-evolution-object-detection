@@ -246,6 +246,33 @@ def test_server_window_retries_slurm_backup_standby(monkeypatch):
     assert len(calls) == 2
 
 
+def test_server_window_uses_saved_end_time_without_scheduler(tmp_path, monkeypatch):
+    monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
+    monkeypatch.setenv('LLMGE_MIN_SERVER_REMAINING_SECONDS', '3600')
+    monkeypatch.setattr(evolution, 'RUN_ROOT', str(tmp_path))
+    monkeypatch.setattr(evolution.time, 'time', lambda: 1000)
+    window_dir = tmp_path / 'server_windows'
+    window_dir.mkdir()
+    deadline = window_dir / '123.deadline'
+    deadline.write_text('8200\n')
+    monkeypatch.setattr(evolution.subprocess, 'run',
+                        lambda *_args, **_kwargs: pytest.fail('queried Slurm'))
+    evolution.check_server_window()
+    deadline.write_text('2800\n')
+    with pytest.raises(evolution.ServerWindowClosed, match='1800s left'):
+        evolution.check_server_window()
+
+
+def test_server_window_rejects_invalid_saved_end_time(tmp_path, monkeypatch):
+    monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
+    monkeypatch.setattr(evolution, 'RUN_ROOT', str(tmp_path))
+    window_dir = tmp_path / 'server_windows'
+    window_dir.mkdir()
+    (window_dir / '123.deadline').write_text('unknown\n')
+    with pytest.raises(RuntimeError, match='Invalid Slurm end time'):
+        evolution.check_server_window()
+
+
 def test_server_window_reports_persistent_slurm_backup_standby(monkeypatch):
     from src import fred_runtime
     monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
