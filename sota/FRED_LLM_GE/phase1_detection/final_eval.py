@@ -22,6 +22,7 @@ import hashlib
 import io
 import json
 import multiprocessing
+import os
 import shutil
 import sys
 import time
@@ -158,6 +159,10 @@ def main():
                        help="Score final_runs/<name>/model.pt from an earlier --train_only run")
     args = parser.parse_args()
     validate_gene_id(args.name)
+    # A node whose GPU fails to initialise would otherwise train on CPU for the whole job.
+    if args.device == "cpu" and os.environ.get("CUDA_VISIBLE_DEVICES"):
+        raise SystemExit("gpu_unavailable: GPU allocated but CUDA is unavailable on this node; "
+                         "resubmit excluding it")
 
     start = time.time()
     protocol = load_protocol(args.protocol)
