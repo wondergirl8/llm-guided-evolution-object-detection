@@ -26,6 +26,7 @@ import os
 import shutil
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -71,12 +72,56 @@ def render_sequence(job):
     return rendered
 
 
-def predict_test_split(adapter, model, test, settings, device, report_dir, workers=1):
+def test_cache_dir(data_root, events, frame_step):
+    """Where --test_cache keeps one zip of rendered test frames per sequence."""
+    tag = events_suffix(events).lstrip("_") or "released"
+    return data_root / "test_frames" / f"{tag}_step{frame_step}"
+
+
+def cached_sequence(job):
+    """render_sequence through a per-sequence zip: read it if present, else render and save it.
+
+    job is (zip path or None, render_sequence job). The zip holds the same PNG
+    bytes render_sequence returns plus a manifest of timestamps and the
+    settings they were drawn with, so 58 files replace ~200k frames on disk.
+    """
+    path, render_job = job
+    settings = {"frame_step": render_job[3], "events": render_job[5]}
+    if path is not None and path.is_file():
+        with zipfile.ZipFile(path) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            if manifest["settings"] != settings:
+                raise ValueError(f"{path} was rendered with {manifest['settings']}, not {settings}")
+            return [(archive.read(f"{i:06d}.png"), timestamp)
+                    for i, timestamp in enumerate(manifest["timestamps"])]
+    rendered = render_sequence(render_job)
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f".{os.getpid()}.tmp")
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_STORED) as archive:
+            for i, (data, _) in enumerate(rendered):
+                archive.writestr(f"{i:06d}.png", data)
+            archive.writestr("manifest.json", json.dumps(
+                {"settings": settings, "timestamps": [t for _, t in rendered]}))
+        os.replace(temporary, path)  # concurrent writers of one sequence leave one whole file
+    return rendered
+
+
+def test_jobs(test, settings, report_dir, cache=None):
+    """One cached_sequence job per test sequence; cache is test_cache_dir() or None."""
+    return [(cache / f"{sequence}.zip" if cache else None,
+             (folder, sequence, report_dir / f"bad_timestamps_test_{sequence}.csv",
+              settings["test_frame_step"], report_dir / "downloads", settings.get("events")))
+            for sequence, folder in test]
+
+
+def predict_test_split(adapter, model, test, settings, device, report_dir, workers=1, cache=None):
     """Read every test frame, predict in batches, pair with ground truth.
 
     With workers > 1, sequences are downloaded and rendered by that many
     processes (raw-event rendering is single-core, ~15 min a sequence) while
-    the GPU predicts; workers=1 reads them in this process.
+    the GPU predicts; workers=1 reads them in this process. With cache
+    (test_cache_dir), sequences rendered earlier are read from disk instead.
     """
     frames, expected = [], []
     batch, pending = [], []
@@ -97,13 +142,11 @@ def predict_test_split(adapter, model, test, settings, device, report_dir, worke
         batch.clear()
         pending.clear()
 
-    jobs = [(folder, sequence, report_dir / f"bad_timestamps_test_{sequence}.csv",
-             settings["test_frame_step"], report_dir / "downloads", settings.get("events"))
-            for sequence, folder in test]
+    jobs = test_jobs(test, settings, report_dir, cache)
     # spawn, not fork: the parent has already initialized CUDA.
     with (multiprocessing.get_context("spawn").Pool(workers) if workers > 1
           else contextlib.nullcontext()) as pool:
-        sequences = pool.imap(render_sequence, jobs) if pool else map(render_sequence, jobs)
+        sequences = pool.imap(cached_sequence, jobs) if pool else map(cached_sequence, jobs)
         for number, ((sequence, folder), rendered) in enumerate(zip(test, sequences), 1):
             annotations, count = None, 0
             for data, timestamp in rendered:
@@ -150,6 +193,9 @@ def main():
     parser.add_argument("--save_predictions", action="store_true",
                         help="Also write every test frame's boxes to final_runs/<name>/"
                              "test_predictions.json.gz, for per-sequence analysis")
+    parser.add_argument("--test_cache", action="store_true",
+                        help="Read test frames rendered once into <data_root>/test_frames/ "
+                             "(cache_test_frames.py), rendering and saving any missing sequence")
     # Training and testing can run as two jobs when together they exceed the
     # Slurm time limit (10 ms test frames are rendered from raw events, ~10 h).
     stage = parser.add_mutually_exclusive_group()
@@ -225,8 +271,9 @@ def main():
     settings = {"events": events, "img_width": final["img_width"], "eval_conf": proxy["eval_conf"],
                 "nms_iou": proxy["nms_iou"], "batch_size": final["batch_size"],
                 "test_frame_step": final["test_frame_step"]}
+    cache = test_cache_dir(data_root, events, final["test_frame_step"]) if args.test_cache else None
     frames, expected = predict_test_split(adapter, model, test, settings, args.device, out,
-                                          args.test_workers)
+                                          args.test_workers, cache)
     if args.save_predictions:
         with gzip.open(out / "test_predictions.json.gz", "wt") as file:
             json.dump(frames, file)

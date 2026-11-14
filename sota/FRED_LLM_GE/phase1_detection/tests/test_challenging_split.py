@@ -109,6 +109,35 @@ def test_predict_test_split_scores_every_streamed_frame(monkeypatch):
     assert out[2]["target"]["boxes"] == [[1.0, 2.0, 11.0, 12.0]]
 
 
+def test_cached_test_frames_are_rendered_once_and_read_back_unchanged(monkeypatch, tmp_path):
+    from sota.FRED_LLM_GE.phase1_detection import final_eval
+
+    step_us = final_eval.STEP_US
+    frames = [(Image.new("RGB", (80, 40), (i, 0, 0)), i * step_us / 1_000_000) for i in (1, 2, 3)]
+    calls = []
+    monkeypatch.setattr(final_eval, "sequence_frames",
+                        lambda *a, **k: calls.append(1) or iter(frames))
+    monkeypatch.setattr(final_eval, "load_annotations", lambda folder, seq, w, h: {})
+
+    class Adapter:
+        def predict(self, model, images, settings, device):
+            return [(torch.tensor([[1.0, 1.0, 9.0, 9.0]]), images[i, 0, 0, 0].float().reshape(1) / 255)
+                    for i in range(len(images))]
+
+    settings = {"batch_size": 2, "test_frame_step": 1, "events": {"window_us": 10000}}
+    cache = tmp_path / "cache"
+    first = final_eval.predict_test_split(Adapter(), None, [("9", "test")], settings, "cpu",
+                                          tmp_path, cache=cache)
+    second = final_eval.predict_test_split(Adapter(), None, [("9", "test")], settings, "cpu",
+                                           tmp_path, cache=cache)
+    assert calls == [1] and (cache / "9.zip").is_file()
+    assert first == second
+    other = dict(settings, events={"window_us": 5000})
+    with pytest.raises(ValueError, match="was rendered with"):
+        final_eval.predict_test_split(Adapter(), None, [("9", "test")], other, "cpu",
+                                      tmp_path, cache=cache)
+
+
 def test_search_set_holds_out_val_sequences(monkeypatch, tmp_path):
     train = [("4", "train"), ("5", "test"), ("14", "train"), ("20", "train")]
     monkeypatch.setattr(export_split, "challenging_split", lambda _: (train, []))
