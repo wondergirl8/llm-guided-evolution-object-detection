@@ -54,11 +54,12 @@ X_AXES = {"params": (1e6, "Parameters (millions)", "{:.2f}M"),
 
 
 def is_valid_fitness(fitness):
-    if fitness is None or len(fitness) != 3:
+    # yolo11_window runs add a fourth value, window_us.
+    if fitness is None or len(fitness) not in (3, 4):
         return False
     if any(math.isinf(v) or math.isnan(v) for v in fitness):
         return False
-    map50, map50_95, params = fitness
+    map50, map50_95, params = fitness[:3]
     return 0 <= map50 <= 1 and 0 <= map50_95 <= 1 and 0 < params < FAILED_PARAMS
 
 
@@ -77,22 +78,29 @@ def load_candidates(path):
         data = pickle.load(file)
     genes = {**data.get("GLOBAL_DATA_HIST", {}), **data.get("GLOBAL_DATA", {})}
     rows = [
-        {"gene_id": gene_id, "mAP50": f[0], "mAP50_95": f[1], "params": int(f[2])}
+        {"gene_id": gene_id, "mAP50": f[0], "mAP50_95": f[1], "params": int(f[2]),
+         **({"window_us": int(f[3])} if len(f) == 4 else {})}
         for gene_id, attrs in genes.items()
         if is_valid_fitness(f := attrs.get("fitness"))
     ]
-    return pd.DataFrame(rows, columns=["gene_id", "mAP50", "mAP50_95", "params"])
+    columns = ["gene_id", "mAP50", "mAP50_95", "params"]
+    if any("window_us" in row for row in rows):
+        columns.append("window_us")
+    return pd.DataFrame(rows, columns=columns)
 
 
 def pareto_mask(df):
     """True where no other candidate is at least as good on mAP50, mAP50:95 and
-    params and strictly better on one of them."""
+    params (and window_us, when present) and strictly better on one of them."""
     mask = []
     for _, row in df.iterrows():
         no_worse = ((df["mAP50"] >= row["mAP50"]) & (df["mAP50_95"] >= row["mAP50_95"])
                     & (df["params"] <= row["params"]))
         better = ((df["mAP50"] > row["mAP50"]) | (df["mAP50_95"] > row["mAP50_95"])
                   | (df["params"] < row["params"]))
+        if "window_us" in df:
+            no_worse &= df["window_us"] <= row["window_us"]
+            better |= df["window_us"] < row["window_us"]
         mask.append(not (no_worse & better).any())
     return pd.Series(mask, index=df.index, dtype=bool)
 
