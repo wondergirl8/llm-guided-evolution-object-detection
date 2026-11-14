@@ -567,8 +567,9 @@ def record_failure(gene_id, reason):
     if key and EVAL_PENDING.get(key) == gene_id:
         del EVAL_PENDING[key]
     if "RUN_CHECKPOINT_DIR" in globals():
-        from sota.FRED_LLM_GE.phase1_detection.result_contract import DetectionResult, write_results
-        write_results(SOTA_ROOT, gene_id, DetectionResult(*INVALID_FITNESS_MAX), reason=str(reason))
+        from sota.FRED_LLM_GE.phase1_detection.result_contract import write_fitness_row
+        # Any number of objectives (FITNESS_WEIGHTS), e.g. yolo11_window's four.
+        write_fitness_row(SOTA_ROOT, gene_id, INVALID_FITNESS_MAX, reason=str(reason))
 
 
 def operator_failure_reason(gene_id, operation):

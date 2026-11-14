@@ -82,6 +82,34 @@ def write_results(sota_root, gene_id, result, reason=""):
     if not isinstance(reason, str) or failed != bool(reason.strip()):
         raise ValueError("a failed result requires a reason; a successful result must not have one")
 
+    return _write_row(sota_root, gene_id, [f"{result.map50:.6f}", f"{result.map50_95:.6f}",
+                                           str(result.params), reason])
+
+
+def write_fitness_row(sota_root, gene_id, values, reason=""):
+    """Write a fitness row of any length (FITNESS_WEIGHTS) for run_improved.py.
+
+    Families with more than DetectionResult's three objectives use this, e.g.
+    yolo11_window's (mAP50, mAP50:95, params, window_us). Integers and
+    infinities are written as is, other numbers with six decimals; a failure
+    (any infinite value) needs a reason and a success must not have one.
+    """
+
+    validate_gene_id(gene_id)
+    if any(isinstance(value, bool) or not isinstance(value, Real) or math.isnan(value)
+           for value in values):
+        raise ValueError("fitness values must be numbers")
+    failed = any(math.isinf(value) for value in values)
+    if not isinstance(reason, str) or failed != bool(reason.strip()):
+        raise ValueError("a failed result requires a reason; a successful result must not have one")
+    return _write_row(sota_root, gene_id, [
+        str(value) if isinstance(value, Integral) or math.isinf(value) else f"{value:.6f}"
+        for value in values] + [reason])
+
+
+def _write_row(sota_root, gene_id, row):
+    """Atomically replace <sota_root>/results/<gene_id>_results.csv with one CSV row."""
+
     directory = Path(sota_root) / "results"
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -98,14 +126,7 @@ def write_results(sota_root, gene_id, result, reason=""):
             temporary_name = handle.name
 
             writer = csv.writer(handle, lineterminator="\n")
-            writer.writerow(
-                [
-                    f"{result.map50:.6f}",
-                    f"{result.map50_95:.6f}",
-                    str(result.params),
-                    reason,
-                ]
-            )
+            writer.writerow(row)
 
         os.replace(temporary_name, output)
 
