@@ -273,6 +273,51 @@ def test_server_window_rejects_invalid_saved_end_time(tmp_path, monkeypatch):
         evolution.check_server_window()
 
 
+def test_mid_generation_server_pause_stops_new_jobs_and_keeps_prior_checkpoint(
+        tmp_path, monkeypatch):
+    from src import fred_runtime
+    checkpoint_dir = tmp_path / 'checkpoints'
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / 'checkpoint_gen_8.pkl').write_bytes(b'population')
+    (checkpoint_dir / 'global_gen_8.pkl').write_bytes(b'global')
+    (tmp_path / 'status.json').write_text(json.dumps({
+        'status': 'paused_for_server_refresh', 'server_job_id': '123',
+        'server_seconds_left': 3440}))
+    monkeypatch.setattr(evolution, 'RUN_ROOT', str(tmp_path))
+    monkeypatch.setattr(evolution, 'RUN_CHECKPOINT_DIR', str(checkpoint_dir))
+    monkeypatch.setattr(evolution, 'GLOBAL_DATA', {
+        'parent': {'job_id': '11'}, 'crossover': {'job_id': '12'}})
+    queries = []
+
+    def status(command):
+        queries.append(command)
+        return SimpleNamespace(returncode=0, stdout='12\n' if len(queries) == 1 else '',
+                               stderr='')
+
+    cancelled = []
+    monkeypatch.setattr(fred_runtime, 'slurm_status', status)
+    monkeypatch.setattr(evolution.subprocess, 'run', lambda command, **_kwargs: (
+        cancelled.append(command) or SimpleNamespace(returncode=0, stderr='')))
+    evolution.pause_incomplete_generation(9, {'11'})
+    assert cancelled == [['scancel', '12']]
+    assert queries == [
+        ['squeue', '-h', '-j', '12', '-o', '%i'],
+        ['squeue', '-h', '-j', '12', '-o', '%i'],
+    ]
+    assert json.loads((tmp_path / 'status.json').read_text()) == {
+        'status': 'paused_for_server_refresh', 'server_job_id': '123',
+        'server_seconds_left': 3440, 'last_completed_generation': 8,
+        'incomplete_generation': 9, 'discarded_generation_jobs': ['12']}
+
+
+def test_mid_generation_pause_refuses_missing_checkpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(evolution, 'RUN_ROOT', str(tmp_path))
+    monkeypatch.setattr(evolution, 'RUN_CHECKPOINT_DIR', str(tmp_path / 'checkpoints'))
+    monkeypatch.setattr(evolution, 'GLOBAL_DATA', {})
+    with pytest.raises(RuntimeError, match='checkpoint pair for generation 8 is missing'):
+        evolution.pause_incomplete_generation(9, set())
+
+
 def test_server_window_reports_persistent_slurm_backup_standby(monkeypatch):
     from src import fred_runtime
     monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')

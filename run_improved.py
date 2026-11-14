@@ -125,6 +125,60 @@ def check_server_window():
         raise ServerWindowClosed(f'LLM server job {job_id} has {seconds_left}s left; '
                                  f'require at least {margin}s before another operator')
 
+
+def pause_incomplete_generation(generation, jobs_before):
+    """Discard an unfinished generation only after its Slurm work has stopped."""
+    from src.fred_runtime import slurm_status
+
+    previous = generation - 1
+    checkpoint = os.path.join(RUN_CHECKPOINT_DIR, f'checkpoint_gen_{previous}.pkl')
+    global_state = os.path.join(RUN_CHECKPOINT_DIR, f'global_gen_{previous}.pkl')
+    if not (os.path.isfile(checkpoint) and os.path.getsize(checkpoint) > 0 and
+            os.path.isfile(global_state) and os.path.getsize(global_state) > 0):
+        raise RuntimeError(f'Cannot pause generation {generation}: checkpoint pair '
+                           f'for generation {previous} is missing')
+
+    current_jobs = {
+        str(record[field]) for record in GLOBAL_DATA.values()
+        for field in ('job_id', 'results_job')
+        if record.get(field) is not None and str(record[field]).isdecimal()
+    }
+    new_jobs = sorted(current_jobs - jobs_before, key=int)
+    if new_jobs:
+        command = ['squeue', '-h', '-j', ','.join(new_jobs), '-o', '%i']
+        result = slurm_status(command)
+        if result.returncode:
+            raise RuntimeError(f'Cannot verify unfinished generation jobs: {result.stderr.strip()}')
+        active = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if any(job not in new_jobs for job in active):
+            raise RuntimeError(f'Unexpected job in generation cleanup: {active}')
+        for job in active:
+            cancelled = subprocess.run(['scancel', job], capture_output=True, text=True, timeout=20)
+            if cancelled.returncode:
+                raise RuntimeError(f'Cannot cancel unfinished generation job {job}: '
+                                   f'{cancelled.stderr.strip()}')
+        for _ in range(20):
+            result = slurm_status(command)
+            if result.returncode:
+                raise RuntimeError(f'Cannot verify generation cleanup: {result.stderr.strip()}')
+            if not result.stdout.strip():
+                break
+            time.sleep(3)
+        else:
+            raise RuntimeError(f'Unfinished generation jobs remain active: {result.stdout.strip()}')
+
+    status_path = os.path.join(RUN_ROOT, 'status.json')
+    with open(status_path, encoding='utf-8') as stream:
+        status = json.load(stream)
+    if status.get('status') != 'paused_for_server_refresh':
+        raise RuntimeError(f'Unexpected status while pausing generation {generation}: {status}')
+    status.update(last_completed_generation=previous,
+                  incomplete_generation=generation,
+                  discarded_generation_jobs=new_jobs)
+    write_run_status(status)
+    print(f'Generation {generation} discarded; checkpoint through generation '
+          f'{previous} retained; jobs stopped: {new_jobs}', flush=True)
+
 def print_ancestry(data):
     for gene in data.keys():
         print(f'gene: {gene}')
@@ -2618,157 +2672,171 @@ if __name__ == "__main__":
                       flush=True)
                 paused_for_server = True
                 break
-        GEN_COUNT = gen
-        if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES:
-            TOP_N_GENES = tools.selSPEA2(population, NUM_EOT_ELITES)
-        box_print(f"STARTING GENERATION: {gen}", new_line_end=False)
-        print_population(population, GLOBAL_DATA)
-        box_print(f"Invalid Removal", print_bbox_len=60, new_line_end=False)
-        # Remove failed candidates before parent or EoT selection.
-        if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
-            population = valid_detection_population(population)
-            population = refill_detection_population(population, llm_model)
-            TOP_N_GENES = (select_yolo26_by_accuracy(population, NUM_EOT_ELITES)
-                           if SEED_FAMILY == 'yolo26_p2'
-                           else select_dfine_by_accuracy(population, NUM_EOT_ELITES)
-                           if dfine_accuracy_policy()
-                           else tools.selSPEA2(population, NUM_EOT_ELITES))
-        else:
-            population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
+        jobs_before = {
+            str(record[field]) for record in GLOBAL_DATA.values()
+            for field in ('job_id', 'results_job')
+            if record.get(field) is not None and str(record[field]).isdecimal()
+        }
+        try:
+            GEN_COUNT = gen
+            if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES:
+                TOP_N_GENES = tools.selSPEA2(population, NUM_EOT_ELITES)
+            box_print(f"STARTING GENERATION: {gen}", new_line_end=False)
+            print_population(population, GLOBAL_DATA)
+            box_print(f"Invalid Removal", print_bbox_len=60, new_line_end=False)
+            # Remove failed candidates before parent or EoT selection.
+            if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                population = valid_detection_population(population)
+                population = refill_detection_population(population, llm_model)
+                TOP_N_GENES = (select_yolo26_by_accuracy(population, NUM_EOT_ELITES)
+                               if SEED_FAMILY == 'yolo26_p2'
+                               else select_dfine_by_accuracy(population, NUM_EOT_ELITES)
+                               if dfine_accuracy_policy()
+                               else tools.selSPEA2(population, NUM_EOT_ELITES))
+            else:
+                population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
 
-        '''
-        IF POPULATION IS LESS THAN NUM_ELITE INDIVIDUALS, GENERATE MORE FROM SCRATCH
-         * todo: clean up this code/consolidate with previous code *
-        '''
+            '''
+            IF POPULATION IS LESS THAN NUM_ELITE INDIVIDUALS, GENERATE MORE FROM SCRATCH
+             * todo: clean up this code/consolidate with previous code *
+            '''
 
-        box_print("CURRENT POPULATION SIZE:", len(population))
-        while SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES and len(population) < num_elites:
-            print("MINIMUM NUMBER OF IND NOT ACHIEVED, TRYING AGAIN")
-            if "SEED_FAMILY" in globals():
-                fresh = toolbox.population(
-                    n=max(start_population_size - len(population), num_elites - len(population)),
-                    llm_model=llm_model)
-                delayed_creation_check(fresh)
-                for ind in fresh:
-                    ind.fitness.values = PLACEHOLDER_FITNESS
-                check_and_update_fitness(fresh)
-                log_failure_counts(gen, fresh)
-                population.extend(ind for ind in fresh if ind.fitness.values != INVALID_FITNESS_MAX)
-                continue
-            GEN_COUNT = -1
-            TOP_N_GENES = None
-            LINKED_GENES = {}
-            GLOBAL_DATA = {}
-            GLOBAL_DATA_HIST = {}
-            GLOBAL_DATA_ANCESTRY = {}
-            start_gen = 0
-            population = toolbox.population(n=start_population_size, llm_model=llm_model)
-            delayed_creation_check(population)
-            for ind in population:
-                ind.fitness.values = PLACEHOLDER_FITNESS
-            check_and_update_fitness(population)
-            log_failure_counts(gen, population)
-            population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
             box_print("CURRENT POPULATION SIZE:", len(population))
+            while SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES and len(population) < num_elites:
+                print("MINIMUM NUMBER OF IND NOT ACHIEVED, TRYING AGAIN")
+                if "SEED_FAMILY" in globals():
+                    fresh = toolbox.population(
+                        n=max(start_population_size - len(population), num_elites - len(population)),
+                        llm_model=llm_model)
+                    delayed_creation_check(fresh)
+                    for ind in fresh:
+                        ind.fitness.values = PLACEHOLDER_FITNESS
+                    check_and_update_fitness(fresh)
+                    log_failure_counts(gen, fresh)
+                    population.extend(ind for ind in fresh if ind.fitness.values != INVALID_FITNESS_MAX)
+                    continue
+                GEN_COUNT = -1
+                TOP_N_GENES = None
+                LINKED_GENES = {}
+                GLOBAL_DATA = {}
+                GLOBAL_DATA_HIST = {}
+                GLOBAL_DATA_ANCESTRY = {}
+                start_gen = 0
+                population = toolbox.population(n=start_population_size, llm_model=llm_model)
+                delayed_creation_check(population)
+                for ind in population:
+                    ind.fitness.values = PLACEHOLDER_FITNESS
+                check_and_update_fitness(population)
+                log_failure_counts(gen, population)
+                population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
+                box_print("CURRENT POPULATION SIZE:", len(population))
 
-        print_population(population, GLOBAL_DATA)
-        # Select the next generation's parents
-        box_print(f"Selection", print_bbox_len=60, new_line_end=False)
-        # These bypass the mutation and cross-over so we dont lose them
+            print_population(population, GLOBAL_DATA)
+            # Select the next generation's parents
+            box_print(f"Selection", print_bbox_len=60, new_line_end=False)
+            # These bypass the mutation and cross-over so we dont lose them
 
-        elites = select_elites(population, num_elites)
+            elites = select_elites(population, num_elites)
 
-        # Select the next generation's parents
-        offspring_count = min(len(population), globals().get("offspring_size", population_size))
-        print(f"Selecting {offspring_count} offspring")
-        offspring = toolbox.select(population, offspring_count)
-        
-        print_population(offspring, GLOBAL_DATA)
-        
-        print([len(GLOBAL_DATA_HIST), len(GLOBAL_DATA), len(population), len(offspring)])
-        
-        # Clone the selected individuals
-        offspring = list(map(toolbox.clone, offspring))
-        GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
+            # Select the next generation's parents
+            offspring_count = min(len(population), globals().get("offspring_size", population_size))
+            print(f"Selecting {offspring_count} offspring")
+            offspring = toolbox.select(population, offspring_count)
 
-        # Apply crossover on the offspring
-        box_print("Mating", print_bbox_len=60, new_line_end=False)
-        for child1, child2 in zip(offspring[::2], offspring[1::2]):
-            if random.random() < crossover_probability:
-                child1, child2 = toolbox.mate(child1, child2, llm_model=llm_model)
-                del child1.fitness.values
-                del child2.fitness.values 
-                
-        box_print("Batch Checking Mated Genes", print_bbox_len=60, new_line_end=False)       
-        offspring = delayed_mate_check(offspring)
-        print_population(offspring, GLOBAL_DATA)
-        
-        # Apply mutation on the offspring
-        box_print("Mutating", print_bbox_len=60, new_line_end=False)
-        mutate_selected_offspring(offspring, llm_model)
-                
-        box_print(f"GLOBAL_DATA_ANCESTRY", new_line_end=False)
-        print_ancestry(GLOBAL_DATA_ANCESTRY)
-                
-        box_print("Batch Checking Mutated Genes", print_bbox_len=60, new_line_end=False)
-        offspring = delayed_mutate_check(offspring)
-        print_population(offspring, GLOBAL_DATA)
-        
-        # Add elites back to offspring. Usually before the mute and cross but in this case we save them
-        offspring.extend(elites)
-        # After merging the offspring and the elites
-        offspring = remove_duplicates(offspring)
-        elites_keys = [k[0] for k in elites]
-        # Bring back the elite history
-        for k in elites_keys:
-            if k in GLOBAL_DATA_HIST.keys():
-                GLOBAL_DATA[k] = GLOBAL_DATA_HIST[k]
-            """
-            GLOBAL_DATA should have the job information and fitness values
-            When it hits the below in check_and_update_fitness it will load the results from the dict 
-                if GLOBAL_DATA[gene_id]['status'] == "completed":
-            """
-           
-        # Evaluate the individuals with an invalid fitness
-        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        fitnesses = map(toolbox.evaluate, invalid_ind)
+            print_population(offspring, GLOBAL_DATA)
 
-        for ind in offspring:
-            # assign placeholder to all so I can check them all at once
-            ind.fitness.values = PLACEHOLDER_FITNESS 
+            print([len(GLOBAL_DATA_HIST), len(GLOBAL_DATA), len(population), len(offspring)])
 
-        GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
-        check_and_update_fitness(offspring)
-        log_failure_counts(gen, offspring)
-        GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
-        # Replace the old population with the offspring
-        population[:] = (valid_detection_population(offspring)
-                         if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES else offspring)
-        if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
-            population[:] = refill_detection_generation_population(
-                population, population_size, llm_model, gen)
-        # Gather all the fitnesses in one list and print the stats
-        if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES or population:
-            print_scores(population, FITNESS_WEIGHTS)
-            hof.update(population)
-        else:
-            print(f'Generation {gen} has no valid {SEED_FAMILY} candidates; '
-                  'refill on resume/next generation', flush=True)
-        save_checkpoint(gen, folder_name=args.checkpoints, global_path=args.global_path)
-        write_run_status({'status': 'running', 'last_completed_generation': gen})
-        LINKED_GENES = {}
-        # mutate x prompts
-        # mutate_prompts()
+            # Clone the selected individuals
+            offspring = list(map(toolbox.clone, offspring))
+            GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
 
-        if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES or population:
-            best_ind = (select_yolo26_by_accuracy(population, 1)[0]
-                        if SEED_FAMILY == 'yolo26_p2' else
-                        select_dfine_by_accuracy(population, 1)[0]
-                        if dfine_accuracy_policy() else tools.selBest(population, 1)[0])
-            print(f"Finished Generation {gen}")
-            print(f"Best Individual: {best_ind}")
-            print(f"Best Fitness: {best_ind.fitness.values}")
-        
+            # Apply crossover on the offspring
+            box_print("Mating", print_bbox_len=60, new_line_end=False)
+            for child1, child2 in zip(offspring[::2], offspring[1::2]):
+                if random.random() < crossover_probability:
+                    child1, child2 = toolbox.mate(child1, child2, llm_model=llm_model)
+                    del child1.fitness.values
+                    del child2.fitness.values
+
+            box_print("Batch Checking Mated Genes", print_bbox_len=60, new_line_end=False)
+            offspring = delayed_mate_check(offspring)
+            print_population(offspring, GLOBAL_DATA)
+
+            # Apply mutation on the offspring
+            box_print("Mutating", print_bbox_len=60, new_line_end=False)
+            mutate_selected_offspring(offspring, llm_model)
+
+            box_print(f"GLOBAL_DATA_ANCESTRY", new_line_end=False)
+            print_ancestry(GLOBAL_DATA_ANCESTRY)
+
+            box_print("Batch Checking Mutated Genes", print_bbox_len=60, new_line_end=False)
+            offspring = delayed_mutate_check(offspring)
+            print_population(offspring, GLOBAL_DATA)
+
+            # Add elites back to offspring. Usually before the mute and cross but in this case we save them
+            offspring.extend(elites)
+            # After merging the offspring and the elites
+            offspring = remove_duplicates(offspring)
+            elites_keys = [k[0] for k in elites]
+            # Bring back the elite history
+            for k in elites_keys:
+                if k in GLOBAL_DATA_HIST.keys():
+                    GLOBAL_DATA[k] = GLOBAL_DATA_HIST[k]
+                """
+                GLOBAL_DATA should have the job information and fitness values
+                When it hits the below in check_and_update_fitness it will load the results from the dict
+                    if GLOBAL_DATA[gene_id]['status'] == "completed":
+                """
+
+            # Evaluate the individuals with an invalid fitness
+            invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+            fitnesses = map(toolbox.evaluate, invalid_ind)
+
+            for ind in offspring:
+                # assign placeholder to all so I can check them all at once
+                ind.fitness.values = PLACEHOLDER_FITNESS
+
+            GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
+            check_and_update_fitness(offspring)
+            log_failure_counts(gen, offspring)
+            GLOBAL_DATA_HIST.update(GLOBAL_DATA.copy())
+            # Replace the old population with the offspring
+            population[:] = (valid_detection_population(offspring)
+                             if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES else offspring)
+            if SEED_FAMILY in VALIDATED_FITNESS_FAMILIES:
+                population[:] = refill_detection_generation_population(
+                    population, population_size, llm_model, gen)
+            # Gather all the fitnesses in one list and print the stats
+            if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES or population:
+                print_scores(population, FITNESS_WEIGHTS)
+                hof.update(population)
+            else:
+                print(f'Generation {gen} has no valid {SEED_FAMILY} candidates; '
+                      'refill on resume/next generation', flush=True)
+            save_checkpoint(gen, folder_name=args.checkpoints, global_path=args.global_path)
+            write_run_status({'status': 'running', 'last_completed_generation': gen})
+            LINKED_GENES = {}
+            # mutate x prompts
+            # mutate_prompts()
+
+            if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES or population:
+                best_ind = (select_yolo26_by_accuracy(population, 1)[0]
+                            if SEED_FAMILY == 'yolo26_p2' else
+                            select_dfine_by_accuracy(population, 1)[0]
+                            if dfine_accuracy_policy() else tools.selBest(population, 1)[0])
+                print(f"Finished Generation {gen}")
+                print(f"Best Individual: {best_ind}")
+                print(f"Best Fitness: {best_ind.fitness.values}")
+
+        except ServerWindowClosed as exc:
+            if SEED_FAMILY not in VALIDATED_FITNESS_FAMILIES or not RUN_TAG:
+                raise
+            pause_incomplete_generation(gen, jobs_before)
+            print(f'paused_for_server_refresh during generation {gen}: {exc}', flush=True)
+            paused_for_server = True
+            break
+
     if not paused_for_server:
         write_run_status({'status': 'complete', 'last_completed_generation': num_generations - 1})
     print("-- Paused for server refresh --" if paused_for_server else "-- End of Era --")
