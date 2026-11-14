@@ -62,7 +62,21 @@ _FAMILIES = {
         "eval_timeout": 3 * 60 * 60 + 30 * 60,
         "train_file": os.path.join(FRED_DIR, "phase1_detection", "render_runner.py"),
     },
+    # YOLO11n plus its event-frame window (window_search_space.py): each
+    # candidate's frames are drawn at its window_us by window_runner.py.
+    "yolo11_window": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ultralytics_yolo11_window"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_yolo11n.yaml"),
+        "prompt_group": "FRED_YOLO11/Normal",
+        "rules": "templates/FRED_YOLO11/ConstantRules.txt",
+        "eval_timeout": 8 * 60 * 60,
+        "train_file": os.path.join(FRED_DIR, "phase1_detection", "window_runner.py"),
+    },
 }
+if SEED_FAMILY == "yolo11_window" and not RUN_TAG:
+    # Keeps its checkpoints and genes under fred_runs/<tag>/, apart from yolo11's.
+    raise ValueError("FRED_SEED_FAMILY=yolo11_window needs FRED_RUN_TAG, "
+                     "e.g. yolo11_window_20261109_eot0_trial1")
 # Renderer family only: every renderer draws frames from exactly this many
 # microseconds of events (e.g. 2000), so LLM-GE evolves only the encoding.
 # Unset lets each renderer choose its own WINDOW_US.
@@ -71,19 +85,24 @@ if RENDER_WINDOW_US:
     _FAMILIES["renderer"].update(prompt_group="FRED_RENDER_FIXED/Normal",
                                  rules="templates/FRED_RENDER_FIXED/ConstantRules.txt")
 _FAMILY = _FAMILIES[SEED_FAMILY]
-_RUN_NAME = {"dfine": "fred_dfine", "renderer": "fred_renderer"}.get(SEED_FAMILY, "fred_yolo11")
+_RUN_NAME = {"dfine": "fred_dfine", "renderer": "fred_renderer",
+             "yolo11_window": "fred_yolo11_window"}.get(SEED_FAMILY, "fred_yolo11")
 CANDIDATE_POLICY_MODULE = (
     "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space"
-    if SEED_FAMILY == "yolo11" else None
+    if SEED_FAMILY == "yolo11" else
+    "sota.FRED_LLM_GE.phase1_detection.window_search_space"
+    if SEED_FAMILY == "yolo11_window" else None
 )
 CROSSOVER_TEMPLATE_DIR = (
-    "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY == "yolo11"
+    "templates/FRED_YOLO11/CrossOver" if SEED_FAMILY in ("yolo11", "yolo11_window")
     else "templates/CrossOver"
 )
 # Event frames candidates train on: unset for FRED's released frames, or a tag
 # such as raw_w10000_polarity (phase1_detection/event_sweep.py). A tagged run
 # keeps its genes, results, outputs and checkpoints apart from the released run.
 FRED_EVENTS = os.getenv("FRED_EVENTS", "")
+if FRED_EVENTS and SEED_FAMILY == "yolo11_window":
+    raise ValueError("yolo11_window draws each candidate's frames at its own window; unset FRED_EVENTS")
 _RUN_SUFFIX = (f"_{FRED_EVENTS}" if FRED_EVENTS else
                f"_w{RENDER_WINDOW_US}" if RENDER_WINDOW_US else "")
 SOTA_ROOT = (os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else
@@ -104,6 +123,16 @@ if RENDER_WINDOW_US:
         os.makedirs(SOTA_ROOT, exist_ok=True)
         with open(SEED_NETWORK, "w") as _file:
             _file.write(_seed)
+if SEED_FAMILY == "yolo11_window":
+    # The YOLO11n seed with a window section (released frames' 33.3 ms) appended.
+    from sota.FRED_LLM_GE.phase1_detection.window_search_space import seed_gene_text
+    SEED_NETWORK = os.path.join(SOTA_ROOT, "seed_yolo11n_window.yaml")
+    if not os.path.isfile(SEED_NETWORK):
+        os.makedirs(SOTA_ROOT, exist_ok=True)
+        with open(_FAMILY["seed"]) as _file:
+            _seed = seed_gene_text(_file.read())
+        with open(SEED_NETWORK, "w") as _file:
+            _file.write(_seed)
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
 TRAIN_FILE = _FAMILY.get("train_file", os.path.join(FRED_DIR, "phase1_detection", "candidate_runner.py"))
@@ -116,7 +145,8 @@ PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
 CONSTANT_RULES_PATH = _FAMILY["rules"]
 
 OUTPUT_DIR = (os.path.join(RUN_ROOT, "operator_jobs") if RUN_ROOT else
-              os.path.join(ROOT_DIR, f"fred_renderer_output{_RUN_SUFFIX}") if SEED_FAMILY == "renderer" else
+              os.path.join(ROOT_DIR, f"{_RUN_NAME}_output{_RUN_SUFFIX}")
+              if SEED_FAMILY in ("renderer", "yolo11_window") else
               os.path.join(ROOT_DIR, "fred_dfine_output" if SEED_FAMILY == "dfine"
                            else "fred_yolo11_output"))
 SLURM_OUTPUT_PATH = os.path.join(ROOT_DIR, "run_job_outputs") + os.sep
@@ -167,10 +197,11 @@ EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
 # The generated candidate is named network_<gene_id>.py. The runner trains
 # and scores it and writes SOTA_ROOT/results/<gene_id>_results.csv.
 RUNLINE_TMP = "{}_{}"
-# A renderer gene draws its own frames, so it takes no family or --events.
+# A renderer or yolo11_window gene draws its own frames, so it takes no
+# family or --events.
 EVAL_RUNLINE = ((f"uv run python {{}} --sota_root {SOTA_ROOT} --model {{}} --variant_dir {{VARIANT_DIR}}"
                  + (f" --window_us {RENDER_WINDOW_US}" if RENDER_WINDOW_US else ""))
-                if SEED_FAMILY == "renderer" else
+                if SEED_FAMILY in ("renderer", "yolo11_window") else
                 (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
                  "--model {} --variant_dir {VARIANT_DIR}"
                  + (f" --events {FRED_EVENTS}" if FRED_EVENTS else "")))
@@ -197,8 +228,9 @@ NUM_EOT_ELITES = 1
 GENERATION = 0
 
 # CSV order expected by run_improved.py: mAP50, mAP50:95, parameter count
-# (for the renderer family: WINDOW_US, the microseconds of events per frame).
-FITNESS_WEIGHTS = (1.0, 1.0, -1.0)
+# (for the renderer family: WINDOW_US, the microseconds of events per frame;
+# yolo11_window adds window_us as a fourth, minimised objective).
+FITNESS_WEIGHTS = (1.0, 1.0, -1.0, -1.0) if SEED_FAMILY == "yolo11_window" else (1.0, 1.0, -1.0)
 INVALID_FITNESS_MAX = tuple(math.copysign(math.inf, -w) for w in FITNESS_WEIGHTS)
 PLACEHOLDER_FITNESS = tuple(int(-w * 9_999_999_999) for w in FITNESS_WEIGHTS)
 

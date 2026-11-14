@@ -8,6 +8,10 @@ from pathlib import Path
 
 import yaml
 
+# Families scored under another family's protocol.yaml entry, so adding them
+# leaves protocol.yaml (and every existing run's fingerprint) unchanged.
+PROTOCOL_FAMILY = {"yolo11_window": "yolo11"}
+
 
 def compute_fingerprint(root, family, run_tag, seed_path):
     root = Path(root)
@@ -15,7 +19,8 @@ def compute_fingerprint(root, family, run_tag, seed_path):
     protocol_path = fred_root / "configs" / "phase1" / "protocol.yaml"
     protocol = yaml.safe_load(protocol_path.read_text())
     files = {"protocol": protocol_path, "seed": Path(seed_path)}
-    if protocol["families"][family].get("data") == "challenging_search":
+    protocol_family = PROTOCOL_FAMILY.get(family, family)
+    if protocol["families"][protocol_family].get("data") == "challenging_search":
         data_root = fred_root / protocol["challenging"]["data_root"]
         search = protocol["challenging"]["search"]
         files.update({
@@ -29,7 +34,7 @@ def compute_fingerprint(root, family, run_tag, seed_path):
                             capture_output=True, text=True, check=True).stdout.strip()
     identity = {"files": file_hashes, "family": family, "run_tag": run_tag,
                 "git_commit": commit, "torch_version": importlib.metadata.version("torch")}
-    if family == "yolo11":
+    if protocol_family == "yolo11":
         identity["ultralytics_version"] = importlib.metadata.version("ultralytics")
     identity["sha256"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return identity
