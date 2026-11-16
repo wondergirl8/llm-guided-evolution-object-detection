@@ -43,6 +43,20 @@ def test_main_evaluates_once_with_requested_events(monkeypatch, tmp_path, events
                      else [{"source": "released"}])
 
 
+def test_main_trains_seed_file_override(monkeypatch, tmp_path):
+    protocol = {"proxy": {"seed": 0}, "families": {"rtdetr": {"seed_file": "seeds/seed_rtdetr.py"}}}
+    monkeypatch.setattr(candidate_runner, "load_protocol", lambda _: protocol)
+    calls = []
+    monkeypatch.setattr(candidate_runner, "run", lambda *args: calls.append(args[4]["families"]["rtdetr"]["seed_file"]))
+    monkeypatch.setattr(sys, "argv", ["candidate_runner.py", "--family", "rtdetr", "--model", "network",
+                                      "--device", "cuda", "--sota_root", str(tmp_path),
+                                      "--seed_file", "seeds/seed_rtdetr_nwzn.py"])
+
+    candidate_runner.main()
+
+    assert calls == ["seeds/seed_rtdetr_nwzn.py"]
+
+
 def _load_train_eval():
     spec = importlib.util.spec_from_file_location("legacy_train_eval", TRAIN_EVAL)
     module = importlib.util.module_from_spec(spec)

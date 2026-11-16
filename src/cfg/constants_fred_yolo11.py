@@ -68,6 +68,12 @@ _FAMILIES = {
     },
 }
 _FAMILY = _FAMILIES[SEED_FAMILY]
+# Optional seed file relative to FRED_DIR that replaces the family's seed, e.g.
+# seeds/seed_rtdetr_nwzn.py to start a search from an evolved model. Only the
+# rtdetr policy sizes candidates relative to it.
+FRED_SEED_FILE = os.getenv("FRED_SEED_FILE", "")
+if FRED_SEED_FILE and SEED_FAMILY != "rtdetr":
+    raise ValueError("FRED_SEED_FILE is supported only for FRED_SEED_FAMILY=rtdetr")
 CANDIDATE_POLICY_MODULE = {
     "yolo11": "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space",
     "rtdetr": "sota.FRED_LLM_GE.phase1_detection.rtdetr_search_space",
@@ -87,7 +93,7 @@ _RUN_SUFFIX = f"_{FRED_EVENTS}" if FRED_EVENTS else ""
 SOTA_ROOT = (os.path.join(RUN_ROOT, "candidates") if RUN_ROOT else
              _FAMILY["sota_root"] + _RUN_SUFFIX)
 DATA_PATH = os.path.join(FRED_DIR, "phase0_data")
-SEED_NETWORK = _FAMILY["seed"]
+SEED_NETWORK = os.path.join(FRED_DIR, FRED_SEED_FILE) if FRED_SEED_FILE else _FAMILY["seed"]
 MODEL = "network"
 VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
 TRAIN_FILE = os.path.join(FRED_DIR, "phase1_detection", "candidate_runner.py")
@@ -156,7 +162,8 @@ EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(
 RUNLINE_TMP = "{}_{}"
 EVAL_RUNLINE = (f"uv run python {{}} --family {SEED_FAMILY} --sota_root {SOTA_ROOT} "
                 "--model {} --variant_dir {VARIANT_DIR}"
-                + (f" --events {FRED_EVENTS}" if FRED_EVENTS else ""))
+                + (f" --events {FRED_EVENTS}" if FRED_EVENTS else "")
+                + (f" --seed_file {FRED_SEED_FILE}" if FRED_SEED_FILE else ""))
 
 SLURM_MIXT_INPUT_X = SEED_NETWORK
 SLURM_MIXT_INPUT_Y = os.path.join(VARIANT_DIR, "network_x.py")

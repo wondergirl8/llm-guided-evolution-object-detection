@@ -16,6 +16,7 @@ no-op mutations, while a parameter-free change to forward() still counts.
 import hashlib
 import importlib.util
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -33,7 +34,9 @@ __all__ = ["built_architecture", "differs_from_parents", "retry_prompt",
            "evaluation_cache_key", "write_cached_fitness"]
 
 FRED_DIR = Path(__file__).resolve().parents[1]
-SEED_PY = FRED_DIR / "seeds" / "seed_rtdetr.py"
+# FRED_SEED_FILE (see constants_fred_yolo11.py) starts a search from another seed;
+# size bounds are then relative to that seed.
+SEED_PY = FRED_DIR / os.getenv("FRED_SEED_FILE", "seeds/seed_rtdetr.py")
 PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 # Candidates may shrink to a quarter of the seed or grow to twice its size.
 MIN_PARAMS_RATIO, MAX_PARAMS_RATIO = 0.25, 2.0

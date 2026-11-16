@@ -1,3 +1,5 @@
+import importlib.util
+
 import pytest
 
 from src.candidate_policy import load_candidate_policy
@@ -67,6 +69,17 @@ def test_rtdetr_policy_rejects_protected_and_oversized_changes(tmp_path, monkeyp
     monkeypatch.setattr(policy, "MAX_PARAMS_RATIO", 0.5)
     with pytest.raises(ValueError, match="parameter count"):
         policy.built_architecture(policy.SEED_PY)
+
+
+def test_rtdetr_policy_sizes_candidates_relative_to_fred_seed_file(monkeypatch):
+    monkeypatch.setenv("FRED_SEED_FILE", "seeds/seed_rtdetr_nwzn.py")
+    spec = importlib.util.spec_from_file_location(f"{policy.__package__}.rtdetr_policy_nwzn", policy.__file__)
+    nwzn_policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nwzn_policy)
+    assert nwzn_policy.SEED_PY == policy.FRED_DIR / "seeds" / "seed_rtdetr_nwzn.py"
+    # The R18 seed is over twice the size of the evolved 6.2M-parameter seed.
+    with pytest.raises(ValueError, match="parameter count"):
+        nwzn_policy.built_architecture(policy.SEED_PY)
 
 
 def test_rtdetr_policy_retry_prompt_and_wiring():

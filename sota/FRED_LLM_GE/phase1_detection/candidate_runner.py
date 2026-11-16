@@ -253,6 +253,9 @@ def main():
     parser.add_argument("--events", type=str, default=None,
                         help='Event frames, e.g. "raw_w10000_polarity" (default: protocol\'s '
                              "challenging.events)")
+    parser.add_argument("--seed_file", type=str, default=None,
+                        help="Seed file relative to sota/FRED_LLM_GE (default: the family's "
+                             "protocol seed_file)")
     parser.add_argument("--sota_root", type=str, default=str(DEFAULT_SOTA_ROOT),
                         help="Where results/ and trained_models/ are written")
     parser.add_argument("--device", type=str,
@@ -280,6 +283,8 @@ def main():
         protocol["proxy"]["seed"] = args.seed
     if args.events:
         protocol["challenging"]["events"] = events_from_tag(args.events)
+    if args.seed_file:
+        protocol["families"][args.family]["seed_file"] = args.seed_file
     run(gene_id, args.model, args.variant_dir, args.family, protocol, args.sota_root, args.device)
 
 
