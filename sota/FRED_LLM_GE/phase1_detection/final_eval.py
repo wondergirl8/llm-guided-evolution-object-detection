@@ -24,6 +24,7 @@ import json
 import multiprocessing
 import os
 import shutil
+import statistics
 import sys
 import time
 import zipfile
@@ -115,20 +116,68 @@ def test_jobs(test, settings, report_dir, cache=None):
             for sequence, folder in test]
 
 
-def predict_test_split(adapter, model, test, settings, device, report_dir, workers=1, cache=None):
+class PredictTimer:
+    """Times every test batch's predict call, in ms per frame, for a latency record.
+
+    "predict" is the whole adapter.predict call with the GPU synchronized
+    before and after; "preprocess", "inference" and "postprocess" are the
+    stages Ultralytics times itself (also synchronized). Frames are predicted
+    in batches, so these are throughput times per frame, not the latency of a
+    single frame predicted alone. Reading frames from disk is not included.
+    """
+
+    WARMUP_BATCHES = 10  # the first batches include CUDA start-up
+
+    def __init__(self, model, device):
+        self.sync = torch.cuda.synchronize if str(device).startswith("cuda") else lambda: None
+        self.gpu = torch.cuda.get_device_name(0) if str(device).startswith("cuda") else "cpu"
+        self.batches, self.stages = [], {}
+        predict = getattr(model, "predict", None)
+        if predict:
+            def recording(*args, **kwargs):
+                results = predict(*args, **kwargs)
+                self.stages = dict(results[0].speed) if results else {}
+                return results
+            model.predict = recording
+
+    def __call__(self, adapter, model, images, settings, device):
+        self.sync()
+        start = time.perf_counter()
+        out = adapter.predict(model, images, settings, device)
+        self.sync()
+        self.batches.append({"predict": (time.perf_counter() - start) * 1000 / len(images),
+                             **self.stages})
+        return out
+
+    def summary(self, batch_size):
+        timed = self.batches[self.WARMUP_BATCHES:] or self.batches
+        stages = {}
+        for stage in sorted({key for batch in timed for key in batch}):
+            values = [batch[stage] for batch in timed if stage in batch]
+            stages[stage] = {"mean": statistics.mean(values), "median": statistics.median(values),
+                             "sd": statistics.stdev(values) if len(values) > 1 else 0.0}
+        return {"unit": "ms per frame", "ms_per_frame": stages, "batch_size": batch_size,
+                "batches": len(timed), "warmup_batches_skipped": len(self.batches) - len(timed),
+                "gpu": self.gpu, "node": os.environ.get("SLURMD_NODENAME", os.uname().nodename)}
+
+
+def predict_test_split(adapter, model, test, settings, device, report_dir, workers=1, cache=None,
+                       timer=None):
     """Read every test frame, predict in batches, pair with ground truth.
 
     With workers > 1, sequences are downloaded and rendered by that many
     processes (raw-event rendering is single-core, ~15 min a sequence) while
     the GPU predicts; workers=1 reads them in this process. With cache
     (test_cache_dir), sequences rendered earlier are read from disk instead.
+    A PredictTimer passed as timer records each batch's predict time.
     """
     frames, expected = [], []
     batch, pending = [], []
 
     def flush():
+        predict = timer or (lambda *call: adapter.predict(*call[1:]))
         for (sample_id, target, size), (boxes, scores) in zip(
-                pending, adapter.predict(model, torch.stack(batch), settings, device)):
+                pending, predict(adapter, model, torch.stack(batch), settings, device)):
             width, height = size
             kept = [([max(0.0, x1), max(0.0, y1), min(width, x2), min(height, y2)], min(1.0, s))
                     for (x1, y1, x2, y2), s in zip(boxes.tolist(), scores.tolist())]
@@ -272,8 +321,13 @@ def main():
                 "nms_iou": proxy["nms_iou"], "batch_size": final["batch_size"],
                 "test_frame_step": final["test_frame_step"]}
     cache = test_cache_dir(data_root, events, final["test_frame_step"]) if args.test_cache else None
+    timer = PredictTimer(model, args.device)
     frames, expected = predict_test_split(adapter, model, test, settings, args.device, out,
-                                          args.test_workers, cache)
+                                          args.test_workers, cache, timer)
+    timing = timer.summary(settings["batch_size"])
+    (out / "test_timing.json").write_text(json.dumps(timing, indent=2) + "\n")
+    print(f"predict time on {timing['gpu']} ({timing['node']}), ms per frame: " + ", ".join(
+        f"{stage} {times['mean']:.2f}" for stage, times in timing["ms_per_frame"].items()), flush=True)
     if args.save_predictions:
         with gzip.open(out / "test_predictions.json.gz", "wt") as file:
             json.dump(frames, file)

@@ -138,6 +138,60 @@ def test_cached_test_frames_are_rendered_once_and_read_back_unchanged(monkeypatc
                                       tmp_path, cache=cache)
 
 
+def test_predict_timer_does_not_change_predictions(monkeypatch):
+    from sota.FRED_LLM_GE.phase1_detection import final_eval
+
+    step_us = final_eval.STEP_US
+    frames = [(Image.new("RGB", (80, 40)), i * step_us / 1_000_000) for i in (1, 2, 3)]
+    monkeypatch.setattr(final_eval, "sequence_frames", lambda *a, **k: iter(frames))
+    monkeypatch.setattr(final_eval, "load_annotations", lambda folder, seq, w, h: {})
+
+    class Result:
+        speed = {"preprocess": 1.0, "inference": 4.0, "postprocess": 0.5}
+
+    class Model:
+        def predict(self, batch):
+            return [Result() for _ in batch]
+
+    class Adapter:
+        def predict(self, model, images, settings, device):
+            model.predict(images)
+            return [(torch.tensor([[1.0, 1.0, 9.0, 9.0]]), torch.tensor([0.9])) for _ in images]
+
+    settings = {"batch_size": 2, "test_frame_step": 1}
+    path = __import__("pathlib").Path("/tmp")
+    plain = final_eval.predict_test_split(Adapter(), Model(), [("9", "test")], settings, "cpu", path)
+    model = Model()
+    timed = final_eval.predict_test_split(Adapter(), model, [("9", "test")], settings, "cpu", path,
+                                          timer=final_eval.PredictTimer(model, "cpu"))
+    assert timed == plain
+
+
+def test_predict_timer_reads_the_stage_times_ultralytics_reports():
+    from sota.FRED_LLM_GE.phase1_detection import final_eval
+
+    class Result:
+        speed = {"preprocess": 1.0, "inference": 4.0, "postprocess": 0.5}
+
+    class Model:
+        def predict(self, batch):
+            return [Result() for _ in batch]
+
+    class Adapter:
+        def predict(self, model, images, settings, device):
+            model.predict(images)
+            return [None for _ in images]
+
+    model = Model()
+    timer = final_eval.PredictTimer(model, "cpu")
+    for _ in range(final_eval.PredictTimer.WARMUP_BATCHES + 3):
+        timer(Adapter(), model, torch.zeros(2, 3, 4, 4), {}, "cpu")
+    summary = timer.summary(2)
+    assert summary["batches"] == 3 and summary["warmup_batches_skipped"] == timer.WARMUP_BATCHES
+    assert summary["ms_per_frame"]["inference"] == {"mean": 4.0, "median": 4.0, "sd": 0.0}
+    assert set(summary["ms_per_frame"]) == {"predict", "preprocess", "inference", "postprocess"}
+
+
 def test_search_set_holds_out_val_sequences(monkeypatch, tmp_path):
     train = [("4", "train"), ("5", "test"), ("14", "train"), ("20", "train")]
     monkeypatch.setattr(export_split, "challenging_split", lambda _: (train, []))
