@@ -30,6 +30,7 @@ if __package__:
     from . import map_reporter
     from .adapters.dfine import DFINEAdapter
     from .adapters.rtdetr import RTDETRAdapter
+    from .adapters.faster_rcnn_scratch import FasterRCNNScratchAdapter
     from .adapters.tiny_yolo11 import TinyYolo11Adapter
     from .adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from .export_split import dataset_parts, events_from_tag
@@ -42,6 +43,7 @@ else:
     from sota.FRED_LLM_GE.phase1_detection import map_reporter
     from sota.FRED_LLM_GE.phase1_detection.adapters.dfine import DFINEAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.rtdetr import RTDETRAdapter
+    from sota.FRED_LLM_GE.phase1_detection.adapters.faster_rcnn_scratch import FasterRCNNScratchAdapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.tiny_yolo11 import TinyYolo11Adapter
     from sota.FRED_LLM_GE.phase1_detection.adapters.ultralytics_yolo11 import UltralyticsYolo11Adapter
     from sota.FRED_LLM_GE.phase1_detection.export_split import dataset_parts, events_from_tag
@@ -52,7 +54,8 @@ FRED_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL = FRED_DIR / "configs" / "phase1" / "protocol.yaml"
 DEFAULT_SOTA_ROOT = FRED_DIR / "phase1_detection" / "seeds" / "yolo11"
 ADAPTERS = {adapter.name: adapter for adapter in
-            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter, RTDETRAdapter)}
+            (TinyYolo11Adapter, UltralyticsYolo11Adapter, DFINEAdapter,
+             RTDETRAdapter, FasterRCNNScratchAdapter)}
 
 # Excluded by the orchestrator's INVALID_FITNESS_MAX filter.
 FAILED_RESULT = DetectionResult(-math.inf, -math.inf, math.inf)
@@ -161,6 +164,11 @@ def challenging_search(protocol, family=None):
     data_root = FRED_DIR / challenging["data_root"]
     (train_root, train, train_step), (val_root, val, val_step) = dataset_parts(
         challenging, data_root, "search")
+    if family == "faster_rcnn_scratch":
+        if (len(train), len(val), train_step, val_step) != (152, 20, 50, 10):
+            raise ValueError("Faster R-CNN requires the frozen 152/20 challenging search split")
+        if challenging.get("events", {}).get("source") != "released":
+            raise ValueError("This Faster R-CNN study uses released event frames")
     data_yaml = train_root / "data.yaml"
     if not data_yaml.is_file():
         raise FileNotFoundError(f"{data_yaml} missing: run export_split.py --set search "
@@ -168,30 +176,63 @@ def challenging_search(protocol, family=None):
     proxy = dict(protocol["proxy"], train_sequences=[s for s, _ in train],
                  val_sequences=[s for s, _ in val], frame_step=train_step,
                  val_frame_step=val_step, epochs=challenging["search"]["epochs"])
-    if family in ("dfine", "rtdetr"):
-        train_data = load_exported_split(train_root, train)
+    if family in ("dfine", "rtdetr", "faster_rcnn_scratch"):
+        train_data = (load_exported_split(train_root, train, expected_step=train_step)
+                      if family == "faster_rcnn_scratch" else load_exported_split(train_root, train))
     else:
         frames = len((train_root / "train.txt").read_text().split())
         train_data = {"data_yaml": data_yaml, "frames": frames}
-    return proxy, train_data, lambda: load_exported_split(
-        val_root, val)
+    return proxy, train_data, lambda: (load_exported_split(val_root, val, expected_step=val_step)
+        if family == "faster_rcnn_scratch" else load_exported_split(val_root, val))
+
+
+def family_protocol(protocol, family):
+    """Resolve a family's fixed budget without changing another family's recipe."""
+    if family != "faster_rcnn_scratch":
+        return protocol
+    import copy
+    protocol = copy.deepcopy(protocol)
+    settings = protocol["families"][family]["search"]
+    seed = protocol["proxy"]["seed"]
+    protocol["proxy"].update({k: v for k, v in settings.items() if k != "epochs"})
+    protocol["proxy"]["seed"] = seed
+    protocol["challenging"]["search"]["epochs"] = settings["epochs"]
+    return protocol
 
 
 def run(gene_id, model_name, variant_dir, family, protocol, sota_root, device):
     start_time = time.time()
     try:
+        protocol = family_protocol(protocol, family)
         adapter = ADAPTERS[family](protocol["families"][family], FRED_DIR)
+        if family == "faster_rcnn_scratch":
+            import copy
+            # CLI seed overrides remain valid for independent baseline seeds.
+            adapter.settings = copy.deepcopy(adapter.settings)
+            adapter.settings["search"]["seed"] = protocol["proxy"]["seed"]
         if adapter.settings.get("data") == "challenging_search":
             proxy, train_data, load_val = challenging_search(protocol, family)
         else:
             proxy = protocol["proxy"]
             train_data = load_val = None
         torch.manual_seed(proxy["seed"])
+        if family == "faster_rcnn_scratch":
+            import random
+            import numpy as np
+            random.seed(proxy["seed"])
+            np.random.seed(proxy["seed"])
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(proxy["seed"])
         config = {"family": family, "proxy": proxy, "family_settings": adapter.settings}
 
         # Build and prepare the candidate before starting expensive training.
         variant_path = adapter.variant_path(model_name, variant_dir)
         model = adapter.build(variant_path, num_classes=1, device=device)
+        if family == "faster_rcnn_scratch":
+            details = Path(sota_root) / "training_args" / gene_id
+            details.mkdir(parents=True, exist_ok=True)
+            (details / "args.json").write_text(json.dumps(
+                {**config, "initialization": adapter.initialization}, indent=2, sort_keys=True))
         param_count = adapter.param_count(model)
         if load_val is None:
             train_data, val_data = proxy_data(proxy)

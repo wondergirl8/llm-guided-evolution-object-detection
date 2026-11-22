@@ -1,0 +1,69 @@
+{
+  "cutoff_generation": 8,
+  "successful_unique_candidates": 56,
+  "checkpoint": "/storage/ice1/3/8/mgrushina3/llm-guided-evolution-object-detection/fred_runs/faster_rcnn_scratch_20261115_eot0_v2_1280procedure/checkpoints/global_gen_8.pkl",
+  "checkpoint_sha256": "65448231159c30af4b61638f00dc15cb30f85fe29d81442fb498e73194d36430",
+  "objectives": {
+    "params": "minimize",
+    "mAP50": "maximize",
+    "mAP50_95": "maximize"
+  },
+  "front": [
+    {
+      "gene_id": "g02_slot0_p01",
+      "mAP50": 0.8346788376368612,
+      "mAP50_95": 0.41236977937192804,
+      "params": 28216139,
+      "generation": 2
+    },
+    {
+      "gene_id": "g06_slot4_p01",
+      "mAP50": 0.8406109705448349,
+      "mAP50_95": 0.40811181113690354,
+      "params": 28217429,
+      "generation": 6
+    },
+    {
+      "gene_id": "g06_slot3_p01",
+      "mAP50": 0.8423010300260559,
+      "mAP50_95": 0.41439332391399536,
+      "params": 28365013,
+      "generation": 6
+    },
+    {
+      "gene_id": "g05_slot4_p01",
+      "mAP50": 0.8508911053325305,
+      "mAP50_95": 0.42789081355376557,
+      "params": 28957013,
+      "generation": 5
+    },
+    {
+      "gene_id": "g00_slot1_p01",
+      "mAP50": 0.851558608296158,
+      "mAP50_95": 0.42779843432844217,
+      "params": 32368725,
+      "generation": 0
+    },
+    {
+      "gene_id": "g05_slot0_p01",
+      "mAP50": 0.8549200735716749,
+      "mAP50_95": 0.4203863446278942,
+      "params": 38000725,
+      "generation": 5
+    },
+    {
+      "gene_id": "g05_slot5_p01",
+      "mAP50": 0.8546082275458511,
+      "mAP50_95": 0.4248172166374883,
+      "params": 41198805,
+      "generation": 5
+    },
+    {
+      "gene_id": "g08_slot0_p01",
+      "mAP50": 0.8581180127202312,
+      "mAP50_95": 0.43382153893550435,
+      "params": 41938261,
+      "generation": 8
+    }
+  ]
+}

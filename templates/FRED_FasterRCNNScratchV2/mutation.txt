@@ -1,0 +1,5 @@
+Improve the {group} class of a randomly initialized Faster R-CNN for tiny drones in released FRED event frames.
+Candidates train independently for 20 epochs; favor validation mAP50:95 and mAP50 while considering model size.
+Current values: {current}
+Return one complete replacement class named {group} in one Python code block. Change at least one legal value.
+Use the exact attribute name `values`, never `genes`. Return only the code block, without analysis or explanation.

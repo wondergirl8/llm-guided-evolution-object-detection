@@ -1,0 +1,6 @@
+Combine two Faster R-CNN {group} classes for tiny-drone detection.
+Parent 1 values: {current}
+Parent 2 values: {other}
+Return one complete replacement class named {group} in one Python code block.
+Favor validation mAP50:95, mAP50 and compactness. The child must differ from both complete parents and must be globally unseen.
+Use the exact attribute name `values`, never `genes`. Return only the code block, without analysis or explanation.

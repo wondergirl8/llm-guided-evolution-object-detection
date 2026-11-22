@@ -72,11 +72,13 @@ def test_defaults_do_not_change_yolo_configuration(monkeypatch):
     monkeypatch.setenv("LLMGE_DETECTOR", "faster_rcnn")
     importlib.reload(constants)
     assert constants.num_generations == 3
-    assert constants.start_population_size == 4
+    from src.cfg import constants_fred_yolo11 as shared
+    assert constants.start_population_size == shared.start_population_size
     assert "faster_rcnn" in constants.TRAIN_FILE
     monkeypatch.setenv("LLMGE_DETECTOR", "yolo11")
     importlib.reload(constants)
-    assert "yolo11" in constants.TRAIN_FILE
+    assert constants.SEED_FAMILY == "yolo11"
+    assert constants.TRAIN_FILE.endswith("candidate_runner.py")
 
 
 def test_yolo_uses_shared_data_loader_without_redefining_it():
@@ -127,5 +129,8 @@ def test_invalid_candidate_records_failure_before_execution(tmp_path, monkeypatc
     status = json.loads((tmp_path / 'reports/broken/status.json').read_text())
     assert status['status'] == 'failed'
     assert status['stage'] == 'candidate_validation'
-    assert (tmp_path / 'results/broken_results.csv').read_text().strip() == '0.000000,0.000000,999999999'
+    import csv
+    with (tmp_path / 'results/broken_results.csv').open() as handle:
+        row = next(csv.reader(handle))
+    assert list(map(float, row[:3])) == [0.0, 0.0, 999999999.0]
     assert not (tmp_path / 'trained_models').exists()

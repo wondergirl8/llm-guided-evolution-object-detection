@@ -19,7 +19,7 @@ import re
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FRED_DIR = os.path.join(ROOT_DIR, "sota", "FRED_LLM_GE")
-SEED_FAMILY = os.getenv("FRED_SEED_FAMILY", "yolo11")
+SEED_FAMILY = globals().get("_FAMILY_OVERRIDE") or os.getenv("FRED_SEED_FAMILY", "yolo11")
 RUN_TAG = os.getenv("FRED_RUN_TAG", "")
 if RUN_TAG and not re.fullmatch(
     rf"{re.escape(SEED_FAMILY)}_[0-9]{{8}}_eot[01]_[a-z0-9][a-z0-9_-]*", RUN_TAG
@@ -31,6 +31,13 @@ if RUN_TAG and not re.fullmatch(
 RUN_ROOT = os.path.join(ROOT_DIR, "fred_runs", RUN_TAG) if RUN_TAG else None
 RUN_CHECKPOINT_DIR = os.path.join(RUN_ROOT, "checkpoints") if RUN_ROOT else None
 _FAMILIES = {
+    "faster_rcnn_scratch": {
+        "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "faster_rcnn_scratch"),
+        "seed": os.path.join(FRED_DIR, "seeds", "seed_faster_rcnn_scratch.py"),
+        "prompt_group": "FRED_FasterRCNNScratch/Normal",
+        "rules": "templates/FRED_FasterRCNNScratch/ConstantRules.txt",
+        "eval_timeout": 8 * 60 * 60,
+    },
     # SOTA_ROOT holds models/, results/ and trained_models/ for the family.
     "yolo11": {
         "sota_root": os.path.join(FRED_DIR, "phase1_detection", "seeds", "ultralytics_yolo11"),
@@ -71,10 +78,12 @@ _FAMILY = _FAMILIES[SEED_FAMILY]
 CANDIDATE_POLICY_MODULE = {
     "yolo11": "sota.FRED_LLM_GE.phase1_detection.yolo11_search_space",
     "rtdetr": "sota.FRED_LLM_GE.phase1_detection.rtdetr_search_space",
+    "faster_rcnn_scratch": "sota.FRED_LLM_GE.phase1_detection.faster_rcnn_search_space",
 }.get(SEED_FAMILY)
 CROSSOVER_TEMPLATE_DIR = {
     "yolo11": "templates/FRED_YOLO11/CrossOver",
     "rtdetr": "templates/FRED_RTDETR/CrossOver",
+    "faster_rcnn_scratch": "templates/FRED_FasterRCNNScratch/CrossOver",
 }.get(SEED_FAMILY, "templates/CrossOver")
 # LLM sampling for created and mutated genes; None keeps run_improved.py's defaults.
 MUTATION_TEMPERATURE = _FAMILY.get("mutation_temperature")

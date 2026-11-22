@@ -131,6 +131,16 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
 
     # Architecture policies need every complete proposal, not just the first
     # fenced block selected by the legacy extractor below.
+    if globals().get("SEED_FAMILY") == "faster_rcnn_scratch":
+        import json
+        import uuid
+        from pathlib import Path
+        trace = Path(OUTPUT_DIR) / "prompt_traces"
+        trace.mkdir(parents=True, exist_ok=True)
+        (trace / f"{uuid.uuid4().hex}.json").write_text(json.dumps({
+            "prompt": txt2llm, "response": code_from_llm,
+            "section": augment_idx, "model": llm_model,
+            "top_p": top_p, "temperature": temperature}, indent=2))
     if return_raw:
         return code_from_llm
 

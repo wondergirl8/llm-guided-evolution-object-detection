@@ -125,7 +125,7 @@ class LazyImages:
         return torch.stack(frames)
 
 
-def load_exported_split(root, sequences):
+def load_exported_split(root, sequences, expected_step=None):
     """Frames written by export_split.py for these sequences, in the load_split format.
 
     Images stay on disk (LazyImages); boxes are the exact pixel boxes recorded
@@ -140,10 +140,18 @@ def load_exported_split(root, sequences):
         if not done.is_file():
             raise FileNotFoundError(f"{done} missing: run export_split.py --set search")
         marker = json.loads(done.read_text())
+        if expected_step is not None and (
+                str(marker.get("sequence")) != str(sequence)
+                or marker.get("hf_folder") != folder
+                or marker.get("frame_step") != expected_step
+                or marker.get("frames") != len(marker.get("records", []))):
+            raise ValueError(f"Export marker identity differs from requested data: {done}")
         size = size or tuple(marker["size"])
         if tuple(marker["size"]) != size:
             raise ValueError(f"sequence {sequence} has frame size {marker['size']}, not {size}")
         for record in marker["records"]:
+            if expected_step is not None and not (root / "images" / f"{record['name']}.png").is_file():
+                raise FileNotFoundError(f"Missing exported frame: {record['name']}")
             paths.append(root / "images" / f"{record['name']}.png")
             boxes.append(torch.tensor(record["boxes"], dtype=torch.float32).reshape(-1, 4))
             sample_ids.append(f"{folder}/{sequence}:{record['frame_index']}")

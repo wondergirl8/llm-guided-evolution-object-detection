@@ -91,6 +91,7 @@ fred_faster_rcnn_scratch_checkpoints/
 fred_faster_rcnn_scratch_output/
 fred_faster_rcnn_scratch_global_data/
 fred_faster_rcnn_scratch_hostname.log
+/fred_runs/
 sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/reports/
 sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/trained_models/
 sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/results/

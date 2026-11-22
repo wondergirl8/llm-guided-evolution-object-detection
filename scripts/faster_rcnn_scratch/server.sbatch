@@ -8,6 +8,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --output=run_job_outputs/server/frcnn-scratch-server-%j.out
 set -euo pipefail; cd "$SLURM_SUBMIT_DIR"; module load cuda; module load uv
-export LLMGE_DETECTOR=faster_rcnn_scratch CUDA_VISIBLE_DEVICES=0,1 SERVER_HOSTNAME="$(hostname)" UV_CACHE_DIR="${TMPDIR:-/tmp}/uv-cache-${SLURM_JOB_ID}"
-mkdir -p "$UV_CACHE_DIR"; printf '%s\n' "$SERVER_HOSTNAME" > fred_faster_rcnn_scratch_hostname.log
+export LLMGE_DETECTOR=faster_rcnn_scratch FRED_SEED_FAMILY=faster_rcnn_scratch SERVER_HOSTNAME="$(hostname)" UV_CACHE_DIR="${TMPDIR:-/tmp}/uv-cache-${SLURM_JOB_ID}"
+: "${FRED_RUN_TAG:?Set the Faster R-CNN run tag}"
+mkdir -p "$UV_CACHE_DIR" "fred_runs/$FRED_RUN_TAG"; printf '%s\n' "$SERVER_HOSTNAME" > "fred_runs/$FRED_RUN_TAG/hostname.log"
 exec uv run python -m uvicorn server:app --host "$SERVER_HOSTNAME" --port "${LLMGE_PORT:-8295}" --workers 1
