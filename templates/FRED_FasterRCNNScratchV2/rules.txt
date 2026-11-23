@@ -1,0 +1,5 @@
+Use only the existing class name and a single literal values dictionary with exactly the class's approved keys.
+No imports, methods, inheritance, decorators, function calls, extra fields, or I/O.
+InputGenes.img_width is restricted to 640, 960, or 1280; width is not FPN channel count.
+Keep ResNet-50 architecture, data, losses, random initialization, optimizer, and evaluator protected.
+Never access test labels or load pretrained or parent weights. Do not repeat an earlier architecture/resolution combination.

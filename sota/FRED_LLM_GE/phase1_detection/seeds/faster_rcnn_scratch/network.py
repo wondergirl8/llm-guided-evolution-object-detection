@@ -18,6 +18,9 @@ def build_config(genes):
     from mmengine.config import Config
     cfg = Config.fromfile(str(Path(mmdet.__file__).parent / ".mim/configs/_base_/models/faster-rcnn_r50_fpn.py")).model
     _remove_init_cfg(cfg)
+    cfg.backbone.frozen_stages = -1
+    cfg.backbone.norm_eval = True
+    cfg.backbone.norm_cfg.requires_grad = True
     cfg.data_preprocessor.bgr_to_rgb = False
     width = genes["fpn_channels"]
     cfg.neck.out_channels = width

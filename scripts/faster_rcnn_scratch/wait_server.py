@@ -1,6 +1,6 @@
 from pathlib import Path
 import os,time,urllib.request
-path=Path("fred_faster_rcnn_scratch_hostname.log")
+path=Path("fred_runs")/os.environ["FRED_RUN_TAG"]/"hostname.log"
 for _ in range(360):
     try:
         host=path.read_text().strip()

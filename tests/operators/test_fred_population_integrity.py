@@ -204,13 +204,33 @@ def test_gpu_unavailable_retry_limit_records_failure(tmp_path, monkeypatch):
     assert 'after 2 GPU retries' in evolution.GLOBAL_DATA['seed']['failure_reason']
 
 
-@pytest.mark.parametrize('remaining', ['00:30:00', '30:00'])
-def test_server_window_stops_before_allocation_expires(monkeypatch, remaining):
+@pytest.mark.parametrize(('remaining', 'seconds'), [
+    ('00:30:00', 1800), ('30:00', 1800), ('59:50', 3590), ('00:00', 0),
+])
+def test_server_window_stops_before_allocation_expires(monkeypatch, remaining, seconds):
     monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
     monkeypatch.setenv('LLMGE_MIN_SERVER_REMAINING_SECONDS', '3600')
     monkeypatch.setattr(evolution.subprocess, 'run', lambda *_args, **_kwargs:
-                        SimpleNamespace(returncode=0, stdout=f'{remaining}\n', stderr=''))
-    with pytest.raises(evolution.ServerWindowClosed, match='1800s left'):
+                        SimpleNamespace(returncode=0, stdout=remaining + '\n', stderr=''))
+    with pytest.raises(evolution.ServerWindowClosed, match=f'{seconds}s left'):
+        evolution.check_server_window()
+
+
+@pytest.mark.parametrize('remaining', ['60:00', '01:00:00', '08:00:00', '1-00:00:00'])
+def test_server_window_accepts_sufficient_remaining_time(monkeypatch, remaining):
+    monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
+    monkeypatch.setenv('LLMGE_MIN_SERVER_REMAINING_SECONDS', '3600')
+    monkeypatch.setattr(evolution.subprocess, 'run', lambda *_args, **_kwargs:
+                        SimpleNamespace(returncode=0, stdout=remaining + '\n', stderr=''))
+    evolution.check_server_window()
+
+
+@pytest.mark.parametrize('remaining', ['INVALID', 'UNLIMITED', '59', 'aa:50', '1:2:3:4'])
+def test_server_window_rejects_unrecognized_remaining_time(monkeypatch, remaining):
+    monkeypatch.setenv('LLMGE_SERVER_JOB_ID', '123')
+    monkeypatch.setattr(evolution.subprocess, 'run', lambda *_args, **_kwargs:
+                        SimpleNamespace(returncode=0, stdout=remaining + '\n', stderr=''))
+    with pytest.raises(RuntimeError, match='Unrecognized server time'):
         evolution.check_server_window()
 
 

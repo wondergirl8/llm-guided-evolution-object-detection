@@ -640,6 +640,9 @@ def candidate_preflight(gene_id, policy):
     key = policy.evaluation_cache_key(architecture_hash, run_fingerprint())
     GLOBAL_DATA[gene_id].update(architecture_hash=architecture_hash,
                                 architecture_params=params, evaluation_cache_key=key)
+    if gene_id == 'seed' and hasattr(policy, 'seed_baseline') and key not in EVAL_CACHE:
+        fitness = policy.seed_baseline(SOTA_ROOT, run_fingerprint())
+        EVAL_CACHE[key] = {'fitness': fitness, 'gene_id': 'baseline_seed_0'}
     hit = EVAL_CACHE.get(key)
     if hit:
         fitness = tuple(hit['fitness'])
@@ -1495,6 +1498,9 @@ if __name__ == "__main__":
         print("Error in Island Generation: No LLM specified. Exiting script")
         exit(1)
 
+    policy = load_candidate_policy(globals())
+    if policy is not None and hasattr(policy, 'validate_run'):
+        policy.validate_run(SOTA_ROOT, run_fingerprint())
     population_data, start_gen, global_data = load_checkpoint(folder_name=args.checkpoints, global_path=args.global_path)
     if population_data:
         box_print("CHECKPOINT LOADED")

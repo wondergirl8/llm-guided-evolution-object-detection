@@ -72,10 +72,27 @@ def synthetic_data():
             "orig_size": (192, 128), "sample_ids": ["synthetic:0", "synthetic:1"]}
 
 
-def train(model, data, args):
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=0.0001)
+def train(model, data, args, *, resume_state=None, on_epoch=None,
+          progress_callback=None, should_stop=None):
+    if progress_callback is not None:
+        from sota.FRED_LLM_GE.phase2.faster_rcnn_scratch.v2.training import train as batch_train
+        return batch_train(model, data, args, resume_state=resume_state,
+                           progress_callback=progress_callback,
+                           should_stop=should_stop or (lambda: False))
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
+                                momentum=getattr(args, "momentum", 0.9),
+                                weight_decay=getattr(args, "weight_decay", 0.0001))
+    first_epoch = 0
+    if resume_state is not None:
+        first_epoch = resume_state["completed_epochs"]
+        if not 0 <= first_epoch <= args.epochs:
+            raise ValueError("Invalid completed-epoch count in training checkpoint")
+        optimizer.load_state_dict(resume_state["optimizer"])
+        torch.set_rng_state(resume_state["cpu_rng"])
+        if torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(resume_state["cuda_rng"])
     model.train()
-    for epoch in range(args.epochs):
+    for epoch in range(first_epoch, args.epochs):
         order = torch.randperm(len(data["images"])).tolist()
         for start in range(0, len(order), args.batch_size):
             batch = prepare_batch(model, data, order[start:start + args.batch_size], True)
@@ -89,6 +106,8 @@ def train(model, data, args):
                 raise ValueError("Non-finite gradients")
             optimizer.step()
         print(f"epoch {epoch + 1}/{args.epochs}: final batch loss={loss.item():.5f}", flush=True)
+        if on_epoch is not None:
+            on_epoch(epoch + 1, optimizer)
 
 
 def predict_frames(model, data, batch_size):

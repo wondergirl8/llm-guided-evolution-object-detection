@@ -42,6 +42,8 @@ def test_official_parser():
     from sota.FRED_LLM_GE.phase1_detection.seeds.faster_rcnn_scratch.official_split import parse_official_split
     assert parse_official_split("9/\n10/\n")==["9","10"]
     with pytest.raises(ValueError): parse_official_split("test/9/\n")
-def test_final_contract_source():
-    source=Path("sota/FRED_LLM_GE/phase1_detection/seeds/faster_rcnn_scratch/finalize.py").read_text()
-    assert 'mode="held-out"' in source and "winner_selection.json" in source and 'TRAIN_SEQUENCES+","+VAL_SEQUENCES' in source
+def test_final_checkpoint_provenance():
+    from sota.FRED_LLM_GE.phase1_detection.seeds.faster_rcnn_scratch.finalize import checkpoint_matches
+    checkpoint_matches({"provenance": {"seed": 0, "epochs": 20}}, {"seed": 0, "epochs": 20})
+    with pytest.raises(ValueError):
+        checkpoint_matches({"provenance": {"seed": 0, "epochs": 3}}, {"seed": 0, "epochs": 20})

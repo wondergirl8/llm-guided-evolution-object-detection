@@ -105,6 +105,8 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
                         raise  # Missing model packages are environment failures.
                     except Exception as exc:
                         previous_error = f'invalid_architecture: {exc}'
+                        if hasattr(policy, 'record_rejection'):
+                            policy.record_rejection(output_file, previous_error)
                 print(f"Mutation attempt {attempt + 1}, YAML block {block_idx}: "
                       f"{previous_error}", flush=True)
             else:

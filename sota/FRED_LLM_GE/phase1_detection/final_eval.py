@@ -1,4 +1,8 @@
-"""Train a YOLO11 or RT-DETR model on FRED challenging_train and score it once on challenging_test.
+"""Final retraining and official challenging-test evaluation.
+
+Faster R-CNN uses an approved, frozen V2 final task (including its seed):
+    python final_eval.py --family faster_rcnn_scratch --run <run> --task <final_task>
+Its resumable MMDetection backend is taken from that run's immutable code snapshot.
 
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name yolo11n_scratch
     uv run python sota/FRED_LLM_GE/phase1_detection/final_eval.py --name best_evolved \\
@@ -24,7 +28,89 @@ import json
 import os
 import shutil
 import time
+import sys
 from pathlib import Path
+
+
+def faster_rcnn_command(run, task_id):
+    """Validate a frozen final task; never allow this entry point to test search models."""
+    import re
+    run = Path(run).resolve()
+    if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', task_id):
+        raise ValueError('Invalid final task ID')
+    directory = (run / 'tasks' / task_id).resolve()
+    if directory.parent != (run / 'tasks').resolve():
+        raise ValueError('Final task escapes the run directory')
+    if (run / 'STOP').exists():
+        raise ValueError('Run was explicitly stopped')
+    state = json.loads((run / 'state.json').read_text())
+    task = json.loads((directory / 'task.json').read_text())
+    protocol = json.loads((run / 'protocol.json').read_text())
+    generation = 20
+    if protocol.get('experiment') == 'final_only':
+        authorization = json.loads((run / 'authorization.json').read_text())
+        digest = hashlib.sha256(json.dumps(protocol, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        if (authorization.get('type') != 'final_only_after_search_cutoff'
+                or authorization.get('protocol_sha256') != digest
+                or authorization.get('selection_generation') != protocol.get('selection_generation')
+                or authorization.get('final_epochs') != protocol.get('final_epochs')
+                or authorization.get('final_seeds') != protocol.get('final_seeds')):
+            raise ValueError('Explicit final-only authorization differs from frozen protocol')
+        generation = protocol['selection_generation']
+    if (task.get('kind') != 'final' or not state.get('approved')
+            or state.get('generation') != generation or task_id not in state.get('final_tasks', [])):
+        raise ValueError(f'Official testing requires an approved frozen generation-{generation} final task')
+    selection = json.loads((run / 'finalists.json').read_text())
+    manifest = json.loads((run / 'manifest.json').read_text())
+    if selection.get('generation') != generation:
+        raise ValueError('Final selection generation differs from approved cutoff')
+    if protocol.get('experiment') == 'final_only':
+        selected = protocol['selected_architecture']
+        if (authorization.get('models') != [selected['search_id']]
+                or [f['search_id'] for f in selection['finalists']] != authorization['models']
+                or task['genes'] != selected['genes']):
+            raise ValueError('Selected architecture differs from explicit final-only authorization')
+    digest = hashlib.sha256(json.dumps(protocol, sort_keys=True, allow_nan=False).encode()).hexdigest()
+    if digest != manifest['protocol_sha256'] or digest != selection['protocol_sha256']:
+        raise ValueError('Final protocol identity differs from selection')
+    source = hashlib.sha256((directory / 'source.py').read_bytes()).hexdigest()
+    if protocol.get('experiment') == 'final_only' and source != protocol['selected_architecture']['source_sha256']:
+        raise ValueError('Selected final-only source identity differs')
+    if not any(f['genes'] == task['genes'] and f['source_sha256'] == source for f in selection['finalists']):
+        raise ValueError('Architecture is absent from frozen finalists')
+    if task['seed'] not in protocol.get('final_seeds', [0]):
+        raise ValueError('Final seed is outside the frozen protocol')
+    return [str(run / 'code/.venv-faster-rcnn/bin/python'), '-m',
+            'sota.FRED_LLM_GE.phase2.faster_rcnn_scratch.v2.worker',
+            '--run', str(run), '--task', task_id]
+
+
+def dispatch_faster_rcnn(run, task_id):
+    command = faster_rcnn_command(run, task_id)
+    run = Path(run).resolve()
+    os.chdir(run / 'code')
+    environment = dict(os.environ, PYTHONPATH=str(run / 'code'))
+    os.execve(command[0], command, environment)
+
+
+def _faster_rcnn_cli():
+    # Keep the frozen-run dispatcher usable as an audited standalone copy,
+    # before imports belonging to other families or relative package paths.
+    parser = argparse.ArgumentParser(description='Frozen Faster R-CNN final evaluation')
+    parser.add_argument('--family', choices=['faster_rcnn_scratch'], required=True)
+    parser.add_argument('--run', type=Path, required=True)
+    parser.add_argument('--task', required=True)
+    args = parser.parse_args()
+    dispatch_faster_rcnn(args.run, args.task)
+
+
+if __name__ == '__main__':
+    _family_parser = argparse.ArgumentParser(add_help=False)
+    _family_parser.add_argument('--family')
+    _known, _ = _family_parser.parse_known_args()
+    if _known.family == 'faster_rcnn_scratch':
+        _faster_rcnn_cli()
+        raise SystemExit(0)
 
 import numpy as np
 import torch
@@ -99,8 +185,10 @@ def predict_test_split(adapter, model, test, settings, device, report_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Final train + held-out test on FRED challenging")
-    parser.add_argument("--name", required=True, help="Report name, e.g. yolo11n_scratch")
-    parser.add_argument("--family", choices=("yolo11", "rtdetr"), default="yolo11")
+    parser.add_argument("--name", help="Report name, e.g. yolo11n_scratch")
+    parser.add_argument("--family", choices=("yolo11", "rtdetr", "faster_rcnn_scratch"), default="yolo11")
+    parser.add_argument('--run', type=Path, help='Frozen Faster R-CNN run directory')
+    parser.add_argument('--task', help='Frozen Faster R-CNN final task ID')
     parser.add_argument("--model", default="network",
                         help='"network" for the seed or network_<id> for an evolved candidate')
     parser.add_argument("--variant_dir", default=None,
@@ -116,6 +204,17 @@ def main():
                         help="Training seed (default protocol proxy.seed); repeat with others to confirm")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
+    if args.family == 'faster_rcnn_scratch':
+        if args.run is None or args.task is None:
+            parser.error('Faster R-CNN requires --run and --task')
+        if args.name or args.weights or args.epochs is not None or args.seed is not None or args.events or args.variant_dir or args.model != 'network':
+            parser.error('Faster R-CNN uses the frozen task recipe; overrides are not allowed')
+        dispatch_faster_rcnn(args.run, args.task)
+        return
+    if not args.name:
+        parser.error('--name is required for YOLO11 and RT-DETR')
+    if args.run is not None or args.task is not None:
+        parser.error('--run and --task are Faster R-CNN-only')
     validate_gene_id(args.name)
     if args.family == "rtdetr" and args.weights:
         parser.error("RT-DETR final evaluation trains from scratch; --weights is YOLO11-only")

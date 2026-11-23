@@ -1,0 +1,12 @@
+Propose a compact Faster R-CNN gene class combining the two parents below.
+Favor validation accuracy and efficiency. Return exactly one Python code block
+containing the same class name and values keys, with legal literal values.
+The child must differ architecturally from both parents.
+Parent 1:
+```python
+{}
+```
+Parent 2:
+```python
+{}
+```

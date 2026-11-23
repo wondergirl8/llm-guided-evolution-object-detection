@@ -1,0 +1,392 @@
+
+    Experimentation Guidelines
+    Statistical Significance
+    1. Why Two Samples? (And Why Not a Z-test?)
+
+    When we run experiments (like tuning genetic algorithms), we usually have a Baseline (Control) and a
+    Treatment (the change we made).
+
+    We want to know if the Treatment is actually better, or if the difference we see is just random noise.
+
+            The Problem: We do not know the "true" population mean or variance. We only have estimates from
+            our samples.
+            The Solution: We compare the means of two samples to infer if their underlying populations are
+            different.
+
+    Why not a Student's t-test? The classic Student's t-test assumes that the two populations we are comparing
+    have the same variance (homogeneity of variance), even if their means differ. In real-world experiment design
+    —especially when testing changes to algorithms—this assumption is often violated. Our "change" might make
+    the results more volatile (higher variance) or more stable (lower variance).
+
+    Why Welch's t-test? Welch’s t-test (the unequal variance t-test) is the modern standard. It does not assume
+    equal variances. It is generally safer and performs better than Student's t-test when sample sizes or variances
+    are unequal.
+
+    2. The Statistic Formula
+
+    We calculate a t-statistic (t), which represents the difference between our groups relative to the noise
+    (variance) in the data.
+
+                                                            ˉ1 − X
+                                                            X    ˉ2
+                                                      t=
+                                                               ​                  ​
+
+
+
+
+                                                                                                  ​
+
+
+
+
+                                                              s21               s22
+                                                              N1 + N2
+                                                                    ​                 ​
+
+
+
+
+                                                                            ​                 ​   ​
+
+
+
+
+                                                                        ​                 ​
+
+
+
+
+    Where:
+
+            Xˉ1, X   ˉ 2 = Sample means (e.g., Average AUC).
+                       ​       ​
+
+
+
+
+            s21 , s22 = Sample variances (how spread out the results are).
+               ​
+
+
+
+
+            N1 , N2 = Sample sizes (number of trials).
+                   ​       ​
+
+
+
+
+    Key Insight: The denominator is the "Standard Error." The smaller the variance (s2 ) and the larger the sample
+    size (N ), the larger our t-statistic becomes, making it easier to prove a significant difference.
+
+    3. The Degrees of Freedom (The Welch Approximation)
+
+    In a Student's t-test, calculating degrees of freedom (df ) is simple (N1 + N2 − 2). Because Welch's test
+                                                                                                      ​   ​
+
+
+
+
+    accounts for unequal variances, the calculation is more complex.
+
+    We use the Welch-Satterthwaite equation to approximate the degrees of freedom (v ):
+
+
+                                                             1/5
+Experiment_Procedure.md                                                                                                                                      2026-11-12
+
+
+                                                                                                                         2
+                                                              ( N11 + N22 )
+                                                                           s2   ​                   s2   ​
+
+
+
+
+                                                                                        ​                        ​
+
+
+
+
+                                                v≈
+                                                                                    ​                        ​
+
+
+
+
+                                                             s41       s42
+                                                                                                                                                     ​
+
+
+
+
+                                                                 +
+                                                                   ​                                                         ​
+
+
+
+
+                                                       2            2
+                                                      N1 (N1 −1)   N2 (N2 −1)
+                                                                                            ​                                                    ​
+
+
+
+
+                                                         ​             ​                                             ​           ​
+
+
+
+
+    Note: In practice, statistical software handles this math for us, but it is important to know that the degrees of
+    freedom are calculated from the data itself rather than just the sample size.
+
+
+    4. Example Calculation
+    Let's say we have data from our Genetic Algorithm.
+
+    Baseline (Group 1):
+
+            N1 = 10​
+
+
+
+
+            Xˉ 1 = 99.7​
+
+
+
+
+            s21 = 97.789
+               ​
+
+
+
+
+    Treatment (Group 2 - Increased Crossover):
+
+            N2 = 7 ​
+
+
+
+
+            Xˉ 2 = 96.714
+                       ​
+
+
+
+
+            s22 = 13.905
+               ​
+
+
+
+
+    Step 1: Calculate t
+
+                                                             99.7 − 96.714
+                                                   t=                                                                                    ​
+
+
+
+
+                                                               97.789
+                                                                 10
+                                                                      + 13.905
+                                                                          7
+                                                                                                ​                                    ​   ​
+
+
+
+
+                                                             2.986
+                                                 t=
+                                                         9.7789 + 1.9864
+                                                                                                                                             ​
+
+
+
+
+                                                                                                                                             ​
+
+
+
+
+                                                         2.986
+                                                   t=          ≈ 0.8704
+                                                         3.432
+                                                                                    ​
+
+
+
+
+    Step 2: Calculate v (Degrees of Freedom)
+
+    Using the long formula above, we plug in the numbers:
+
+                                                        v ≈ 12.2683
+
+    (Note: Degrees of freedom for Welch's test can be a decimal, which is normal.)
+
+    5. Interpreting the Results
+
+                                          ​
+                                                                                                      ˉ1 ≤
+    We assume a Null Hypothesis (H0 ): The Baseline mean is less than or equal to the Treatment mean (X                                                  ​
+
+
+
+
+    ˉ 2 ). We assume an Alternate Hypothesis (H1 ): The Baseline mean is greater than the Treatment mean (
+    X   ​
+
+
+
+
+    ˉ1 > X
+    X   ​
+             ˉ 2 ).        ​
+
+
+
+
+    This is a One-Tailed Test (specifically a right-tailed test).
+
+    In our example above (t ≈ 0.87):
+
+            A t-value near 0 means the groups are very similar.
+                                                                           2/5
+Experiment_Procedure.md                                                                                             2026-11-12
+
+
+
+            To reject the Null Hypothesis, we need a large t-value.
+            In this specific example, the calculated t is low, meaning the difference is not statistically significant.
+            The "improvement" or change likely occurred by chance.
+
+    6. How to Design Better Experiments
+
+    The t-statistic formula tells us exactly how to make our experiments stronger for the next time:
+
+                                               ˉ1 − X
+         1. Increase the Difference in Means: (X    ˉ2)​      ​
+
+
+
+
+                     If we want strong results, the impact of our change must "overwhelm" the noise.
+         2. Reduce Variance: (s2 )
+                     If our algorithm is stochastic (random), it creates high variance. If we can reduce the randomness
+                     or control the environment, the t-statistic goes up.
+         3. Increase Sample Size: (N )
+                                                                   2
+                     Look at the denominator: as N goes up, N
+                                                            s
+                                                              goes down. A high number of samples reduces the
+                                                                       ​
+
+
+
+
+                     effect of variance.
+                     Tip: Before running the experiment, we can use power analysis to compute how many trials (N )
+                     we need to prove a specific change is significant.
+
+
+    Evolution Procedure
+    Use LLM-GE to evolve each of the baseline models.
+
+    Baseline Models
+
+            YOLO11
+            RT-DETR
+            Faster R-CNN
+            SNNs (Tentative)
+
+    Data and Seed Evolution
+
+            Candidate models are trained on a subset of the challenging_train data, but this varies throughout the
+            process.
+            That is, the original challenging dataset contains challenging_train and challenging_test. Some fraction
+            of challenging_train was taken to be challenging_validation.
+                     At this step, the new challenging_train set is downsampled to one in every 50 frames. The
+                     challenging_validation set is downsampled to 1 in every 10 frames.
+            So, this project contains challenging_train, challenging_validation, and challenging_test, where the
+            original challenging_train is equal to our challenging_train + challenging_validation.
+            Each evolutionary process is 20 generations, fitting each candidate model for 20 epochs on the new
+            challenging_train data.
+            Then, the fitted candidates are assessed against the unseen challenging_validation data to compute
+            fitness.
+            After evolution is complete, the models are evaluated one last time. They are fit on the original
+            challenging_train (our challenging_train + challenging_validation) and make predictions on the unseen
+            challenging_test data.
+
+
+
+                                                                  3/5
+Experiment_Procedure.md                                                                                             2026-11-12
+
+
+
+                     The final evaluation has the entire challenging_train downsampled to 1 in every 5 frames, and the
+                     challenging_test remains at the original size that was used in the FRED paper (this is very good
+                     that you all did this).
+
+
+    Sample Generation Procedure
+    At this point in the process, LLM-GE is no longer occurring. We have already reaped the results of that. If you
+    are still evolving your proposed model, do not worry about this yet.
+
+    Each sample will be composed of 30 data points.
+
+            Each data point is the outcome of training and testing a model on a given random seed.
+            The random seeds being used for this project are
+            [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30]
+            For computability purposes, each evaluation follows the same procedure as the final evaluation as
+            previously mentioned. That is:
+                     Once again, whole challenging_train downsampled to 1 in every 5 frames, and the
+                     challenging_test remains at the original size that was used in the FRED paper.
+
+    Build Baseline (Seed) Model Samples
+
+    Apply the above procedure to each of the baseline (seed) models for fitting on the entire challenging_train
+    data and predicting the challenging_test.
+
+            YOLO11
+            RT-DETR
+            Faster R-CNN
+            SNNs (Tentative)
+
+    The seed models need to be turned into samples because our 1 million file quota on PACE-ICE prevents us
+    from training our evolved models with the entire training dataset. This may seem like it would harm our
+    models' performance, which is the right intuition for the wrong setting. Indeed, if our models outperformed
+    the paper's results under adverse conditions, then we could reliably compare them to the paper's results.
+    However, deep learning models tend to suffer from performance degradation when fed many similar training
+    examples.
+
+    Imagine you've never seen a cat, so you decide to look at pictures of them. Procedure 1 dictates that you see
+    120 pictures, 60 of which are unique cats, and the other 60 are not cats. Alternatively, Procedure 2 shows you
+    120,000 pictures, 90,000 of which are absolutely not cats, and 29,880 of which are repeated pictures of the
+    same 120 unique cats. Yes, you've seen twice as many unique cats under Procedure 2, but if you see a new cat
+    that doesn't look anything like the 120, you will probably not consider it a cat. This isn't necessarily an artifact
+    of the model parameters or architecture causing overfitting. The dataset itself induces the overfitting by being
+    too redundant and encouraging memorization by construction.
+
+    There are an obscene number of frames in the original training dataset, and by sampling every fifth frame, we
+    are reducing the amount of redundancy that would be fed into the models.
+
+    Build Evolved Model Samples
+
+    Repeat this procedure for the evolved extensions of each of the seed models.
+
+                                                              4/5
+Experiment_Procedure.md                                                                                              2026-11-12
+
+
+
+            For now, this is being performed for each of the models on the Pareto front.
+            Ex. Faster R-CNN has 3 models on its front, so each of those models is trained and tested 30 times (3
+            samples of 30 results, 90 in total).
+            From here, we can see if any or all of the final candidate models are statistically significantly better than
+            the baseline models.

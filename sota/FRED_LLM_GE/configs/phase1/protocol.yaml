@@ -95,6 +95,26 @@ challenging:
     - {source: raw, window_us: 50000, encoding: polarity}
 
 families:
+  faster_rcnn_scratch:
+    seed_file: seeds/seed_faster_rcnn_scratch.py
+    data: challenging_search
+    lr: 0.0025
+    momentum: 0.9
+    weight_decay: 0.0001
+    search:
+      epochs: 3
+      batch_size: 2
+      img_width: 640
+      seed: 0
+    final:
+      epochs: 20
+      batch_size: 2
+      img_width: 640
+      seed: 0
+    backbone:
+      frozen_stages: -1
+      norm_eval: true
+      norm_affine_trainable: true
   dfine:
     # Self-contained Event-frame seed, using the same challenging search split
     # and shared evaluator as the Ultralytics family.
