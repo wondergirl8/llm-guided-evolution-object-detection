@@ -163,3 +163,13 @@ families:
     # Historical YOLO26 search used Ultralytics' one-to-many head with NMS.
     # one_to_one selects its NMS-free head; compare separately before changing.
     inference_head: one_to_many
+    # Final 50-epoch training uses the optimizer selected by Ultralytics 8.4.175
+    # for the full step-5 dataset. Keep search training on its historical auto
+    # setting so the generation-14 candidates retain their original protocol.
+    # Auto initializes MuSGD at momentum 0.9, then warmup targets the default
+    # momentum 0.937. Explicit MuSGD uses that same warmup target.
+    final_training:
+      optimizer: MuSGD
+      lr0: 0.01
+      momentum: 0.937
+      warmup_bias_lr: 0.0

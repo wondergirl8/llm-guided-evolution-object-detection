@@ -128,6 +128,11 @@ def test_final_evaluation_uses_yolo26_training_overrides(monkeypatch, tmp_path):
     assert options["data"] == str(data_dir / "data.yaml")
     assert options["epochs"] == 1
     assert options["pretrained"] is False
+    assert options["optimizer"] == "MuSGD"
+    assert options["lr0"] == 0.01
+    assert options["momentum"] == 0.937
+    assert options["warmup_bias_lr"] == 0.0
+    assert _adapter().training_overrides() == {}
 
 
 def test_prediction_selects_each_real_yolo26_head():

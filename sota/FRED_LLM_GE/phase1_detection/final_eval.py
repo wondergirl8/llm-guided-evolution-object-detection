@@ -161,6 +161,9 @@ def main():
     if args.family == "dfine":
         torch.manual_seed(seed)
     adapter = FINAL_ADAPTERS[args.family](protocol["families"][args.family], FRED_DIR)
+    training_overrides = adapter.training_overrides() if args.family != "dfine" else {}
+    if args.family == "yolo26_p2":
+        training_overrides = {**training_overrides, **adapter.settings["final_training"]}
     variant_path = adapter.variant_path(args.model, args.variant_dir)
     model = adapter.build(variant_path, num_classes=1, device=args.device)
     params = adapter.param_count(model)
@@ -180,8 +183,14 @@ def main():
             seed=seed, deterministic=True, pretrained=args.weights or False,
             device=_ultralytics_device(args.device), workers=adapter.settings.get("workers", 8),
             project=str(out), name="train", exist_ok=True, val=False, plots=False, verbose=False,
-            **adapter.training_overrides(),
+            **training_overrides,
         )
+        if args.family == "yolo26_p2":
+            actual_optimizer = type(model.trainer.optimizer).__name__
+            if actual_optimizer != training_overrides["optimizer"]:
+                raise RuntimeError(
+                    f"YOLO26 final training used {actual_optimizer}, expected "
+                    f"{training_overrides['optimizer']}")
         model.save(checkpoint)
 
     settings = {"events": events, "img_width": final["img_width"], "eval_conf": proxy["eval_conf"],
@@ -192,6 +201,8 @@ def main():
     config = {"family": args.family, "final": final, "proxy_eval": settings, "epochs": epochs,
               "seed": seed,
               "weights": args.weights, "variant": variant_path.name}
+    if args.family == "yolo26_p2":
+        config["training_overrides"] = training_overrides
     if args.family == "dfine":
         config["family_settings"] = adapter.settings
     split_files = data_root / "splits"
@@ -216,6 +227,9 @@ def main():
     }
     if args.family == "dfine":
         metadata["refinement_bins"] = adapter.settings["model"]["reg_max"]
+    elif args.family == "yolo26_p2":
+        metadata["optimizer"] = actual_optimizer
+        metadata["training_overrides"] = training_overrides
     payload = {"metadata": metadata, "frames": frames, "params": params,
                "expected_sample_ids": expected}
     result, report_path = map_reporter.report(payload, sota_root=artifact_root, gene_id=args.name,
