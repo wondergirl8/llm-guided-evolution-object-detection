@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-cd "$SLURM_SUBMIT_DIR"
+cd "/home/hice1/rsebek3/scratch/llm-guided-evolution-object-detection/sota/FRED_LLM_GE"
 mkdir -p logs
 
 for seed in $(seq 30 -1 16); do
